@@ -5,3 +5,4 @@ src-tauri/WixTools/
 test-results/
 playwright-report/
 output/
+*.DS_Store
