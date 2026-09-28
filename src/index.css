@@ -1,0 +1,1501 @@
+:root {
+  color-scheme: dark;
+  font-family: "IBM Plex Sans", "Helvetica Neue", sans-serif;
+  --player-scale: 0.75;
+  background:
+    linear-gradient(180deg, rgba(255, 145, 77, 0.2), transparent 14%),
+    linear-gradient(90deg, rgba(88, 190, 255, 0.14), transparent 22%, transparent 78%, rgba(88, 190, 255, 0.12)),
+    #070809;
+  color: #f5f7fa;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  min-height: 100vh;
+  background: #070809;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.player-app {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr;
+  background:
+    radial-gradient(circle at top center, rgba(255, 153, 71, 0.12), transparent 28%),
+    radial-gradient(circle at top right, rgba(88, 190, 255, 0.12), transparent 26%),
+    #070809;
+}
+
+.player-app.pure-mode {
+  background: #000;
+}
+
+.player-app.debug-open {
+  grid-template-columns: minmax(720px, 1fr) minmax(320px, 410px);
+}
+
+.chrome-strip {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 76px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent);
+  pointer-events: none;
+}
+
+.player-pane {
+  padding: 14px 20px 20px;
+}
+
+.player-app.pure-mode .player-pane {
+  padding: 0;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+  min-height: 46px;
+}
+
+.title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #9ca3af;
+}
+
+.media-title {
+  font-size: 15px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: min(56vw, 720px);
+}
+
+.topbar-actions,
+.player-controls {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  /* 0.10.21: кнопки переносятся, а не схлопываются в узком окне */
+  flex-shrink: 0;
+}
+
+.ghost-button,
+.pill,
+.metric-pill {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 8px 13px;
+  background: rgba(255, 255, 255, 0.045);
+  color: #f5f7fa;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  backdrop-filter: blur(18px);
+}
+
+.ghost-button svg,
+.icon-button svg,
+.transport-button svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ghost-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ghost-button.subtle {
+  color: #bfc7d2;
+}
+
+.icon-chip {
+  width: 42px;
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.metric-pill input {
+  width: 88px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+}
+
+.stage-wrap {
+  min-height: calc(100vh - 70px);
+  display: grid;
+  place-items: center;
+}
+
+.player-app.pure-mode .stage-wrap {
+  min-height: 100vh;
+}
+
+.viewer-shell {
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: #000;
+  position: relative;
+  width: min(96vw, 1360px);
+  min-height: 300px;
+  box-shadow: 0 26px 72px rgba(0, 0, 0, 0.38);
+}
+
+.player-app.pure-mode .viewer-shell {
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+  border: 0;
+  box-shadow: none;
+}
+
+.viewer-shell.fixed-footer {
+  display: grid;
+  grid-template-rows: minmax(180px, 1fr) 56px;
+}
+
+.viewer-shell.fixed-footer.footerless {
+  grid-template-rows: minmax(180px, 1fr);
+}
+
+.viewer-shell.flex-footer {
+  display: flex;
+  flex-direction: column;
+}
+
+.viewer-area {
+  position: relative;
+  background: #000;
+  min-height: 180px;
+  overflow: hidden;
+}
+
+.video-stage {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+}
+
+.video-raster {
+  display: block;
+  transform-origin: center center;
+  will-change: transform;
+}
+
+.viewer-shell.flex-footer .viewer-area {
+  flex: 1 1 auto;
+}
+
+.player-canvas {
+  display: grid;
+  place-items: center;
+}
+
+.viewer-video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  background: #000;
+  cursor: pointer;
+}
+
+.preview-scaled .viewer-video {
+  image-rendering: auto;
+}
+
+.viewer-toolbar {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+/* Слайс 5.2: верхняя док-панель — три зоны (модули | маркеры | модули).
+ * Контейнер клики пропускает (в видео), зоны — нет. */
+.topbar-dock {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  right: 14px;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  pointer-events: none;
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+.topbar-zone {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+}
+.topbar-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+/* Пилюля маркеров: тот же язык, что media-label, но прозрачнее
+ * нижнего тулбара (0.55 против 0.82) — инструмент, не хром. */
+.marker-dock {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(12, 14, 16, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(20px);
+}
+/* Углы Soia: иконки модулей без фона. Двойной класс — бьёт .icon-button
+ * независимо от порядка в файле. */
+.icon-button.icon-button-ghost {
+  background: transparent;
+  border-color: transparent;
+  backdrop-filter: none;
+}
+
+.quality-menu-wrap {
+  position: relative;
+}
+
+.media-label {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 14px;
+  background: rgba(8, 10, 12, 0.46);
+  backdrop-filter: blur(20px);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.media-label strong {
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 600;
+  max-width: min(42vw, 360px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.media-label-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.media-label-hidden {
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+}
+
+.viewer-toolbar-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.viewer-toolbar-hidden {
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+}
+
+.context-toast {
+  position: absolute;
+  top: 64px;
+  right: 14px;
+  z-index: 2;
+  max-width: min(36vw, 320px);
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(12, 14, 16, 0.74);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #f5f7fa;
+  font-size: 12px;
+  line-height: 1.35;
+  backdrop-filter: blur(20px);
+}
+
+/* VETKA-промо: тост vetka-add — 10с, плавное появление и затухание
+   (стейт гаснет по VETKA_PROMO_MS синхронно с концом анимации). */
+.vetka-promo-toast {
+  max-width: min(44vw, 380px);
+  animation: vetka-promo-hold 10s ease forwards;
+}
+
+@keyframes vetka-promo-hold {
+  0% { opacity: 0; }
+  4% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* 1.2: Volume OSD — правый верхний угол вьюера, шрифт таймкода. */
+.volume-osd {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 3;
+  color: #d4dae2;
+  font-size: 11px;
+  font-size: calc(11px * var(--player-scale, 1));
+  font-variant-numeric: tabular-nums;
+  background: rgba(12, 14, 16, 0.6);
+  border-radius: 8px;
+  padding: 3px 8px;
+  pointer-events: none;
+}
+
+/* Open-gate 1.2: отказ — НЕ warning: нейтральный тон модульного оффера,
+ * отдельный таймаут 6с (см. refusalToast). Никакого жёлтого. */
+
+.icon-button {
+  min-width: 36px;
+  height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(10, 12, 14, 0.7);
+  color: #f5f7fa;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(20px);
+}
+
+.icon-button-active {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  box-shadow: 0 0 18px rgba(255, 255, 255, 0.12);
+}
+
+.icon-button-vetka {
+  color: #f5f7fa;
+}
+
+.quality-trigger {
+  gap: 6px;
+  padding-inline: 9px;
+}
+
+.quality-badge {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: #d8dee6;
+}
+
+.quality-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 148px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  background: rgba(10, 12, 14, 0.92);
+  backdrop-filter: blur(24px);
+  box-shadow: 0 22px 48px rgba(0, 0, 0, 0.34);
+}
+
+.quality-menu-title {
+  padding: 4px 8px 8px;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #93a0ae;
+}
+
+.quality-option {
+  width: 100%;
+  border: 0;
+  border-radius: 12px;
+  padding: 9px 10px;
+  background: transparent;
+  color: #f5f7fa;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+}
+
+.quality-option small {
+  color: #95a2af;
+  font-size: 10px;
+}
+
+.quality-option-active {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.transport-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+}
+
+.transport-visible {
+  opacity: 1;
+}
+
+.transport-hidden {
+  opacity: 0;
+}
+
+/* 0.12 слайс: автоскрытие хрома ТОЛЬКО в фулскрине — верхняя и нижняя
+   панели гаснут, курсор уходит. Плавность — transition на базах. */
+.topbar-dock,
+.transport-overlay {
+  transition: opacity 0.25s ease;
+}
+
+.viewer-shell.fullscreen-chrome-hidden {
+  cursor: none;
+}
+
+/* E2E 27.09: cursor:none только на shell перебивался UA-курсорами детей
+   (input range, кнопки) — давим всё поддерево. */
+.viewer-shell.fullscreen-chrome-hidden *,
+.viewer-shell.fullscreen-chrome-hidden input[type="range"]::-webkit-slider-thumb {
+  cursor: none !important;
+}
+
+.viewer-shell.fullscreen-chrome-hidden .topbar-dock,
+.viewer-shell.fullscreen-chrome-hidden .transport-overlay {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.transport-scrim {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 120px;
+  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.68));
+}
+
+.transport-bar {
+  position: relative;
+  z-index: 1;
+  margin: 0 16px 16px;
+  width: calc(100% - 32px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(12, 14, 16, 0.82);
+  backdrop-filter: blur(24px);
+  pointer-events: auto;
+}
+
+.transport-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.transport-bar .transport-group:first-child {
+  flex: 1;
+}
+
+.seek-zone {
+  position: absolute;
+  top: 0;
+  bottom: 104px;
+  width: 34%;
+  border: 0;
+  background: transparent;
+  z-index: 0;
+  color: transparent;
+}
+
+.seek-zone-left {
+  left: 0;
+}
+
+.seek-zone-right {
+  right: 0;
+}
+
+.transport-button {
+  border: 0;
+  border-radius: 999px;
+  min-width: 28px;
+  height: 28px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #f5f7fa;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+/* Тултипы: счётчик комментов живёт в бейдже иконки, не в title. */
+.transport-count-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.transport-button-primary {
+  min-width: 32px;
+  height: 32px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+/* Дочерний 0.10.19 (E2E 2026-09-24): колонка время+слот ставки.
+ * Слот всегда в DOM с мин-высотой — тулбар не прыгает; стиль слота =
+ * стиль таймкода, никакого жёлтого. */
+.transport-time-col {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.25;
+}
+.transport-shuttle-badge {
+  min-height: 13px;
+  min-height: calc(13px * var(--player-scale, 1));
+  color: #d4dae2;
+  font-size: 11px;
+  font-size: calc(11px * var(--player-scale, 1));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.transport-time {
+  min-width: 32px;
+  color: #d4dae2;
+  font-variant-numeric: tabular-nums;
+  /* 0.12 слайс 1: HH:MM:SS:FF всегда 11 знаков + крупнее по просьбе оператора */
+  font-size: 13px;
+  font-size: calc(13px * var(--player-scale, 1));
+}
+
+.transport-progress,
+.transport-volume {
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.transport-progress {
+  flex: 1 1 auto;
+}
+
+.transport-volume {
+  width: 88px;
+}
+
+.transport-progress::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: transparent;
+  border: 0;
+}
+
+.transport-playhead {
+  position: absolute;
+  bottom: -5px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #f5f7fa;
+  border: 0;
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 4;
+}
+
+.transport-volume-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.volume-popup {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(10, 12, 14, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 10px 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.volume-slider {
+  appearance: none;
+  width: 88px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  writing-mode: vertical-lr;
+  direction: rtl;
+  height: 88px;
+  width: 4px;
+}
+
+.volume-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #f5f7fa;
+  border: 0;
+}
+
+.transport-progress-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-self: stretch;
+  min-width: 80px;
+}
+
+.time-ruler {
+  position: relative;
+  /* 0.12 слайс: +2px под крупные тики */
+  height: 22px;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.time-ruler-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.time-ruler-tick-major {
+  height: 20px;
+  justify-content: flex-start;
+}
+
+.time-ruler-tick-minor {
+  height: 20px;
+  justify-content: flex-end;
+}
+
+.tick-label {
+  /* 0.12 слайс: цифры шкалы 13px — друзьям было мелко и на 11px */
+  font-size: calc(13px * var(--player-scale, 1));
+  color: rgba(255, 255, 255, 0.4);
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  margin-bottom: 2px;
+}
+
+.tick-line {
+  display: block;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.15);
+  flex-shrink: 0;
+}
+
+.tick-line-major {
+  height: 6px;
+}
+
+.tick-line-minor {
+  height: 3px;
+}
+
+.marker-lane {
+  position: relative;
+  /* 0.12 слайс: +4px под флажки 1.5× */
+  height: 20px;
+  flex-shrink: 0;
+  pointer-events: auto;
+}
+
+.transport-progress-wrap .transport-progress {
+  flex-shrink: 0;
+  height: 4px;
+  width: 100%;
+  margin: 0;
+}
+
+.transport-marker {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  /* 0.12 слайс: флажки 1.5× (14×12 → 21×18) — удобней цепляться;
+     in/out скобки НЕ трогаем, они норм */
+  width: 21px;
+  height: 18px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  cursor: grab;
+  z-index: 2;
+  padding-top: 1px;
+}
+
+.transport-marker-dragging {
+  cursor: grabbing;
+  z-index: 3;
+}
+
+
+
+.transport-inout-range {
+  position: absolute;
+  top: calc(100% + 2px);
+  height: 4px;
+  transform: translateY(-50%);
+  background: rgba(255, 255, 255, 0.35);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 1;
+
+}
+
+.transport-progress-inout {
+  position: relative;
+  height: 0;
+  flex-shrink: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.transport-progress-inout-marker {
+  position: absolute;
+  top: -6px;
+  transform: translateX(-50%);
+  font-size: calc(16px * var(--player-scale, 1));
+  font-weight: 700;
+  color: #f5f7fa;
+  pointer-events: auto;
+  cursor: grab;
+  user-select: none;
+  line-height: 14px;
+  text-shadow: 0 0 4px rgba(0,0,0,0.8);
+}
+
+.transport-progress-inout-marker.dragging {
+  cursor: grabbing;
+}
+
+.transport-marker svg {
+  width: 18px;
+  height: 18px;
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.player-footer,
+.footer-bar {
+  height: 56px;
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(8, 10, 12, 0.78), rgba(8, 10, 12, 0.96));
+  color: #f5f7fa;
+}
+
+.dropzone {
+  min-height: 420px;
+  width: 100%;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  color: #a3acb8;
+  padding: 24px;
+}
+
+.player-dropzone {
+  background:
+    radial-gradient(circle at center, rgba(255, 255, 255, 0.04), transparent 36%),
+    #000;
+}
+
+.player-dropzone.dragging {
+  outline: 2px solid #58beff;
+  outline-offset: -2px;
+}
+
+.dropzone strong {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 28px;
+  color: #f5f7fa;
+}
+
+.dropzone-copy {
+  margin: 0 0 16px;
+}
+
+.dropzone-open {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 12px 18px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f5f7fa;
+}
+
+.inline-token {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.synthetic-stage {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background:
+    linear-gradient(135deg, rgba(88, 190, 255, 0.14), transparent 45%),
+    linear-gradient(315deg, rgba(255, 144, 77, 0.18), transparent 50%),
+    #000;
+}
+
+.synthetic-frame {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.12), transparent 38%),
+    linear-gradient(180deg, rgba(18, 23, 29, 0.98), rgba(10, 12, 15, 0.98));
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.32);
+  position: relative;
+  overflow: hidden;
+}
+
+.synthetic-label {
+  position: absolute;
+  left: 14px;
+  bottom: 12px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.42);
+  font-size: 12px;
+  color: #f3f4f6;
+}
+
+.lab-panel {
+  border-left: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(6, 8, 10, 0.94);
+  backdrop-filter: blur(18px);
+}
+
+.debug-drawer {
+  padding: 24px 22px;
+}
+
+.metrics-panel h2 {
+  margin: 0 0 16px;
+  font-size: 16px;
+}
+
+.metrics-table {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px 14px;
+  font-size: 13px;
+}
+
+.metrics-table dt {
+  color: #9ca3af;
+}
+
+.metrics-table dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.metrics-block {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.metrics-row {
+  margin-top: 12px;
+}
+
+.import-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.import-field {
+  display: grid;
+  gap: 6px;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.import-field input {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #f5f7fa;
+}
+
+.import-status {
+  margin-top: 12px;
+}
+
+.import-preview {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.import-preview-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.import-preview-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(88, 190, 255, 0.12);
+  color: #d7efff;
+  font-size: 11px;
+}
+
+.danger {
+  color: #ff8b7a;
+}
+
+.good {
+  color: #92f5af;
+}
+
+.small {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.player-footer .small {
+  text-align: right;
+}
+
+.probe-badge {
+  font-size: 12px;
+  opacity: 0.85;
+  margin-left: 0;
+}
+
+.probe-badge.native {
+  color: #4ade80;
+}
+
+.probe-badge.proxy_recommended {
+  color: #facc15;
+}
+
+.probe-badge.transcode_required {
+  color: #fb923c;
+}
+
+.probe-badge.unsupported {
+  color: #f87171;
+}
+
+/* 0.10.23: dead-probe placeholder — file loaded, backend silent. */
+.probe-badge.probe-offline {
+  color: #fbbf24;
+  border: 1px dashed rgba(251, 191, 36, 0.55);
+  border-radius: 999px;
+  padding: 0 8px;
+}
+
+/* Шаг 4/7: ModuleDoor — ряд дверей бэкенда под API base.
+ * available = тихо зелёный текст; missing/error = кликабельная пилюля
+ * (клик = скачать+автостарт, дверь перепроверяется); downloading = занято. */
+.doors-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.door-pill {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: transparent;
+  color: #9aa3af;
+  font-size: 11px;
+  padding: 2px 10px;
+  cursor: default;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.door-pill.door-available {
+  color: #6ee7b7;
+  border-color: rgba(110, 231, 183, 0.35);
+}
+.door-pill.door-missing,
+.door-pill.door-error {
+  cursor: pointer;
+}
+.door-pill.door-missing {
+  color: #fbbf24;
+  border-style: dashed;
+  border-color: rgba(251, 191, 36, 0.55);
+}
+.door-pill.door-error {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.5);
+}
+.door-pill.door-downloading {
+  color: #d4dae2;
+  border-style: dotted;
+}
+
+@media (max-width: 1180px) {
+  .player-app.debug-open {
+    grid-template-columns: 1fr;
+  }
+
+  .debug-drawer {
+    border-left: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+}
+
+@media (max-width: 900px) {
+  .transport-bar {
+    gap: 8px;
+    padding: 9px 12px;
+  }
+
+  .transport-button {
+    min-width: 34px;
+    height: 34px;
+  }
+
+  .transport-volume {
+    width: 64px;
+  }
+
+  .media-label {
+    padding: 8px 12px;
+  }
+}
+
+.chat-overlay-root {
+  position: absolute;
+  z-index: 40;
+}
+
+.chat-toggle {
+  display: none;
+}
+
+.chat-panel {
+  width: 340px;
+  background: rgba(10, 12, 16, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  backdrop-filter: blur(24px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.chat-header:active {
+  cursor: grabbing;
+}
+
+.chat-header strong {
+  font-size: 13px;
+  color: #f3f5f7;
+  flex: 1;
+}
+
+.chat-timecode {
+  font-size: 11px;
+  color: #58beff;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-vision-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(88, 190, 255, 0.12);
+  color: #58beff;
+}
+
+.chat-vision-badge--ready {
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+}
+
+.chat-close {
+  background: none;
+  border: none;
+  color: #9ca3af;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+}
+
+.chat-vision-tags {
+  display: flex;
+  gap: 4px;
+  padding: 6px 14px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.vision-tag {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.06);
+  color: #9ca3af;
+}
+
+.vision-color-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  vertical-align: middle;
+  margin: 0 1px;
+}
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 8px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat-empty {
+  color: #7f8892;
+  font-size: 13px;
+  text-align: center;
+  padding: 24px 0;
+}
+
+.chat-msg {
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.chat-msg-user {
+  align-self: flex-end;
+  background: rgba(88, 190, 255, 0.15);
+  color: #d4dae2;
+  border-bottom-right-radius: 4px;
+}
+
+.chat-msg-assistant {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.06);
+  color: #d4dae2;
+  border-bottom-left-radius: 4px;
+}
+
+.chat-msg-system {
+  align-self: center;
+  background: rgba(255, 190, 0, 0.08);
+  color: #f59e0b;
+  font-size: 12px;
+}
+
+.chat-msg-timecode {
+  font-size: 10px;
+  color: #58beff;
+  display: block;
+  margin-bottom: 2px;
+}
+
+.chat-msg-text {
+  word-break: break-word;
+}
+
+.chat-typing {
+  color: #7f8892;
+  font-size: 12px;
+  font-style: italic;
+  padding: 4px 14px;
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 6px;
+  padding: 10px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.chat-input {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: #f3f5f7;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+}
+
+.chat-input:focus {
+  border-color: rgba(88, 190, 255, 0.4);
+}
+
+.chat-send {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: none;
+  background: #58beff;
+  color: #070809;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chat-send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.mini-window-root {
+  position: fixed;
+  z-index: 1000;
+}
+
+.mini-window-panel {
+  background: rgba(10, 10, 10, 0.96);
+  border: 1px solid rgba(34, 34, 34, 0.8);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  backdrop-filter: blur(24px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  position: relative;
+}
+
+.mini-window-panel:has(.mini-window-resize-se) {
+  overflow: visible;
+}
+
+.mini-window-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+  min-height: 36px;
+}
+
+.mini-window-header:active {
+  cursor: grabbing;
+}
+
+.mini-window-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.mini-window-title {
+  font-size: 13px;
+  color: #ccc;
+  flex: 1;
+}
+
+.mini-window-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+  min-height: 24px;
+}
+.mini-window-footer:active {
+  cursor: grabbing;
+}
+.mini-window-footer-grip {
+  display: block;
+  width: 24px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.mini-window-toggle,
+.mini-window-close {
+  background: none;
+  border: none;
+  color: #9ca3af;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+  border-radius: 4px;
+}
+
+.mini-window-toggle:hover,
+.mini-window-close:hover {
+  color: #f3f5f7;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.mini-window-body {
+  flex: 1;
+  overflow: hidden;
+  border-radius: inherit;
+  display: flex;
+  flex-direction: column;
+}
+
+.mini-window-resize-se {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  z-index: 100;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+}
+
+.mini-window-resize-grip {
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 0 10px 10px;
+  border-color: transparent transparent rgba(255,255,255,0.2) transparent;
+  pointer-events: none;
+}
+
+.mini-window-resize-s {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 8px;
+  cursor: ns-resize;
+  z-index: 100;
+}
+
+.mini-window-resize-e {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 100;
+}

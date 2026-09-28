@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schemas.tauri.app/config/2/capability",
+  "identifier": "panels",
+  "description": "Capabilities for external panel windows",
+  "windows": ["panel-*"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:allow-close",
+    "core:window:allow-set-size",
+    "opener:default"
+  ]
+}

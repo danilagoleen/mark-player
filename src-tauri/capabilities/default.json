@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schemas.tauri.app/config/2/capability",
+  "identifier": "default",
+  "description": "Default capabilities for Mark Player",
+  "windows": ["main", "panel-playlist", "panel-comments"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-is-fullscreen",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-set-title",
+    "core:window:allow-set-size",
+    "core:event:default",
+    "dialog:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "opener:default",
+    "fs:default",
+    "fs:allow-write-text-file",
+    {
+      "identifier": "fs:allow-read-text-file",
+      "allow": [{ "path": "$HOME/**" }, { "path": "/Volumes/**" }, { "path": "$TEMP/**" }]
+    }
+  ]
+}

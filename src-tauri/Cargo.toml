@@ -1,0 +1,36 @@
+[package]
+name = "vetka_player_lab"
+version = "0.18.0"
+description = "Mark Player 0.18 beta by VETKA lab"
+authors = ["Danila Gulin"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Bell №7: devtools API не едет в релиз (убирает Inspect Element из прод-меню).
+tauri = { version = "2", features = ["protocol-asset"] }
+# Bell №7 + UPD 9: pilot — только по явному запросу (dev E2E через свой сокет).
+# Релиз собирается без фичи: ни кода pilot, ни git-зависимости в графе.
+tauri-plugin-pilot = { git = "https://github.com/mpiton/tauri-pilot", optional = true }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+tauri-plugin-opener = "2.6.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+pilot = ["dep:tauri-plugin-pilot"]
+
+# Bell №7: символы не едут в прод-бинарник (вес к цели ≤10MB).
+[profile.release]
+strip = true
