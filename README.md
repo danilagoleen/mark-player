@@ -62,13 +62,19 @@ Grab the latest beta from
 
 ## Installation (macOS)
 
-Download the `.dmg`, drag **Mark Player** to Applications.
+Download the `.dmg`, drag **Mark Player** to Applications, then open it.
 
-> **Mark Player is not notarized yet**, so macOS shows a security warning on
-> first launch. To open it: **right-click the app → Open → Open** in the dialog.
-> It asks only once.
+> **Mark Player is not notarized yet**, so macOS blocks the first launch
+> ("…is damaged and can't be opened"). Current macOS has no "Anywhere"
+> switch — unblock it through Settings instead:
 >
-> Or remove the quarantine flag once via Terminal:
+> 1. Try to open the app (double-click) — macOS shows the blocking dialog.
+> 2. Open **System Settings → Privacy & Security**, scroll to Security —
+>    there is an **Open Anyway** button for Mark Player.
+> 3. Click **Open Anyway** and confirm in the dialog. It asks only once.
+>
+> If the Settings button is not there, remove the quarantine flag once
+> via Terminal:
 >
 > ```bash
 > xattr -cr "/Applications/Mark Player.app"
