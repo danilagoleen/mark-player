@@ -17,7 +17,7 @@ Marker-first video review: open a file, mark the moments, land them in Premiere 
 *File → Export: SRT subtitles, JSON sidecar, single-video XML, playlist XML.*
 
 ![Imported playlist timeline in Premiere Pro](docs/screenshots/premiere-imported-timeline.jpg)
-*The payoff: playlist XML opens in Premiere as a ready timeline — clips, cuts and colored markers on the exact frames.*
+*The payoff: playlist XML opens in Premiere as a ready timeline — clips, cuts and colored markers on the exact frames. File → Import the .xml; DaVinci Resolve takes it the same way.*
 
 ## Why: twenty years in three megabytes
 
@@ -43,7 +43,7 @@ Marilyn marked the frames she didn't like. Now any producer marks right in the p
 
 Двадцать лет монтажа — и одна и та же боль: «поправь вот там, на второй минуте, где она улыбается». Без таймкода. Я ждал, что YouTube с его миллиардами сделает комментарий, привязанный ко времени. Потом понял: программисты просто не знают нашей боли.
 
-Я не программист. Но я знал: в субтитрах SRT уже есть таймкод. А из таймкода можно сделать XML для любой монтажки. Кажется это просто, но почему-то никто этого еще не сделал, до этого момента.
+Я не программист. Но я знал: в субтитрах SRT уже есть таймкод. А из таймкода можно сделать XML для любой монтажки. Кажется, это просто, но почему-то никто этого еще не сделал, до этого момента.
 
 **Mark Player — это двадцать лет в трёх мегабайтах.**
 
@@ -109,7 +109,7 @@ Native bundles land in
   proportional step (1% of video length, 0.5–5 s), `⌘` + `←` / `→` jump to
   prev / next marker, `Home` / `End` jumps.
 - **Export:** File → Export or `⌘S` (SRT), JSON sidecar, XMEML timeline XML
-  for one video or the whole playlist (Premiere-ready sequence).
+  for one video or the whole playlist (Premiere / DaVinci-ready sequence).
   Every export answers: `Saved: <file>` / `No markers to export.` /
   `Export failed: <reason>`. Markers store locally
   (`vetka_player_lab_markers_v1`); files leave only via save dialog.
