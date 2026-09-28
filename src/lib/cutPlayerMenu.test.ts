@@ -53,7 +53,7 @@ describe("cutPlayerMenu", () => {
     }
     const enabled = [
       "file_open", "file_export_srt", "file_export_json", "file_export_xml",
-      "file_export_playlist_xml",
+      "file_export_playlist_xml", "file_export_review_notes", "file_send_to_editor",
       "file_import_srt", "pb_play_pause", "pb_loop", "audio_mute",
       "video_fullscreen", "sub_file", "view_playlist", "win_playlist",
       "win_comments", "help_about", "help_feedback", "help_github", "help_updates",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { exportMarkersToSrt, importSrtToMarkers, MARKER_PREFIX, appendMarkerToSrt, exportMarkersToSrtV2, exportToSidecar, exportMarkersToXml, exportMarkersToXmeml, exportPlaylistToXmeml, resolvePlaylistMetadata, formatTimecode, resolveXmlFps, resolveXmlFpsSource, resolveXmlHasAudio } from "./srtUtils";
+import { exportMarkersToSrt, importSrtToMarkers, MARKER_PREFIX, appendMarkerToSrt, exportMarkersToSrtV2, exportToSidecar, exportMarkersToXml, exportMarkersToXmeml, exportPlaylistToXmeml, resolvePlaylistMetadata, exportCommentsToText, reviewMarkerName, formatTimecode, resolveXmlFps, resolveXmlFpsSource, resolveXmlHasAudio } from "./srtUtils";
 
 interface TestMarker {
   marker_id: string;
@@ -597,5 +597,75 @@ describe("resolvePlaylistMetadata", () => {
       async () => { throw new Error("unreadable"); },
     );
     expect(out["/tmp/gone.mp4"]).toEqual({ durationSec: 0, width: 0, height: 0 });
+  });
+});
+
+// [signal: 0.19 review notes для людей] [project: cut-player]
+describe("exportCommentsToText", () => {
+  it("lists markers sorted with timecode, glyph and text", () => {
+    const txt = exportCommentsToText(
+      [
+        { kind: "comment", start_sec: 17.5, end_sec: 17.5, label: "", text: "illustration from 6th second" },
+        { kind: "favorite", start_sec: 4, end_sec: 4, label: "good", text: "" },
+      ],
+      25,
+      "Review notes — clip.mp4",
+    );
+    const lines = txt.split("\n");
+    expect(lines[0]).toBe("Review notes — clip.mp4");
+    expect(lines[1]).toContain("00:00:04:00");
+    expect(lines[1]).toContain("★ good");
+    expect(lines[2]).toContain("00:00:17:12");
+    expect(lines[2]).toContain("illustration from 6th second");
+  });
+
+  it("pairs in/out into Cut lines, lone in runs to end", () => {
+    const txt = exportCommentsToText(
+      [
+        { kind: "in", start_sec: 2, end_sec: 2, label: "", text: "" },
+        { kind: "out", start_sec: 5, end_sec: 5, label: "", text: "" },
+        { kind: "in", start_sec: 40, end_sec: 40, label: "", text: "" },
+      ],
+      25,
+    );
+    expect(txt).toContain("Cut 00:00:02:00 → 00:00:05:00");
+    expect(txt).toContain("Cut 00:00:40:00 → end");
+  });
+
+  it("shows real ranges, keeps default anchor halo a point", () => {
+    const txt = exportCommentsToText(
+      [
+        { kind: "comment", start_sec: 29, end_sec: 40, label: "", text: "more illustration" },
+        { kind: "comment", start_sec: 10, end_sec: 11, label: "", text: "halo" },
+      ],
+      25,
+    );
+    expect(txt).toContain("00:00:29:00 → 00:00:40:00 — comment: more illustration");
+    expect(txt).toContain("00:00:10:00 — comment: halo");
+  });
+
+  it("drops stray out like the XML cutter does", () => {
+    const txt = exportCommentsToText(
+      [{ kind: "out", start_sec: 5, end_sec: 5, label: "", text: "" }],
+      25,
+    );
+    expect(txt).toBe("");
+  });
+
+  it("stays EN-only", () => {
+    const txt = exportCommentsToText(
+      [{ kind: "negative", start_sec: 1, end_sec: 1, label: "", text: "fix it" }],
+      25,
+      "Review notes",
+    );
+    expect(/[а-яё]/i.test(txt)).toBe(false);
+  });
+});
+
+describe("reviewMarkerName", () => {
+  it("matches the XMEML naming: glyph+label, prefix only bare", () => {
+    expect(reviewMarkerName("favorite", "good")).toBe("★ good");
+    expect(reviewMarkerName("favorite", "")).toContain("FAVORITE");
+    expect(reviewMarkerName("comment", "")).toContain("comment");
   });
 });

@@ -7,6 +7,7 @@ export type CutPlayerMenuAction =
   | "export_json"
   | "export_xml"
   | "export_playlist_xml"
+  | "export_review_notes"
   | "import_srt"
   | "import_markers_json"
   | "screenshot"
@@ -127,6 +128,8 @@ export function buildCutPlayerMenuSpec(): CutPlayerMenuSectionSpec[] {
           { id: "file_export_json", label: "Markers (JSON/SOS)…", action: "export_json" },
           { id: "file_export_xml", label: "Timeline (XML)…", action: "export_xml" },
           { id: "file_export_playlist_xml", label: "Playlist Timeline (XML)…", action: "export_playlist_xml" },
+          { id: "file_export_review_notes", label: "Review Notes (.txt)…", action: "export_review_notes" },
+          { id: "file_send_to_editor", label: "Send to editor…", action: "export_playlist_xml" },
           { id: "file_export_edl", label: "EDL… (NLE)", action: "export_edl", enabled: false },
           { id: "file_export_otio", label: "OTIO/CUT Project… (NLE)", action: "export_otio", enabled: false },
         ] },

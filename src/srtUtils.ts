@@ -693,6 +693,60 @@ export async function resolvePlaylistMetadata(
   return out;
 }
 
+// 0.19: Review Notes — человекочитаемый список правок (фидбэк Васи Эсманова:
+// продюсеры боятся XML, монтажёр в CapCut — импорта XML там нет).
+// Формат: `HH:MM:SS:FF — имя: текст`, in/out-пары — `Cut START → END`,
+// сортировка по времени, fps из той же цепочки, что XML timebase.
+// Только EN (вердикт Белла по видимым строкам).
+export interface ReviewNoteInput {
+  kind: string;
+  start_sec: number;
+  end_sec: number;
+  label: string;
+  text: string;
+}
+
+// Имя маркера как в XMEML (глиф + label, префикс только без label) —
+// человек читает те же слова, что монтажка.
+export function reviewMarkerName(kind: string, label: string): string {
+  const clean = (label || "").trim();
+  const glyph = KIND_GLYPH[kind] || "";
+  if (clean) return glyph ? `${glyph} ${clean}` : clean;
+  const prefix = KIND_PREFIX[kind] || "";
+  return `${prefix}${kind}`.trim();
+}
+
+export function exportCommentsToText(markers: ReviewNoteInput[], fps: number, header?: string): string {
+  const L: string[] = [];
+  if (header) L.push(header);
+  const tc = (sec: number) => formatTimecode(sec, fps);
+  const sorted = [...markers].sort((a, b) => a.start_sec - b.start_sec);
+  let pendingIn: ReviewNoteInput | null = null;
+  const singles: ReviewNoteInput[] = [];
+  for (const m of sorted) {
+    if (m.kind === "in") { pendingIn = m; continue; }
+    if (m.kind === "out") {
+      if (pendingIn !== null) {
+        L.push(`Cut ${tc(pendingIn.start_sec)} → ${tc(m.start_sec)}`);
+        pendingIn = null;
+      }
+      continue;
+    }
+    singles.push(m);
+  }
+  if (pendingIn !== null) L.push(`Cut ${tc(pendingIn.start_sec)} → end`);
+  for (const m of singles) {
+    const name = reviewMarkerName(m.kind, m.label);
+    const text = (m.text || "").trim();
+    const body = text ? `${name}: ${text}` : name;
+    // Диапазон — только осмысленный (>1с): дефолтные ±0.5 вокруг якоря
+    // остаются точкой, иначе каждая строка шумела бы стрелкой.
+    const span = m.end_sec - m.start_sec > 1 ? `${tc(m.start_sec)} → ${tc(m.end_sec)}` : tc(m.start_sec);
+    L.push(`${span} — ${body}`);
+  }
+  return L.join("\n");
+}
+
 // XMEML v4 export for Adobe Premiere Pro import.
 // Mirrors scripts/cut_xml_export.py (battle-tested 2026-07-15, RECON_XML_EXPORT_PREMIERE_v4):
 // <sequence> directly under <xmeml>, ~15-field clipitems, pproTicks,

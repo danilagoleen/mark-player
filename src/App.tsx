@@ -32,7 +32,7 @@ import { createSingleDoubleClick, type SingleDoubleClick } from "./lib/singleDou
 import MycoProbeApp from "./MycoProbeApp";
 // Bell №2: agent chat is a separate module — no chat imports in the default
 // player bundle. Chat components stay in the repo as extraction stock.
-import { exportMarkersToSrtV2, exportToSidecar, exportMarkersToXmeml, exportPlaylistToXmeml, resolvePlaylistMetadata, formatTimecode, resolveXmlFps, resolveXmlFpsSource, resolveXmlHasAudio } from "./srtUtils";
+import { exportMarkersToSrtV2, exportToSidecar, exportMarkersToXmeml, exportPlaylistToXmeml, exportCommentsToText, resolvePlaylistMetadata, formatTimecode, resolveXmlFps, resolveXmlFpsSource, resolveXmlHasAudio } from "./srtUtils";
 import type { PlaylistMeta, XmemlPlaylistItemInput } from "./srtUtils";
 import { FileInfoRow } from "./components/info/FileInfoRow";
 
@@ -1341,6 +1341,9 @@ function App() {
     onExportPlaylistXml: () => {
       void performExportPlaylistXml();
     },
+    onExportReviewNotes: () => {
+      void performExportReviewNotes();
+    },
     onImportSrt: () => {
       const input = document.createElement("input");
       input.type = "file";
@@ -1528,6 +1531,19 @@ function App() {
     });
     announceExport("xml", false, result, note || undefined);
   }
+  // 0.19: список правок человеческим языком (фидбэк Васи: продюсеры
+  // боятся XML, монтажёр в CapCut — импорта XML там нет). Тост — по
+  // тракту srt: формат имени не светится, только факт сохранения.
+  async function performExportReviewNotes(): Promise<void> {
+    const mm = markers.filter((m) => m.media_path === currentMediaKey);
+    if (!mm.length) { announceExport("srt", true, null); return; }
+    const fps = resolveXmlFps(probeResult?.fps, estimatedFps);
+    const txt = exportCommentsToText(mm, fps, `Review notes — ${fileName || "markers"}`);
+    const result = await saveFileDialogResult(txt, `${fileName || "markers"}.review.txt`, {
+      filters: [{ name: "Text", extensions: ["txt"] }],
+    });
+    announceExport("srt", false, result);
+  }
   menuHandlersRef.current.onExportSrt = () => {
     void performExportSrt();
   };
@@ -1539,6 +1555,9 @@ function App() {
   };
   menuHandlersRef.current.onExportPlaylistXml = () => {
     void performExportPlaylistXml();
+  };
+  menuHandlersRef.current.onExportReviewNotes = () => {
+    void performExportReviewNotes();
   };
   menuHandlersRef.current.onImportSrt = () => {
     const input = document.createElement("input");
@@ -1574,6 +1593,9 @@ function App() {
         break;
       case "export_playlist_xml":
         menuHandlersRef.current.onExportPlaylistXml();
+        break;
+      case "export_review_notes":
+        menuHandlersRef.current.onExportReviewNotes();
         break;
       case "import_srt":
         menuHandlersRef.current.onImportSrt();

@@ -1,4 +1,4 @@
-# Mark Player 0.18 beta, by VETKA lab
+# Mark Player 0.19 beta, by VETKA lab
 
 <img src="docs/screenshots/icon-128.png" width="128" alt="Mark Player icon">
 
