@@ -4,7 +4,9 @@
 
 Marker-first video review: open a file, mark the moments, land them in Premiere — frame-accurately.
 
-[⬇ Download latest beta](https://github.com/danilagoleen/mark-player/releases)
+[⬇ Download for macOS (Apple Silicon)](https://github.com/danilagoleen/mark-player/releases/download/v0.18.0/Mark.Player_0.18.0_aarch64.dmg) ·
+[Intel Mac](https://github.com/danilagoleen/mark-player/releases/download/v0.18.0/Mark.Player_0.18.0_x64.dmg) ·
+[Windows](https://github.com/danilagoleen/mark-player/releases/download/v0.18.0/Mark.Player_0.18.0_x64-setup.exe)
 
 ## Screenshots
 
@@ -25,9 +27,9 @@ Before I became an editor, I worked in a bookstore, in the art albums section. T
 
 The approved frames went to Vogue. But I couldn't let go of the ones she struck out herself — some with lipstick, some as if with a nail.
 
-Twenty years of editing — and the same pain every time: "fix it right there, at the second minute, where she's smiling." No timecode. I waited for YouTube, with its billions, to make a comment pinned to a frame. Then I realized: programmers just don't know our pain.
+Twenty years of editing — and the same pain every time: "fix it right there, at the second minute, where she's smiling." No timecode. I waited for YouTube, with its billions, to make a comment pinned to the timeline. Then I realized: programmers just don't know our pain.
 
-I'm not a programmer. But I knew: SRT subtitles already carry a timecode. And from a timecode you can build XML for any editing suite. It seemed simple. Turns out nobody did it.
+I'm not a programmer. But I knew: SRT subtitles already carry a timecode. And from a timecode you can build XML for any editing suite. It seems simple — yet somehow nobody had done it. Until now.
 
 **Mark Player is twenty years in three megabytes.**
 
@@ -41,7 +43,7 @@ Marilyn marked the frames she didn't like. Now any producer marks right in the p
 
 Двадцать лет монтажа — и одна и та же боль: «поправь вот там, на второй минуте, где она улыбается». Без таймкода. Я ждал, что YouTube с его миллиардами сделает комментарий, привязанный ко времени. Потом понял: программисты просто не знают нашей боли.
 
-Я не программист. Но я знал: в субтитрах SRT уже есть таймкод. А из таймкода можно сделать XML для любой монтажки. Кажется это просто, но почему-то никто этого еще не сделал, до этого момента. 
+Я не программист. Но я знал: в субтитрах SRT уже есть таймкод. А из таймкода можно сделать XML для любой монтажки. Кажется это просто, но почему-то никто этого еще не сделал, до этого момента.
 
 **Mark Player — это двадцать лет в трёх мегабайтах.**
 
@@ -49,18 +51,14 @@ Marilyn marked the frames she didn't like. Now any producer marks right in the p
 
 *Illustration above: a Mark Player logo study with Marilyn Monroe — a tribute to this story, not the brand. The app icon stays the plain cross.*
 
-Agent chat is a **separate module** (not bundled): when it ships, it arrives
-as a one-button upgrade, same as the future CUT Player (FFprobe/FFmpeg build
-with render-by-markers).
-
 ## Download
 
 Grab the latest beta from
 **[Releases](https://github.com/danilagoleen/mark-player/releases)**:
 
-- **macOS Apple Silicon** — `Mark Player_0.18.0_aarch64.dmg`
-- **macOS Intel** — `Mark Player_0.18.0_x64.dmg`
-- **Windows 10/11** — `Mark Player_0.18.0_x64-setup.exe`
+- **macOS Apple Silicon** — `Mark.Player_0.18.0_aarch64.dmg`
+- **macOS Intel** — `Mark.Player_0.18.0_x64.dmg`
+- **Windows 10/11** — `Mark.Player_0.18.0_x64-setup.exe` (installer) or `Mark.Player_0.18.0_x64_en-US.msi`
 
 ## Installation (macOS)
 
@@ -108,7 +106,8 @@ Native bundles land in
   mute lives in the Audio menu.
 - **Shuttle:** `J` back / `K` stop / `L` forward (`JJ`/`LL` = ×2), `←` / `→`
   one frame (probe → rVFC estimate → 25 fps fallback), `Shift` + `←` / `→`
-  five frames, `Home` / `End` jumps.
+  proportional step (1% of video length, 0.5–5 s), `⌘` + `←` / `→` jump to
+  prev / next marker, `Home` / `End` jumps.
 - **Export:** File → Export or `⌘S` (SRT), JSON sidecar, XMEML timeline XML
   for one video or the whole playlist (Premiere-ready sequence).
   Every export answers: `Saved: <file>` / `No markers to export.` /
@@ -124,7 +123,8 @@ Native bundles land in
 |------|--------|
 | `Space` | Play / pause |
 | `J` / `K` / `L` | Shuttle back / stop / forward (double-tap = ×2) |
-| `←` / `→` | ±1 frame; `Shift` = ±5 frames |
+| `←` / `→` | ±1 frame; `Shift` = proportional step (1% length, 0.5–5 s) |
+| `⌘←` / `⌘→` | Jump to prev / next marker |
 | `↑` / `↓` | Volume ±5% |
 | `I` / `O` | Mark in / out |
 | `F` / `N` | Favorite / negative marker |
@@ -140,3 +140,11 @@ Native bundles land in
 
 The player is a spore: markers, export and playlist ship inside; agent chat,
 scanner, THALAMUS board and CUT NLE attach later as modules.
+
+Agent chat is a **separate module** (not bundled): when it ships, it arrives
+as a one-button upgrade, same as the future CUT Player (FFprobe/FFmpeg build
+with render-by-markers).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
