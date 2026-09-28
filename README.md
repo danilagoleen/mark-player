@@ -27,7 +27,7 @@ Before I became an editor, I worked in a bookstore, in the art albums section. T
 
 The approved frames went to Vogue. But I couldn't let go of the ones she struck out herself — some with lipstick, some as if with a nail.
 
-Twenty years of editing — and the same pain every time: "fix it right there, at the second minute, where she's smiling." No timecode. I waited for YouTube, with its billions, to make a comment pinned to the timeline. Then I realized: programmers just don't know our pain.
+And here I am, a film editor with twenty years behind me — and all those years, the same pain: "fix it right there, at the second minute, where she's smiling." No timecode. I waited for YouTube, with its billions, to make a comment pinned to the timeline. Then I realized: programmers just don't know our pain.
 
 I'm not a programmer. But I knew: SRT subtitles already carry a timecode. And from a timecode you can build XML for any editing suite. It seems simple — yet somehow nobody had done it. Until now.
 
@@ -41,7 +41,7 @@ Marilyn marked the frames she didn't like. Now any producer marks right in the p
 
 В Vogue ушли одобренные кадры. А меня не отпускали те, что она перечеркнула сама: одни помадой, другие будто гвоздём.
 
-Двадцать лет монтажа — и одна и та же боль: «поправь вот там, на второй минуте, где она улыбается». Без таймкода. Я ждал, что YouTube с его миллиардами сделает комментарий, привязанный ко времени. Потом понял: программисты просто не знают нашей боли.
+И вот я — режиссёр монтажа уже с двадцатилетним стажем, и все эти годы одна и та же боль: «поправь вот там, на второй минуте, где она улыбается». Без таймкода. Я ждал, что YouTube с его миллиардами сделает комментарий, привязанный ко времени. Потом понял: программисты просто не знают нашей боли.
 
 Я не программист. Но я знал: в субтитрах SRT уже есть таймкод. А из таймкода можно сделать XML для любой монтажки. Кажется, это просто, но почему-то никто этого еще не сделал, до этого момента.
 
