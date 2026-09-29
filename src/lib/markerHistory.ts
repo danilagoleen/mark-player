@@ -4,6 +4,7 @@
 // синхронизация между окнами — через storage-события, как раньше.
 // Снапшоты хранятся по ссылке: вызывающий отдаёт массивы, которые сам
 // больше не мутирует (React state по конвенции неизменяем).
+import { markerBelongsToMedia } from "./markersSync";
 
 export interface MarkerHistory<T> {
   past: T[][];
@@ -68,6 +69,7 @@ export type ClearScope = "comment" | "favorite" | "negative" | "inout" | "all";
 export interface HasKindMedia {
   kind: string;
   media_path?: string;
+  content_hash?: string | null;
 }
 
 const CLEAR_SCOPE_KINDS: Record<Exclude<ClearScope, "all">, string[]> = {
@@ -79,14 +81,21 @@ const CLEAR_SCOPE_KINDS: Record<Exclude<ClearScope, "all">, string[]> = {
 
 // Жертвы очистки: маркеры этого media, отфильтрованные по scope.
 // media null → [] (без видео чистить нечего).
+// 0.22: опциональный contentHash — та же identity, что у списка
+// (markerBelongsToMedia): копия видео чистит СВОИ метки, а не путь.
 export function selectMarkersToClear<T extends HasKindMedia>(
   markers: T[],
   media: string | null,
   scope: ClearScope,
+  contentHash: string | null = null,
 ): T[] {
   if (!media) return [];
   const kinds = scope === "all" ? null : CLEAR_SCOPE_KINDS[scope];
-  return markers.filter((m) => m.media_path === media && (kinds === null || kinds.includes(m.kind)));
+  return markers.filter(
+    (m) =>
+      markerBelongsToMedia(m, { mediaKey: media, contentHash }) &&
+      (kinds === null || kinds.includes(m.kind)),
+  );
 }
 
 // Ведро вида для confirm-разбивки: in/out идут одной строкой.

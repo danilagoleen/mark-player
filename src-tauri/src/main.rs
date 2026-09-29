@@ -344,6 +344,49 @@ fn emit_menu_event(window: WebviewWindow, action: String) -> Result<(), String> 
         .map_err(|e| format!("emit failed: {e}"))
 }
 
+// 0.22: сэмпл байтов для content-hash identity маркеров (копия видео
+// не теряет разметку). Размер + голова/хвост 64KB: два seek, файл целиком
+// в память не грузится. Возвращает массивы байтов — base64-зависимостей
+// ради 128KB тащить не стали, IPC локальный.
+#[derive(serde::Serialize)]
+struct FileContentSample {
+    size: u64,
+    head: Vec<u8>,
+    tail: Vec<u8>,
+}
+
+#[tauri::command]
+fn sample_file_bytes(path: String, sample_len: Option<u64>) -> Result<FileContentSample, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let want = sample_len.unwrap_or(65536).clamp(1, 1 << 20) as usize;
+    let mut file = std::fs::File::open(&path).map_err(|e| format!("open failed: {e}"))?;
+    let size = file
+        .metadata()
+        .map_err(|e| format!("stat failed: {e}"))?
+        .len();
+    let n = want.min(size as usize);
+    if n == 0 {
+        return Ok(FileContentSample {
+            size,
+            head: Vec::new(),
+            tail: Vec::new(),
+        });
+    }
+    let mut head = vec![0u8; n];
+    file.read_exact(&mut head)
+        .map_err(|e| format!("read head failed: {e}"))?;
+    let mut tail = vec![0u8; n];
+    file.seek(SeekFrom::End(-(n as i64)))
+        .map_err(|e| format!("seek failed: {e}"))?;
+    file.read_exact(&mut tail)
+        .map_err(|e| format!("read tail failed: {e}"))?;
+    Ok(FileContentSample {
+        size,
+        head,
+        tail,
+    })
+}
+
 fn main() {
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
@@ -353,6 +396,7 @@ fn main() {
             trace_player_window,
             open_panel_window,
             emit_menu_event,
+            sample_file_bytes,
         ]);
 
     // Bell №7 + UPD 9: pilot только по явному запросу И только в деве

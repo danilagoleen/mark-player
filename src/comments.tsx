@@ -10,6 +10,7 @@ import {
   selectMarkersToClear,
 } from "./lib/markerHistory";
 import { resolvePlayerHotkey } from "./lib/playerHotkeys";
+import { markerBelongsToMedia } from "./lib/markersSync";
 import "./index.css";
 
 const MARKERS_STORAGE_KEY = "vetka_player_lab_markers_v1";
@@ -21,6 +22,8 @@ interface BareMarker {
   end_sec?: number;
   text?: string;
   media_path?: string;
+  // 0.22: штамп содержимого — копия видео опознаётся и здесь.
+  content_hash?: string | null;
 }
 
 // 0.10.16c: media-scope для СПИСКА, не только выбора — CommentOverlay
@@ -36,9 +39,25 @@ export function selectMediaFromSearch(search: string): string | null {
 // Pure selector: scope to ?media= first (no media → null, never the global pile),
 // then ?marker= wins when it points at a comment of that media, else last comment.
 // [signal: media-scope режет чужие] [project: cut-player]
-export function filterCommentMarkers(markers: BareMarker[], media: string | null): BareMarker[] {
+// 0.22: опциональный contentHash (?chash=) — та же identity, что у main:
+// сначала хеш, затем путь.
+export function selectHashFromSearch(search: string): string | null {
+  try {
+    return new URLSearchParams(search).get("chash");
+  } catch {
+    return null;
+  }
+}
+
+export function filterCommentMarkers(
+  markers: BareMarker[],
+  media: string | null,
+  contentHash: string | null = null,
+): BareMarker[] {
   if (!media) return [];
-  return markers.filter((m) => m.kind === "comment" && m.media_path === media);
+  return markers.filter(
+    (m) => m.kind === "comment" && markerBelongsToMedia(m, { mediaKey: media, contentHash }),
+  );
 }
 
 export function selectCommentMarkerId(markers: BareMarker[], search: string): string | null {
@@ -48,7 +67,7 @@ export function selectCommentMarkerId(markers: BareMarker[], search: string): st
   } catch {
     queryId = null;
   }
-  const comments = filterCommentMarkers(markers, selectMediaFromSearch(search));
+  const comments = filterCommentMarkers(markers, selectMediaFromSearch(search), selectHashFromSearch(search));
   if (comments.length === 0) return null;
   if (queryId && comments.some((m) => m.marker_id === queryId)) return queryId;
   return comments[comments.length - 1].marker_id;
@@ -89,6 +108,8 @@ function CommentsStandalone() {
 
   const search = typeof window !== "undefined" ? window.location.search : "";
   const media = selectMediaFromSearch(search);
+  // 0.22: identity из ?chash= — копия видео видит свои комменты.
+  const contentHash = selectHashFromSearch(search);
   // 0.12 слайс 1: fps для HH:MM:SS:FF из ?fps= (главное окно кладёт цепочку
   // probe→rVFC); нет/мусор — честные 25 внутри CommentOverlay.
   let fps = 25;
@@ -100,7 +121,7 @@ function CommentsStandalone() {
     fps = 25;
   }
   // 0.10.16c: список тоже scoped — иначе панель показывает чужие видео.
-  const visibleMarkers = filterCommentMarkers(markers, media);
+  const visibleMarkers = filterCommentMarkers(markers, media, contentHash);
   const selectedId = selectCommentMarkerId(markers, search);
   const selectedMarker = visibleMarkers.find((m) => m.marker_id === selectedId) ?? null;
 
@@ -156,7 +177,7 @@ function CommentsStandalone() {
   // очистка — в undo-стек: ⌘Z возвращает.
   const handleClearAll = useCallback(async () => {
     const prev = markersRef.current;
-    const victims = selectMarkersToClear(prev, media, "all");
+    const victims = selectMarkersToClear(prev, media, "all", contentHash);
     if (!victims.length) return;
     if (!(await confirmClearMarkers(victims))) return;
     historyRef.current = historyPush(historyRef.current, prev);
@@ -164,7 +185,7 @@ function CommentsStandalone() {
     const updated = prev.filter((m) => !victimIds.has(m.marker_id));
     persistMarkers(updated);
     setMarkers(updated);
-  }, [media]);
+  }, [media, contentHash]);
 
   if (!selectedMarker) {
     return (

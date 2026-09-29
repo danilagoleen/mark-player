@@ -195,11 +195,15 @@ export function exportToSidecar(
   markers: SidecarMarker[],
   provisionalEvents: SidecarProvisionalEvent[],
   mediaPath: string,
+  // 0.22: content-hash identity — копия/переименование видео находит
+  // маркеры по содержимому, не по пути. null = хеш неизвестен (честно).
+  contentHash: string | null = null,
 ): string {
   const sidecar = {
     sos_version: "0.3",
     source: "cut_player",
     media_path: mediaPath,
+    content_hash: contentHash,
     generated_at: new Date().toISOString(),
     markers: markers.map((m) => ({
       marker_id: m.marker_id,

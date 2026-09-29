@@ -228,6 +228,13 @@ describe("exportToSidecar", () => {
     expect(json.markers).toEqual([]);
     expect(json.provisional_events).toEqual([]);
   });
+
+  it("0.22: content_hash в сайдкаре — передан и по умолчанию null", () => {
+    expect(JSON.parse(exportToSidecar([], [], "video.mp4")).content_hash).toBeNull();
+    const json = JSON.parse(exportToSidecar([], [], "video.mp4", "ch1:aaaa"));
+    expect(json.content_hash).toBe("ch1:aaaa");
+    expect(json.media_path).toBe("video.mp4");
+  });
 });
 
 describe("exportMarkersToXml", () => {

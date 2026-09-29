@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterCommentMarkers, selectCommentMarkerId, selectMediaFromSearch } from "./comments";
+import { filterCommentMarkers, selectCommentMarkerId, selectHashFromSearch, selectMediaFromSearch } from "./comments";
 
 const MARKERS = [
   { marker_id: "m1", kind: "comment", start_sec: 1, media_path: "a.mp4" },
@@ -57,5 +57,31 @@ describe("filterCommentMarkers (0.10.16c list scope)", () => {
     expect(selectMediaFromSearch("?media=a.mp4&marker=m1")).toBe("a.mp4");
     expect(selectMediaFromSearch("?marker=m1")).toBeNull();
     expect(selectMediaFromSearch("")).toBeNull();
+  });
+
+  it("selectHashFromSearch вынимает chash из query", () => {
+    expect(selectHashFromSearch("?media=a.mp4&chash=ch1:aaaa")).toBe("ch1:aaaa");
+    expect(selectHashFromSearch("?media=a.mp4")).toBeNull();
+    expect(selectHashFromSearch("")).toBeNull();
+  });
+});
+
+describe("filterCommentMarkers (0.22 content-hash identity)", () => {
+  const HASHED = [
+    { marker_id: "h1", kind: "comment", start_sec: 1, media_path: "orig.mp4", content_hash: "ch1:aaaa" },
+    { marker_id: "h2", kind: "comment", start_sec: 2, media_path: "orig.mp4", content_hash: "ch1:bbbb" },
+    { marker_id: "l1", kind: "comment", start_sec: 3, media_path: "copy.mp4" },
+  ];
+
+  it("копия видит метки оригинала по хешу", () => {
+    expect(filterCommentMarkers(HASHED, "copy.mp4", "ch1:aaaa").map((m) => m.marker_id)).toEqual(["h1", "l1"]);
+  });
+
+  it("чужой хеш при том же пути — строго пусто", () => {
+    expect(filterCommentMarkers(HASHED, "orig.mp4", "ch1:zzzz")).toEqual([]);
+  });
+
+  it("без хеша — старое поведение по пути", () => {
+    expect(filterCommentMarkers(HASHED, "copy.mp4").map((m) => m.marker_id)).toEqual(["l1"]);
   });
 });

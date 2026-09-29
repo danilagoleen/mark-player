@@ -116,6 +116,18 @@ describe("selectMarkersToClear (0.21 clear by kind)", () => {
     expect(clearKindBucket("out")).toBe("inout");
     expect(clearKindBucket("comment")).toBe("comment");
   });
+
+  it("0.22: contentHash — копия чистит свои метки, чужой хеш не трогает", () => {
+    const hashed = [
+      { marker_id: "h1", kind: "comment", media_path: "orig.mp4", content_hash: "ch1:aaaa" },
+      { marker_id: "h2", kind: "favorite", media_path: "orig.mp4", content_hash: "ch1:bbbb" },
+      { marker_id: "l1", kind: "comment", media_path: "copy.mp4" },
+    ];
+    // Открыта копия orig.mp4 (хеш aaaa): своя метка + легаси по пути.
+    expect(selectMarkersToClear(hashed, "copy.mp4", "all", "ch1:aaaa").map((m) => m.marker_id)).toEqual(["h1", "l1"]);
+    // Без хеша — только путь, как раньше.
+    expect(selectMarkersToClear(hashed, "copy.mp4", "all").map((m) => m.marker_id)).toEqual(["l1"]);
+  });
 });
 
 describe("formatClearConfirm (0.21)", () => {

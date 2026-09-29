@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isSameMediaPath } from "./mediaOpen";
+import { isSameMediaPath, resolveMediaContentHash } from "./mediaOpen";
 
 describe("isSameMediaPath (0.10.22 same-file guard)", () => {
   it("возвращает true для того же пути", () => {
@@ -14,5 +14,19 @@ describe("isSameMediaPath (0.10.22 same-file guard)", () => {
   });
   it("возвращает false для пустого входящего пути", () => {
     expect(isSameMediaPath("", "/a/b.mov")).toBe(false);
+  });
+});
+
+describe("resolveMediaContentHash (0.22 identity)", () => {
+  it("пустой таргет — честный null, не бросок", async () => {
+    await expect(resolveMediaContentHash({})).resolves.toBeNull();
+  });
+
+  it("браузерный File хешируется детерминированно", async () => {
+    const file = new File([new Uint8Array([1, 2, 3])], "a.mp4");
+    const a = await resolveMediaContentHash({ file });
+    const b = await resolveMediaContentHash({ file });
+    expect(a?.startsWith("ch1:")).toBe(true);
+    expect(a).toBe(b);
   });
 });

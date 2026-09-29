@@ -16,9 +16,9 @@ import { FULLSCREEN_CHROME_TIMEOUT_MS } from "./lib/fullscreenChrome";
 import { DOOR_IDS, checkModuleDoor, doorClickTransition, doorEndpoint, doorLabel, type DoorId, type ModuleDoor } from "./lib/moduleDoors";
 import type { ProbeResult } from "./lib/nativeWindow";
 import { createEmptyPlaylist, savePlaylist, loadPlaylist, addEntry, addEntryIfAbsent, getNextEntry, loadPlaybackMode } from "./lib/playlist";
-import { isSameMediaPath } from "./lib/mediaOpen";
+import { isSameMediaPath, resolveMediaContentHash } from "./lib/mediaOpen";
 import { mediaPlayability, mediaRefusalReason } from "./lib/mediaPlayability";
-import { resolveExternalMarkers } from "./lib/markersSync";
+import { markerBelongsToMedia, resolveExternalMarkers, type MediaIdentity } from "./lib/markersSync";
 import type { CutPlayerMenuAction } from "./lib/cutPlayerMenu";
 import { useDragDrop } from "./lib/useDragDrop";
 import { ReverseShuttle, getShuttleDisplay, resolveJumpTarget, resolvePlayerHotkey, resolveProportionalStep, shuttleSlotClass } from "./lib/playerHotkeys";
@@ -85,6 +85,9 @@ interface PlayerTimeMarker {
   project_id: string;
   timeline_id: string;
   media_path: string;
+  // 0.22: content-hash identity — копия/переименование не теряет разметку.
+  // Пусто у легаси-меток: они ищутся по media_path (fallback).
+  content_hash?: string | null;
   kind: PlayerMarkerKind;
   start_sec: number;
   end_sec: number;
@@ -456,6 +459,9 @@ function App() {
   const [previewQuality, setPreviewQuality] = useState<PreviewQualityKey>("full");
   const [vetkaStatusMap, setVetkaStatusMap] = useState<Record<string, boolean>>(readStoredVetkaStatusMap);
   const [markers, setMarkers] = useState<PlayerTimeMarker[]>(readStoredMarkers);
+  // 0.22: content-hash identity текущего медиа (копия/переименование —
+  // разметка не теряется). null = хеш неизвестен/не посчитан: fallback на путь.
+  const [contentHash, setContentHash] = useState<string | null>(null);
   const [srtContent, setSrtContent] = useState("");
   const [provisionalEvents, setProvisionalEvents] = useState<ProvisionalCaptureEvent[]>(readStoredProvisionalEvents);
   const [contextToast, setContextToast] = useState("");
@@ -537,14 +543,18 @@ function App() {
   const effectivePreviewScale = sourceKind === "video" ? previewQualityOption.scale : 1;
   const currentMediaKey = src && !src.startsWith("blob:") ? src : fileName;
   // Слайс 5.2: имя медиа — в заголовок окна (Soia-стиль), media-label удалён.
+  // 0.22: identity текущего медиа — сначала content-hash, затем путь (fallback).
+  const mediaIdentity: MediaIdentity = { mediaKey: currentMediaKey, contentHash };
   // Дефолт берём из document.title (штамп версии из tauri.conf), не дублируем.
   const defaultWindowTitleRef = useRef(
     typeof document !== "undefined" ? document.title : "Mark Player",
   );
   const isInVetka = Boolean(currentMediaKey && vetkaStatusMap[currentMediaKey]);
   const mediaMarkers = useMemo(
-    () => markers.filter((marker) => marker.media_path === currentMediaKey),
-    [currentMediaKey, markers],
+    // 0.22: сначала content-hash, затем путь (легаси-метки без хеша).
+    () => markers.filter((marker) => markerBelongsToMedia(marker, mediaIdentity)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentMediaKey, contentHash, markers],
   );
   const mediaProvisionalEvents = useMemo(
     () => provisionalEvents.filter((event) => event.media_path === currentMediaKey),
@@ -806,7 +816,7 @@ function App() {
 
   useEffect(() => {
     const srtMarkers = markers
-      .filter((m) => m.media_path === currentMediaKey)
+      .filter((m) => markerBelongsToMedia(m, mediaIdentity))
       .map((m) => ({
         marker_id: m.marker_id,
         kind: m.kind,
@@ -818,7 +828,7 @@ function App() {
         media_path: m.media_path,
       }));
     setSrtContent(exportMarkersToSrtV2(srtMarkers));
-  }, [markers, currentMediaKey]);
+  }, [markers, currentMediaKey, contentHash]);
 
   useEffect(() => {
     try {
@@ -888,6 +898,10 @@ function App() {
   const performRedoRef = useRef(() => {});
   const currentMediaKeyRef = useRef(currentMediaKey);
   currentMediaKeyRef.current = currentMediaKey;
+  // 0.22: зеркало хеша + токен stale-защиты: хеш считается асинхронно,
+  // открытие второго файла до готовности первого — чужой хеш не садится.
+  const contentHashRef = useRef<string | null>(null);
+  const contentHashTokenRef = useRef(0);
   // 0.10.29: зеркала fps для stale-замыканий (тот же паттерн, что выше).
   probeFpsRef.current = probeResult?.fps && probeResult.fps > 0 ? probeResult.fps : null;
   estimatedFpsRef.current = estimatedFps;
@@ -990,7 +1004,8 @@ function App() {
           if (!video) break;
           event.preventDefault();
           const anchors = markersRef.current
-            .filter((m) => m.media_path === currentMediaKeyRef.current)
+            // 0.22: прыжки — по той же identity, что таймлайн.
+            .filter((m) => markerBelongsToMedia(m, { mediaKey: currentMediaKeyRef.current, contentHash: contentHashRef.current }))
             .map((m) => m.anchor_sec);
           const target = resolveJumpTarget(anchors, video.currentTime, action === "jumpPrevMarker" ? -1 : 1);
           if (target !== undefined) video.currentTime = target;
@@ -1422,7 +1437,7 @@ function App() {
   async function performClearMarkers(scope: ClearScope): Promise<void> {
     const media = currentMediaKeyRef.current;
     if (!media) { setContextToast("Clear: open a video first."); return; }
-    const victims = selectMarkersToClear(markersRef.current, media, scope);
+    const victims = selectMarkersToClear(markersRef.current, media, scope, contentHashRef.current);
     if (!victims.length) { setContextToast("Nothing to clear."); return; }
     if (!(await confirmClearMarkers(victims))) return;
     pushMarkerHistory();
@@ -1451,10 +1466,10 @@ function App() {
   }
 
   async function performExportJson(): Promise<void> {
-    const mediaMarkers = markers.filter((m) => m.media_path === currentMediaKey);
+    const mediaMarkers = markers.filter((m) => markerBelongsToMedia(m, mediaIdentity));
     const mediaEvents = provisionalEvents.filter((e) => e.media_path === currentMediaKey);
     if (!mediaMarkers.length && !mediaEvents.length) { announceExport("json", true, null); return; }
-    const json = exportToSidecar(mediaMarkers, mediaEvents, currentMediaKey || "");
+    const json = exportToSidecar(mediaMarkers, mediaEvents, currentMediaKey || "", contentHash);
     const result = await saveFileDialogResult(json, `${fileName || "markers"}.sos.json`, {
       filters: [{ name: "JSON", extensions: ["json"] }],
     });
@@ -1462,7 +1477,7 @@ function App() {
   }
 
   async function performExportXml(): Promise<void> {
-    const mm = markers.filter((m) => m.media_path === currentMediaKey);
+    const mm = markers.filter((m) => markerBelongsToMedia(m, mediaIdentity));
     if (!mm.length) { announceExport("xml", true, null); return; }
     // Bell №3: fps-цепочка probe → rVFC → 25 (раньше только probe, в релизе
     // мёртвый — XML всегда врал 25); аудио по умолчанию присутствует; тост
@@ -1605,7 +1620,7 @@ function App() {
   // боятся XML, монтажёр в CapCut — импорта XML там нет). Тост — по
   // тракту srt: формат имени не светится, только факт сохранения.
   async function performExportReviewNotes(): Promise<void> {
-    const mm = markers.filter((m) => m.media_path === currentMediaKey);
+    const mm = markers.filter((m) => markerBelongsToMedia(m, mediaIdentity));
     if (!mm.length) { announceExport("srt", true, null); return; }
     const fps = resolveXmlFps(probeResult?.fps, estimatedFps);
     const txt = exportCommentsToText(mm, fps, `Review notes — ${fileName || "markers"}`);
@@ -1834,7 +1849,7 @@ function App() {
         break;
       case "show_comments":
         setContextToast("Comments");
-        void openPanelWindow("panel-comments", "comments", "Comments", 380, 560, currentMediaKey ? `media=${encodeURIComponent(currentMediaKey)}` : undefined);
+        void openPanelWindow("panel-comments", "comments", "Comments", 380, 560, withContentHash(currentMediaKey ? `media=${encodeURIComponent(currentMediaKey)}` : undefined));
         break;
       case "theme":
         setContextToast("Theme — тёмная тема по умолчанию (заготовка).");
@@ -1849,7 +1864,7 @@ function App() {
         setContextToast("Bring All to Front — системное поведение macOS.");
         break;
       case "comments_panel":
-        void openPanelWindow("panel-comments", "comments", "Comments", 380, 560, currentMediaKey ? `media=${encodeURIComponent(currentMediaKey)}` : undefined);
+        void openPanelWindow("panel-comments", "comments", "Comments", 380, 560, withContentHash(currentMediaKey ? `media=${encodeURIComponent(currentMediaKey)}` : undefined));
         break;
       case "load_module_playlist":
         setContextToast("Load Playlist/Scanner Module — в разработке.");
@@ -2008,9 +2023,49 @@ function App() {
       setRefusalToast(mediaRefusalReason(file.name, playability));
       return;
     }
+    refreshContentHash({ file });
     const nextUrl = URL.createObjectURL(file);
     attachSource(nextUrl, file.name);
   }
+
+  // 0.22: окно комментов получает и chash — та же identity, что у main
+  // (копия видео показывает свои метки и там). Хеша нет — как раньше.
+  function withContentHash(query: string | undefined): string | undefined {
+    const hash = contentHashRef.current;
+    if (!query || !hash) return query;
+    return `${query}&chash=${encodeURIComponent(hash)}`;
+  }
+  // 0.22: пересчёт content-hash identity при каждом открытии. Хеш едет
+  // асинхронно (сэмпл 128KB + SHA-256 — миллисекунды, но чтение всё равно
+  // не блокирует attach): токен отбрасывает опоздавший результат, если
+  // пользователь уже открыл следующий файл.
+  function refreshContentHash(target: { path?: string; file?: File }): void {
+    const token = ++contentHashTokenRef.current;
+    contentHashRef.current = null;
+    setContentHash(null);
+    void resolveMediaContentHash(target).then((hash) => {
+      if (contentHashTokenRef.current !== token) return;
+      contentHashRef.current = hash;
+      setContentHash(hash);
+    });
+  }
+
+  // 0.22: честный сайдкар в UI — метки подтянулись по содержимому, а не по
+  // пути (копия/переименование). Обычное открытие молчит, чтобы не шуметь.
+  const announcedHashLinkRef = useRef("");
+  useEffect(() => {
+    if (!contentHash || !currentMediaKey) return;
+    const key = `${currentMediaKey}|${contentHash}`;
+    if (announcedHashLinkRef.current === key) return;
+    announcedHashLinkRef.current = key;
+    const byHash = markers.filter((m) => m.content_hash === contentHash).length;
+    if (byHash === 0) return;
+    const byPath = markers.filter((m) => !m.content_hash && m.media_path === currentMediaKey).length;
+    if (byPath > 0) return;
+    setContextToast(
+      `Linked ${byHash} marker${byHash === 1 ? "" : "s"} by content — copies and renames keep your notes.`,
+    );
+  }, [contentHash, currentMediaKey, markers]);
 
   async function handleOpenPath(path: string) {
     if (isSameMediaPath(path, currentFilePathRef.current)) {
@@ -2032,6 +2087,8 @@ function App() {
       return;
     }
     setCurrentFilePath(path);
+    // 0.22: identity содержимого — параллельно с probe, открытию не мешает.
+    refreshContentHash({ path });
     if (isTauriRuntimeSync()) {
       void import("@tauri-apps/api/event").then(({ emit }) => {
         emit("playlist:current", { path }).catch(() => {});
@@ -2261,6 +2318,8 @@ function App() {
       project_id: "cut_demo",
       timeline_id: "main",
       media_path: currentMediaKey,
+      // 0.22: штамп содержимого на момент создания — копия файла опознается.
+      content_hash: contentHashRef.current ?? null,
       kind,
       start_sec: start,
       end_sec: end,
@@ -2294,7 +2353,7 @@ function App() {
     // 0.12 слайс 1: окно комментов показывает HH:MM:SS:FF — fps едет в query,
     // та же цепочка probe→rVFC, что XML timebase и таймкоды транспорта.
     const fps = resolveXmlFps(probeResult?.fps, estimatedFps);
-    if (m) void openPanelWindow("panel-comments", "comments", "Comments", 380, 560, `marker=${encodeURIComponent(m.marker_id)}&media=${encodeURIComponent(m.media_path ?? currentMediaKey ?? "")}&fps=${fps}`);
+    if (m) void openPanelWindow("panel-comments", "comments", "Comments", 380, 560, withContentHash(`marker=${encodeURIComponent(m.marker_id)}&media=${encodeURIComponent(m.media_path ?? currentMediaKey ?? "")}&fps=${fps}`));
   }
 
   function addProvisionalVetkaCapture() {
