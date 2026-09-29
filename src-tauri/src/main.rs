@@ -276,21 +276,29 @@ fn open_panel_window(
     query: Option<String>,
 ) -> Result<(), String> {
     use tauri::Manager;
-    // Repeat open must focus the existing window, not fail silently
-    // [signal: повторный ⌘L фокусирует окно] [project: cut-player].
-    if let Some(win) = app.get_webview_window(&label) {
-        let _ = win.unminimize();
-        let _ = win.show();
-        win.set_focus()
-            .map_err(|e| format!("Failed to focus window: {}", e))?;
-        return Ok(());
-    }
     let path = format!("{}.html", route);
     let url_str = if let Some(q) = &query {
         format!("{}/{}?{}", base_url.trim_end_matches('/'), path, q)
     } else {
         format!("{}/{}", base_url.trim_end_matches('/'), path)
     };
+    // Repeat open must focus the existing window, not fail silently
+    // [signal: повторный ⌘L фокусирует окно] [project: cut-player].
+    // 0.21.1 (регресс: виден только первый коммент): фокуса мало — окно
+    // залипало на первом ?marker=/?media=, новые комменты не показывались.
+    // Если зовут со свежим query — везём существующее окно на новый URL.
+    if let Some(win) = app.get_webview_window(&label) {
+        if query.is_some() {
+            let js_url = serde_json::to_string(&url_str)
+                .map_err(|e| format!("Failed to encode panel URL: {}", e))?;
+            let _ = win.eval(&format!("window.location.replace({})", js_url));
+        }
+        let _ = win.unminimize();
+        let _ = win.show();
+        win.set_focus()
+            .map_err(|e| format!("Failed to focus window: {}", e))?;
+        return Ok(());
+    }
     let url = url::Url::parse(&url_str)
         .map_err(|e| format!("Invalid panel URL: {}", e))?;
 
