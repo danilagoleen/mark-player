@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { exportMarkersToSrt, importSrtToMarkers, MARKER_PREFIX, appendMarkerToSrt, exportMarkersToSrtV2, exportToSidecar, exportMarkersToXml, exportMarkersToXmeml, exportPlaylistToXmeml, resolvePlaylistMetadata, exportCommentsToText, reviewMarkerName, formatTimecode, resolveXmlFps, resolveXmlFpsSource, resolveXmlHasAudio, exportMarkersToEdl, resolveMarkerColor, sanitizeEdlNote } from "./srtUtils";
+import { exportMarkersToSrt, importSrtToMarkers, MARKER_PREFIX, appendMarkerToSrt, exportMarkersToSrtV2, exportToSidecar, exportMarkersToXml, exportMarkersToXmeml, exportPlaylistToXmeml, resolvePlaylistMetadata, exportCommentsToText, reviewMarkerName, formatTimecode, resolveXmlFps, resolveXmlFpsSource, resolveXmlHasAudio, exportMarkersToEdl, resolveMarkerColor, sanitizeEdlNote, edlAscii } from "./srtUtils";
 
 interface TestMarker {
   marker_id: string;
@@ -701,12 +701,25 @@ describe("exportMarkersToEdl", () => {
   it("шапка TITLE + FCM и события в диалекте BMD", () => {
     const edl = exportMarkersToEdl(MARKERS, 25, "Review notes — clip");
     const lines = edl.split("\n");
-    expect(lines[0]).toBe("TITLE: Review notes — clip");
+    expect(lines[0]).toBe("TITLE: Review notes clip");
     expect(lines[1]).toBe("FCM: NON-DROP FRAME");
-    // сортировка по времени: favorite первый
-    expect(lines[3]).toMatch(/^001  AX\s+V\s+C\s+00:00:01:00 00:00:01:00 00:00:01:00 00:00:01:00$/);
-    expect(lines[4]).toBe("* MARKER |C:ResolveColorGreen |M:★ good |D:25");
-    expect(lines[6]).toContain("|C:ResolveColorBlue |M:comment: look |D:25");
+    // сортировка по времени: favorite первый; out = in + dur (1с span → 25 кадров)
+    expect(lines[3]).toMatch(/^001  AX\s+V\s+C\s+00:00:01:00 00:00:02:00 00:00:01:00 00:00:02:00$/);
+    expect(lines[4]).toBe("* good |C:ResolveColorGreen |M:good |D:25");
+    expect(lines[6]).toContain("comment: look |C:ResolveColorBlue |M:comment: look |D:25");
+  });
+
+  it("весь файл — чистый ASCII (кириллица транслитерирована)", () => {
+    const edl = exportMarkersToEdl(
+      [{ kind: "comment", start_sec: 10, end_sec: 10, label: "", text: "ДО монтаж ★" }],
+      50,
+      "Review notes ,ДО SL-AR_14",
+    );
+    expect(edl).toMatch(/^[\x0a\x20-\x7e]*$/);
+    expect(edl).toContain("TITLE: Review notes ,DO SL-AR_14");
+    expect(edl).toContain("comment: DO montazh |C:ResolveColorBlue |M:comment: DO montazh |D:1");
+    // точка (end==start): событие 1 кадр, out строго > in
+    expect(edl).toContain("00:00:10:00 00:00:10:01 00:00:10:00 00:00:10:01");
   });
 
   it("in/out-пары — одно событие Cut диапазоном", () => {
@@ -718,7 +731,8 @@ describe("exportMarkersToEdl", () => {
       50,
       "t",
     );
-    expect(edl).toContain("|C:ResolveColorYellow |M:Cut |D:150");
+    expect(edl).toContain("Cut |C:ResolveColorYellow |M:Cut |D:150");
+    expect(edl).toContain("00:00:02:00 00:00:05:00 00:00:02:00 00:00:05:00");
   });
 
   it("пусто — только шапка, мусора нет", () => {
@@ -734,5 +748,7 @@ describe("exportMarkersToEdl", () => {
     expect(resolveMarkerColor("???")).toBe("Blue");
     expect(sanitizeEdlNote("a|b\nc\td")).toBe("a/b c d");
     expect(sanitizeEdlNote(null)).toBe("");
+    expect(sanitizeEdlNote("ДО ★")).toBe("DO");
+    expect(edlAscii("Монтаж—финал")).toBe("Montazhfinal");
   });
 });

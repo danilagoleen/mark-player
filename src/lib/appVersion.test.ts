@@ -4,14 +4,14 @@ import tauriConf from "../../src-tauri/tauri.conf.json";
 import cargoToml from "../../src-tauri/Cargo.toml?raw";
 import appSrc from "../App.tsx?raw";
 
-// [signal: штамп версии 0.24.0 beta] [project: cut-player]
-// Красный→зелёный: все три манифеста несут 0.24.0, титр окна и about-тост —
-// Mark Player 0.24.0 beta.
+// [signal: штамп версии 0.24.1 beta] [project: cut-player]
+// Красный→зелёный: все три манифеста несут 0.24.1, титр окна и about-тост —
+// Mark Player 0.24.1 beta.
 // Без node: импортов (@types/node нет в src-tsconfig): JSON напрямую,
 // Cargo.toml и App.tsx — через ?raw (vite/client уже подключён в vite-env.d.ts).
 
-const EXPECTED_VERSION = "0.24.0";
-const EXPECTED_DISPLAY = "Mark Player 0.24.0 beta";
+const EXPECTED_VERSION = "0.24.1";
+const EXPECTED_DISPLAY = "Mark Player 0.24.1 beta";
 
 describe("version stamp 0.17", () => {
   it("package.json carries the stamp", () => {

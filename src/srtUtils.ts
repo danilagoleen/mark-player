@@ -325,7 +325,7 @@ export function formatTimecode(seconds: number, fps: number): string {
   const hours = Math.floor(whole / 3600);
   const mins = Math.floor((whole % 3600) / 60);
   const secs = whole % 60;
-  const frames = Math.min(rate - 1, Math.floor((seconds - whole) * rate));
+  const frames = Math.min(rate - 1, Math.floor((seconds - whole) * rate + 1e-6));
   const p2 = (n: number) => n.toString().padStart(2, "0");
   return `${p2(hours)}:${p2(mins)}:${p2(secs)}:${p2(frames)}`;
 }
@@ -789,18 +789,43 @@ export function resolveMarkerColor(kind: string): string {
   return KIND_RESOLVE_COLOR[kind] ?? "Blue";
 }
 
-// |M: — без разделителя | и переводов строк: ломают разбор DaVinci.
-export function sanitizeEdlNote(value: string | null | undefined): string {
-  return String(value ?? "")
-    .replace(/\|/g, "/")
-    .replace(/[\r\n\t]+/g, " ")
-    .replace(/[\u0000-\u001f\u007f]/g, "")
+// 0.24.1: EDL — строго ASCII. Resolve игнорит не-латиницу в маркерах
+// (форум BMD: лечится ничем, только латиница), а Premiere читает UTF-8
+// TITLE как Latin-1 (муджибейк ÂÎ вместо ДО). Кириллицу транслитерируем
+// (читаемо: ДО → DO), остальное — NFKD-strip.
+const CYRILLIC_TO_LATIN: Record<string, string> = {
+  А: "A", а: "a", Б: "B", б: "b", В: "V", в: "v", Г: "G", г: "g",
+  Д: "D", д: "d", Е: "E", е: "e", Ё: "Yo", ё: "yo", Ж: "Zh", ж: "zh",
+  З: "Z", з: "z", И: "I", и: "i", Й: "Y", й: "y", К: "K", к: "k",
+  Л: "L", л: "l", М: "M", м: "m", Н: "N", н: "n", О: "O", о: "o",
+  П: "P", п: "p", Р: "R", р: "r", С: "S", с: "s", Т: "T", т: "t",
+  У: "U", у: "u", Ф: "F", ф: "f", Х: "Kh", х: "kh", Ц: "Ts", ц: "ts",
+  Ч: "Ch", ч: "ch", Ш: "Sh", ш: "sh", Щ: "Shch", щ: "shch",
+  Ъ: "", ъ: "", Ы: "Y", ы: "y", Ь: "", ь: "",
+  Э: "E", э: "e", Ю: "Yu", ю: "yu", Я: "Ya", я: "ya",
+  І: "I", і: "i", Ї: "Yi", ї: "yi", Є: "Ye", є: "ye", Ґ: "G", ґ: "g",
+  Ў: "U", ў: "u",
+};
+
+export function edlAscii(value: string | null | undefined): string {
+  const mapped = String(value ?? "").replace(/[\u0400-\u052f]/g, (ch) => CYRILLIC_TO_LATIN[ch] ?? "");
+  return mapped
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7e]/g, "")
+    .replace(/\s+/g, " ")
     .trim();
+}
+
+// |M: — без разделителя | и переводов строк: ломают разбор DaVinci.
+// Плюс edlAscii: только латиница (см. выше).
+export function sanitizeEdlNote(value: string | null | undefined): string {
+  return edlAscii(String(value ?? "").replace(/\|/g, "/").replace(/[\r\n\t]+/g, " "));
 }
 
 export function exportMarkersToEdl(markers: EdlMarkerInput[], fps: number, title?: string): string {
   const safeFps = Number.isFinite(fps) && fps > 0 ? fps : 25;
-  const L: string[] = [`TITLE: ${title || "Mark Player markers"}`, "FCM: NON-DROP FRAME", ""];
+  const L: string[] = [`TITLE: ${edlAscii(title) || "Mark Player markers"}`, "FCM: NON-DROP FRAME", ""];
   const sorted = [...markers].sort((a, b) => a.start_sec - b.start_sec);
   // in/out-пары — одно событие диапазоном (как Cut-строки в .txt),
   // остальное — точечные события; сирота-in — точка.
@@ -833,11 +858,16 @@ export function exportMarkersToEdl(markers: EdlMarkerInput[], fps: number, title
   ].sort((a, b) => a.start - b.start);
   events.forEach((e, i) => {
     const num = String(i + 1).padStart(3, "0");
-    const tc = formatTimecode(Math.max(0, e.start), safeFps);
+    const startSec = Math.max(0, e.start);
     const durFrames = Math.max(1, Math.round(Math.max(0, e.end - e.start) * safeFps));
-    const note = sanitizeEdlNote(e.name) || e.kind;
-    L.push(`${num}  AX       V     C        ${tc} ${tc} ${tc} ${tc}`);
-    L.push(`* MARKER |C:ResolveColor${resolveMarkerColor(e.kind)} |M:${note} |D:${durFrames}`);
+    // 0.24.1: out строго > in (нулевую длительность парсеры дропают молча).
+    const tcIn = formatTimecode(startSec, safeFps);
+    const tcOut = formatTimecode(startSec + durFrames / safeFps, safeFps);
+    // Коммент — формой как нативный экспорт маркеров Resolve:
+    // текст, затем пайпы. Один note и в тексте, и в |M:|.
+    const note = (sanitizeEdlNote(e.name) || e.kind).slice(0, 255);
+    L.push(`${num}  AX       V     C        ${tcIn} ${tcOut} ${tcIn} ${tcOut}`);
+    L.push(`* ${note} |C:ResolveColor${resolveMarkerColor(e.kind)} |M:${note} |D:${durFrames}`);
   });
   return L.join("\n");
 }
