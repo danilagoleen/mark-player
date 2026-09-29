@@ -54,7 +54,10 @@ describe("cutPlayerMenu", () => {
     const enabled = [
       "file_open", "file_export_srt", "file_export_json", "file_export_xml",
       "file_export_playlist_xml", "file_export_review_notes", "file_send_to_editor",
-      "file_import_srt", "edit_undo", "edit_redo", "pb_play_pause", "pb_loop", "audio_mute",
+      "file_import_srt", "edit_undo", "edit_redo",
+      "edit_clear_comments", "edit_clear_favorites", "edit_clear_negatives",
+      "edit_clear_inout", "edit_clear_all",
+      "pb_play_pause", "pb_loop", "audio_mute",
       "video_fullscreen", "sub_file", "view_playlist", "win_playlist",
       "win_comments", "help_about", "help_feedback", "help_github", "help_updates",
       "app_about",
@@ -75,6 +78,16 @@ describe("cutPlayerMenu", () => {
     // Без accelerator: ⌘Z ловит DOM-хендлер с typing-guard, иначе двойной откат.
     expect(byId.edit_undo.accelerator).toBeUndefined();
     expect(byId.edit_redo.accelerator).toBeUndefined();
+  });
+
+  it("Edit → Clear submenu: по видам + всё (0.21)", () => {
+    const spec = buildCutPlayerMenuSpec();
+    const byId = Object.fromEntries(flattenItems(spec).map((i) => [i.id, i]));
+    expect(byId.edit_clear_comments.action).toBe("clear_comments");
+    expect(byId.edit_clear_favorites.action).toBe("clear_favorites");
+    expect(byId.edit_clear_negatives.action).toBe("clear_negatives");
+    expect(byId.edit_clear_inout.action).toBe("clear_inout");
+    expect(byId.edit_clear_all.action).toBe("clear_all_markers");
   });
 
   it("Window menu has Media Info accelerator, Video has Fullscreen, File has Screenshot", () => {

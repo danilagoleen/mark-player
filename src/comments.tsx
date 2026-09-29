@@ -1,7 +1,14 @@
 import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { CommentOverlay } from "./components/chat/CommentOverlay";
-import { createMarkerHistory, historyPush, historyRedo, historyUndo } from "./lib/markerHistory";
+import {
+  confirmClearMarkers,
+  createMarkerHistory,
+  historyPush,
+  historyRedo,
+  historyUndo,
+  selectMarkersToClear,
+} from "./lib/markerHistory";
 import { resolvePlayerHotkey } from "./lib/playerHotkeys";
 import "./index.css";
 
@@ -62,26 +69,6 @@ function persistMarkers(next: BareMarker[]): void {
   } catch {
     // panel stays usable in-memory when storage is unavailable
   }
-}
-
-// 0.20: нативный confirm очистки. Tauri — plugin-dialog, браузер (dev) —
-// window.confirm. Текст честный: откат есть через Undo.
-export async function confirmClearComments(count: number): Promise<boolean> {
-  const message = `Delete all ${count} comments? You can bring them back with Undo (Cmd+Z).`;
-  try {
-    if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-      const dialog = await import("@tauri-apps/plugin-dialog");
-      return await dialog.confirm(message, { title: "Clear comments", kind: "warning", okLabel: "Delete" });
-    }
-  } catch {
-    // fall through to window.confirm
-  }
-  try {
-    if (typeof window !== "undefined" && typeof window.confirm === "function") return window.confirm(message);
-  } catch {
-    // ignore
-  }
-  return false;
 }
 
 function CommentsStandalone() {
@@ -163,13 +150,15 @@ function CommentsStandalone() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [performUndo, performRedo]);
 
-  // 0.20: Clear all — сносит комменты ТЕКУЩЕГО видео (visible scope), after
-  // нативного confirm. Сама очистка кладётся в undo-стек: ⌘Z возвращает.
+  // 0.21: Clear all чистит ВСЕ виды маркеров текущего видео (фидбэк
+  // оператора: кнопка врала названием — сносила только текст). Scope тот же,
+  // что у списка: только своё media. Confirm с разбивкой по видам, сама
+  // очистка — в undo-стек: ⌘Z возвращает.
   const handleClearAll = useCallback(async () => {
     const prev = markersRef.current;
-    const victims = prev.filter((m) => m.kind === "comment" && m.media_path === media);
+    const victims = selectMarkersToClear(prev, media, "all");
     if (!victims.length) return;
-    if (!(await confirmClearComments(victims.length))) return;
+    if (!(await confirmClearMarkers(victims))) return;
     historyRef.current = historyPush(historyRef.current, prev);
     const victimIds = new Set(victims.map((m) => m.marker_id));
     const updated = prev.filter((m) => !victimIds.has(m.marker_id));

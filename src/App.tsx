@@ -22,7 +22,15 @@ import { resolveExternalMarkers } from "./lib/markersSync";
 import type { CutPlayerMenuAction } from "./lib/cutPlayerMenu";
 import { useDragDrop } from "./lib/useDragDrop";
 import { ReverseShuttle, getShuttleDisplay, resolveJumpTarget, resolvePlayerHotkey, resolveProportionalStep, shuttleSlotClass } from "./lib/playerHotkeys";
-import { createMarkerHistory, historyPush, historyRedo, historyUndo } from "./lib/markerHistory";
+import {
+  confirmClearMarkers,
+  createMarkerHistory,
+  historyPush,
+  historyRedo,
+  historyUndo,
+  selectMarkersToClear,
+} from "./lib/markerHistory";
+import type { ClearScope } from "./lib/markerHistory";
 import {
   VOLUME_STEP,
   createFrameCalibrator,
@@ -1409,6 +1417,19 @@ function App() {
     pushMarkerHistory();
     setDraggingMarkerId(markerId);
   }
+  // 0.21: Clear по видам из Edit → Clear. Scope — только текущее видео.
+  // Confirm с разбивкой по видам, сама очистка — в undo-стек.
+  async function performClearMarkers(scope: ClearScope): Promise<void> {
+    const media = currentMediaKeyRef.current;
+    if (!media) { setContextToast("Clear: open a video first."); return; }
+    const victims = selectMarkersToClear(markersRef.current, media, scope);
+    if (!victims.length) { setContextToast("Nothing to clear."); return; }
+    if (!(await confirmClearMarkers(victims))) return;
+    pushMarkerHistory();
+    const victimIds = new Set(victims.map((m) => m.marker_id));
+    setMarkers((prev) => prev.filter((m) => !victimIds.has(m.marker_id)));
+    setContextToast(victims.length === 1 ? "Cleared 1 marker." : `Cleared ${victims.length} markers.`);
+  }
   performUndoRef.current = performUndo;
   performRedoRef.current = performRedo;
 
@@ -1642,6 +1663,21 @@ function App() {
         break;
       case "redo":
         menuHandlersRef.current.onRedo();
+        break;
+      case "clear_comments":
+        void performClearMarkers("comment");
+        break;
+      case "clear_favorites":
+        void performClearMarkers("favorite");
+        break;
+      case "clear_negatives":
+        void performClearMarkers("negative");
+        break;
+      case "clear_inout":
+        void performClearMarkers("inout");
+        break;
+      case "clear_all_markers":
+        void performClearMarkers("all");
         break;
       case "export_srt":
         menuHandlersRef.current.onExportSrt();

@@ -1,4 +1,4 @@
-# Mark Player 0.20 beta, by VETKA lab
+# Mark Player 0.21 beta, by VETKA lab
 
 <img src="docs/screenshots/icon-128.png" width="128" alt="Mark Player icon">
 
@@ -136,6 +136,7 @@ Native bundles land in
 | `F` / `N` | Favorite / negative marker |
 | `M` | Comment marker + comment window |
 | `⌘Z` / `⇧⌘Z` | Undo / redo marker change |
+| Edit → Clear | Clear comments / favorites / negatives / in-out / all (confirm + undo) |
 | `Q` | Preview quality cycle |
 | `Home` / `End` | Go to start / end |
 | `Esc` | Exit fullscreen |

@@ -2,6 +2,11 @@ export type CutPlayerMenuAction =
   | "open"
   | "undo"
   | "redo"
+  | "clear_comments"
+  | "clear_favorites"
+  | "clear_negatives"
+  | "clear_inout"
+  | "clear_all_markers"
   | "open_folder"
   | "open_playlist_file"
   | "save_playlist_file"
@@ -149,6 +154,15 @@ export function buildCutPlayerMenuSpec(): CutPlayerMenuSectionSpec[] {
         // двойной откат — меню-акселератор плюс keydown.
         { id: "edit_undo", label: "Undo", action: "undo" },
         { id: "edit_redo", label: "Redo", action: "redo" },
+        // 0.21: Clear по видам (фидбэк оператора). Confirm с разбивкой +
+        // undo-стек — в performClearMarkers, здесь только спецификация.
+        { id: "edit_clear", label: "Clear", kind: "submenu", separatorBefore: true, items: [
+          { id: "edit_clear_comments", label: "Clear Comments", action: "clear_comments" },
+          { id: "edit_clear_favorites", label: "Clear Favorites", action: "clear_favorites" },
+          { id: "edit_clear_negatives", label: "Clear Negatives", action: "clear_negatives" },
+          { id: "edit_clear_inout", label: "Clear In & Out", action: "clear_inout" },
+          { id: "edit_clear_all", label: "Clear All Markers", action: "clear_all_markers", separatorBefore: true },
+        ] },
         { id: "edit_markers", label: "Markers", kind: "submenu", separatorBefore: true, items: [
           { id: "edit_mark_in", label: "Mark In", action: "mark_in" },
           { id: "edit_mark_out", label: "Mark Out", action: "mark_out" },
