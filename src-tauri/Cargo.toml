@@ -1,6 +1,6 @@
 [package]
 name = "vetka_player_lab"
-version = "0.22.0"
+version = "0.23.0"
 description = "Mark Player 0.18 beta by VETKA lab"
 authors = ["Danila Gulin"]
 edition = "2021"

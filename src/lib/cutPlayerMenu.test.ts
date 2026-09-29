@@ -53,7 +53,7 @@ describe("cutPlayerMenu", () => {
     }
     const enabled = [
       "file_open", "file_export_srt", "file_export_json", "file_export_xml",
-      "file_export_playlist_xml", "file_export_review_notes", "file_send_to_editor",
+      "file_export_playlist_xml", "file_export_review_notes", "file_export_visual_notes", "file_send_to_editor",
       "file_import_srt", "edit_undo", "edit_redo",
       "edit_clear_comments", "edit_clear_favorites", "edit_clear_negatives",
       "edit_clear_inout", "edit_clear_all",

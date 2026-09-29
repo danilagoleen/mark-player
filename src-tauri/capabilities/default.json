@@ -16,6 +16,8 @@
     "opener:default",
     "fs:default",
     "fs:allow-write-text-file",
+    "fs:allow-write-file",
+    "fs:allow-mkdir",
     {
       "identifier": "fs:allow-read-text-file",
       "allow": [{ "path": "$HOME/**" }, { "path": "/Volumes/**" }, { "path": "$TEMP/**" }]

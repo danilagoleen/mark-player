@@ -720,7 +720,14 @@ export function reviewMarkerName(kind: string, label: string): string {
   return `${prefix}${kind}`.trim();
 }
 
-export function exportCommentsToText(markers: ReviewNoteInput[], fps: number, header?: string): string {
+export function exportCommentsToText(
+  markers: ReviewNoteInput[],
+  fps: number,
+  header?: string,
+  // 0.23: ссылка на кадр у строки (таск Белла: заметки с картинками).
+  // Нет колбэка или null для маркера — строка как раньше, без ссылки.
+  frameNameOf?: (marker: ReviewNoteInput & { marker_id?: string }) => string | null,
+): string {
   const L: string[] = [];
   if (header) L.push(header);
   const tc = (sec: number) => formatTimecode(sec, fps);
@@ -746,7 +753,8 @@ export function exportCommentsToText(markers: ReviewNoteInput[], fps: number, he
     // Диапазон — только осмысленный (>1с): дефолтные ±0.5 вокруг якоря
     // остаются точкой, иначе каждая строка шумела бы стрелкой.
     const span = m.end_sec - m.start_sec > 1 ? `${tc(m.start_sec)} → ${tc(m.end_sec)}` : tc(m.start_sec);
-    L.push(`${span} — ${body}`);
+    const frame = frameNameOf ? frameNameOf(m) : null;
+    L.push(frame ? `${span} — ${body} [frame: ${frame}]` : `${span} — ${body}`);
   }
   return L.join("\n");
 }

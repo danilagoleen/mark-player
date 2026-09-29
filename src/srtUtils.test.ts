@@ -667,6 +667,20 @@ describe("exportCommentsToText", () => {
     );
     expect(/[а-яё]/i.test(txt)).toBe(false);
   });
+
+  it("0.23: frameNameOf пришивает ссылку на кадр, null — строка как раньше", () => {
+    const markers = [
+      { kind: "comment", start_sec: 4, end_sec: 4, label: "", text: "look" },
+      { kind: "comment", start_sec: 9, end_sec: 9, label: "", text: "skip" },
+    ];
+    const txt = exportCommentsToText(markers, 25, "Review notes", (m) =>
+      m.start_sec === 4 ? "00-00-04-00.jpg" : null,
+    );
+    expect(txt).toContain("[frame: 00-00-04-00.jpg]");
+    expect(txt).not.toContain("[frame: null]");
+    const plain = exportCommentsToText(markers, 25);
+    expect(plain).not.toContain("[frame:");
+  });
 });
 
 describe("reviewMarkerName", () => {

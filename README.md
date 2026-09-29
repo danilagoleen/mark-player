@@ -1,4 +1,4 @@
-# Mark Player 0.22.0 beta, by VETKA lab
+# Mark Player 0.23.0 beta, by VETKA lab
 
 <img src="docs/screenshots/icon-128.png" width="128" alt="Mark Player icon">
 
@@ -116,6 +116,8 @@ Native bundles land in
   prev / next marker, `Home` / `End` jumps.
 - **Export:** File → Export or `⌘S` (SRT), JSON sidecar, XMEML timeline XML
   for one video or the whole playlist (Premiere / DaVinci-ready sequence).
+  Review Notes (.txt) for humans — and Visual Review Notes: a frame from
+  every marker (JPEG ≤ 960px) packed as self-contained .html + .txt + folder.
   Every export answers: `Saved: <file>` / `No markers to export.` /
   `Export failed: <reason>`. Markers store locally
   (`vetka_player_lab_markers_v1`); files leave only via save dialog.

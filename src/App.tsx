@@ -41,7 +41,17 @@ import { createSingleDoubleClick, type SingleDoubleClick } from "./lib/singleDou
 import MycoProbeApp from "./MycoProbeApp";
 // Bell №2: agent chat is a separate module — no chat imports in the default
 // player bundle. Chat components stay in the repo as extraction stock.
-import { exportMarkersToSrtV2, exportToSidecar, exportMarkersToXmeml, exportPlaylistToXmeml, exportCommentsToText, resolvePlaylistMetadata, formatTimecode, resolveXmlFps, resolveXmlFpsSource, resolveXmlHasAudio } from "./srtUtils";
+import { exportMarkersToSrtV2, exportToSidecar, exportMarkersToXmeml, exportPlaylistToXmeml, exportCommentsToText, resolvePlaylistMetadata, formatTimecode, resolveXmlFps, resolveXmlFpsSource, resolveXmlHasAudio, reviewMarkerName } from "./srtUtils";
+import {
+  buildVisualReviewHtml,
+  frameToDataUrl,
+  resolveSnapshotSize,
+  snapshotDirForFile,
+  snapshotFileName,
+  SNAPSHOT_JPEG_QUALITY,
+  SNAPSHOT_SEEK_TIMEOUT_MS,
+  type CapturedFrame,
+} from "./lib/frameSnapshots";
 import type { PlaylistMeta, XmemlPlaylistItemInput } from "./srtUtils";
 import { FileInfoRow } from "./components/info/FileInfoRow";
 
@@ -1385,6 +1395,9 @@ function App() {
     onExportReviewNotes: () => {
       void performExportReviewNotes();
     },
+    onExportVisualNotes: () => {
+      void performExportVisualNotes();
+    },
     onImportSrt: () => {
       const input = document.createElement("input");
       input.type = "file";
@@ -1629,6 +1642,163 @@ function App() {
     });
     announceExport("srt", false, result);
   }
+  // 0.23: Visual Review Notes (таск Белла) — кадры в точках маркеров.
+  // seek → canvas → JPEG из уже открытого <video>: ни FFmpeg, ни новых
+  // зависимостей. Позицию и play-state возвращаем; зависший seek (HEVC)
+  // пропускаем по таймауту, прогресс — честным тостом.
+  function seekVideoTo(video: HTMLVideoElement, sec: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const cleanup = () => {
+        window.clearTimeout(timer);
+        video.removeEventListener("seeked", onSeeked);
+        video.removeEventListener("error", onError);
+      };
+      const timer = window.setTimeout(() => { cleanup(); resolve(false); }, SNAPSHOT_SEEK_TIMEOUT_MS);
+      const onSeeked = () => { cleanup(); resolve(true); };
+      const onError = () => { cleanup(); resolve(false); };
+      video.addEventListener("seeked", onSeeked);
+      video.addEventListener("error", onError);
+      try {
+        video.currentTime = Math.max(0, sec);
+      } catch {
+        cleanup();
+        resolve(false);
+      }
+    });
+  }
+  async function captureMarkerFrames(
+    targets: { marker_id: string; anchor_sec: number }[],
+    fps: number,
+    onProgress: (done: number, total: number) => void,
+  ): Promise<CapturedFrame[]> {
+    const video = videoRef.current;
+    if (!video) return [];
+    const wasPaused = video.paused;
+    const prevTime = video.currentTime;
+    video.pause();
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    const frames: CapturedFrame[] = [];
+    try {
+      let done = 0;
+      for (const t of targets) {
+        const ok = await seekVideoTo(video, t.anchor_sec);
+        done += 1;
+        onProgress(done, targets.length);
+        if (!ok || !ctx) continue;
+        const { width, height } = resolveSnapshotSize(video.videoWidth || 0, video.videoHeight || 0);
+        if (width === 0 || height === 0) continue;
+        canvas.width = width;
+        canvas.height = height;
+        try {
+          ctx.drawImage(video, 0, 0, width, height);
+        } catch {
+          continue;
+        }
+        const blob: Blob | null = await new Promise((r) => {
+          try {
+            canvas.toBlob(r, "image/jpeg", SNAPSHOT_JPEG_QUALITY);
+          } catch {
+            r(null);
+          }
+        });
+        if (!blob) continue;
+        const jpeg = new Uint8Array(await blob.arrayBuffer());
+        const timecode = formatTimecode(t.anchor_sec, fps);
+        frames.push({
+          marker_id: t.marker_id,
+          anchor_sec: t.anchor_sec,
+          timecode,
+          fileName: snapshotFileName(timecode),
+          jpeg,
+          width,
+          height,
+        });
+      }
+    } finally {
+      try {
+        video.currentTime = prevTime;
+      } catch {
+        // позицию возвращаем best-effort — экспорту мешать не должна
+      }
+      if (!wasPaused) void video.play().catch(() => {});
+    }
+    return frames;
+  }
+  async function performExportVisualNotes(): Promise<void> {
+    const mm = markers
+      .filter((m) => markerBelongsToMedia(m, mediaIdentity))
+      .sort((a, b) => a.anchor_sec - b.anchor_sec);
+    if (!mm.length) { announceExport("srt", true, null); return; }
+    if (!videoRef.current) { setContextToast("Visual notes: open a video first."); return; }
+    const fps = resolveXmlFps(probeResult?.fps, estimatedFps);
+    const stem = ((fileName || "markers").replace(/\.[^.]+$/, "") || "markers");
+    const title = `Review notes — ${fileName || "markers"}`;
+    setContextToast(`Snapshots 0/${mm.length}…`);
+    const frames = await captureMarkerFrames(
+      mm.map((m) => ({ marker_id: m.marker_id, anchor_sec: m.anchor_sec })),
+      fps,
+      (done, total) => setContextToast(`Snapshots ${done}/${total}…`),
+    );
+    const byId = new Map(frames.map((f) => [f.marker_id, f]));
+    const txt = exportCommentsToText(mm, fps, title, (m) => byId.get(m.marker_id ?? "")?.fileName ?? null);
+    const html = buildVisualReviewHtml({
+      title,
+      fps,
+      frameCount: frames.length,
+      markerCount: mm.length,
+      rows: mm.map((m) => {
+        const f = byId.get(m.marker_id);
+        return {
+          timecode: formatTimecode(m.anchor_sec, fps),
+          kindLabel: m.kind,
+          name: reviewMarkerName(m.kind, m.label),
+          text: m.text || "",
+          fileName: f?.fileName ?? null,
+          dataUrl: f ? frameToDataUrl(f.jpeg) : null,
+        };
+      }),
+    });
+    if (!isTauriRuntimeSync()) {
+      // Браузер: только самодостаточный .html скачиванием; папка — десктоп.
+      const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${stem}.review.html`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+      setContextToast(frames.length
+        ? `Saved .html with ${frames.length} frames. Frames folder needs the desktop app.`
+        : "Saved .html (no frames captured).");
+      return;
+    }
+    const htmlResult = await saveFileDialogResult(html, `${stem}.review.html`, {
+      filters: [{ name: "HTML", extensions: ["html"] }],
+    });
+    if (htmlResult.status !== "saved") { announceExport("srt", false, htmlResult); return; }
+    // Пакет рядом: X.review.html + X.review/X.review.txt + X.review/*.jpg.
+    const folder = snapshotDirForFile(htmlResult.path, stem);
+    try {
+      const fs = await import("@tauri-apps/plugin-fs");
+      await fs.mkdir(folder, { recursive: true });
+      await fs.writeTextFile(`${folder}/${stem}.review.txt`, txt);
+      let written = 0;
+      for (const f of frames) {
+        try {
+          await fs.writeFile(`${folder}/${f.fileName}`, f.jpeg);
+          written += 1;
+        } catch {
+          // один битый кадр пакет не хоронит
+        }
+      }
+      setContextToast(`Visual review saved: .html + .txt + ${written}/${frames.length} frames.`);
+    } catch {
+      // Папка запрещена песочницей — .html уже сохранён, кадры внутри него.
+      setContextToast("Frames folder blocked by sandbox — .html saved with embedded frames.");
+    }
+  }
   menuHandlersRef.current.onExportSrt = () => {
     void performExportSrt();
   };
@@ -1643,6 +1813,9 @@ function App() {
   };
   menuHandlersRef.current.onExportReviewNotes = () => {
     void performExportReviewNotes();
+  };
+  menuHandlersRef.current.onExportVisualNotes = () => {
+    void performExportVisualNotes();
   };
   menuHandlersRef.current.onUndo = () => {
     performUndoRef.current();
@@ -1708,6 +1881,9 @@ function App() {
         break;
       case "export_review_notes":
         menuHandlersRef.current.onExportReviewNotes();
+        break;
+      case "export_visual_notes":
+        menuHandlersRef.current.onExportVisualNotes();
         break;
       case "import_srt":
         menuHandlersRef.current.onImportSrt();
