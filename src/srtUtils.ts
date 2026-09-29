@@ -759,6 +759,89 @@ export function exportCommentsToText(
   return L.join("\n");
 }
 
+// 0.24: маркеры для DaVinci Resolve. XMEML-маркеры (<marker>/<pproColor> —
+// диалект Premiere) DaVinci молча игнорит: в его собственном экспорте
+// <comments/> пустые. Штатный ввоз — Timelines > Import > Timeline Markers
+// from EDL, диалект от сотрудника BMD:
+//   001  001      V     C   00:00:04:00 00:00:04:01 ... |C:ResolveColorBlue |M:text |D:300
+// События точечные (1 кадр), длительность — через |D: в кадрах.
+export interface EdlMarkerInput {
+  kind: string;
+  start_sec: number;
+  end_sec: number;
+  label: string;
+  text: string;
+}
+
+// Цвета палитры DaVinci (порядок как в UI): Blue Cyan Green Yellow Red Pink
+// Purple Fuchsia Rose Lavender Sky Mint Lemon Sand Cocoa Cream.
+const KIND_RESOLVE_COLOR: Record<string, string> = {
+  favorite: "Green",
+  comment: "Blue",
+  negative: "Red",
+  in: "Yellow",
+  out: "Yellow",
+  chat: "Cyan",
+  note: "Blue",
+};
+
+export function resolveMarkerColor(kind: string): string {
+  return KIND_RESOLVE_COLOR[kind] ?? "Blue";
+}
+
+// |M: — без разделителя | и переводов строк: ломают разбор DaVinci.
+export function sanitizeEdlNote(value: string | null | undefined): string {
+  return String(value ?? "")
+    .replace(/\|/g, "/")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .trim();
+}
+
+export function exportMarkersToEdl(markers: EdlMarkerInput[], fps: number, title?: string): string {
+  const safeFps = Number.isFinite(fps) && fps > 0 ? fps : 25;
+  const L: string[] = [`TITLE: ${title || "Mark Player markers"}`, "FCM: NON-DROP FRAME", ""];
+  const sorted = [...markers].sort((a, b) => a.start_sec - b.start_sec);
+  // in/out-пары — одно событие диапазоном (как Cut-строки в .txt),
+  // остальное — точечные события; сирота-in — точка.
+  const singles: EdlMarkerInput[] = [];
+  let pendingIn: EdlMarkerInput | null = null;
+  const spans: { start: number; end: number }[] = [];
+  for (const m of sorted) {
+    if (m.kind === "in") { pendingIn = m; continue; }
+    if (m.kind === "out") {
+      if (pendingIn !== null) {
+        spans.push({ start: pendingIn.start_sec, end: m.start_sec });
+        pendingIn = null;
+      }
+      continue;
+    }
+    singles.push(m);
+  }
+  if (pendingIn !== null) {
+    // сирота-in — точечный Cut (как в .txt: "Cut X → end", конца не знаем).
+    spans.push({ start: pendingIn.start_sec, end: pendingIn.start_sec });
+  }
+  type EdlEvent = { start: number; end: number; kind: string; name: string };
+  const events: EdlEvent[] = [
+    ...spans.map((s) => ({ start: s.start, end: s.end, kind: "in", name: "Cut" })),
+    ...singles.map((m) => {
+      const name = reviewMarkerName(m.kind, m.label);
+      const text = (m.text || "").trim();
+      return { start: m.start_sec, end: m.end_sec, kind: m.kind, name: text ? `${name}: ${text}` : name };
+    }),
+  ].sort((a, b) => a.start - b.start);
+  events.forEach((e, i) => {
+    const num = String(i + 1).padStart(3, "0");
+    const tc = formatTimecode(Math.max(0, e.start), safeFps);
+    const durFrames = Math.max(1, Math.round(Math.max(0, e.end - e.start) * safeFps));
+    const note = sanitizeEdlNote(e.name) || e.kind;
+    L.push(`${num}  AX       V     C        ${tc} ${tc} ${tc} ${tc}`);
+    L.push(`* MARKER |C:ResolveColor${resolveMarkerColor(e.kind)} |M:${note} |D:${durFrames}`);
+  });
+  return L.join("\n");
+}
+
 // XMEML v4 export for Adobe Premiere Pro import.
 // Mirrors scripts/cut_xml_export.py (battle-tested 2026-07-15, RECON_XML_EXPORT_PREMIERE_v4):
 // <sequence> directly under <xmeml>, ~15-field clipitems, pproTicks,

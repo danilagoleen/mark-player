@@ -139,7 +139,7 @@ export function buildCutPlayerMenuSpec(): CutPlayerMenuSectionSpec[] {
           { id: "file_export_review_notes", label: "Review Notes (.txt)…", action: "export_review_notes" },
           { id: "file_export_visual_notes", label: "Visual Review Notes (frames)…", action: "export_visual_notes" },
           { id: "file_send_to_editor", label: "Send to editor…", action: "export_playlist_xml" },
-          { id: "file_export_edl", label: "EDL… (NLE)", action: "export_edl", enabled: false },
+          { id: "file_export_edl", label: "Markers (EDL, DaVinci)…", action: "export_edl" },
           { id: "file_export_otio", label: "OTIO/CUT Project… (NLE)", action: "export_otio", enabled: false },
         ] },
         { id: "file_screenshot", label: "Take Screenshot (soon)", action: "screenshot", accelerator: "CmdOrCtrl+Shift+S", separatorBefore: true, enabled: false },

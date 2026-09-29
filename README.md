@@ -1,4 +1,4 @@
-# Mark Player 0.23.0 beta, by VETKA lab
+# Mark Player 0.24.0 beta, by VETKA lab
 
 <img src="docs/screenshots/icon-128.png" width="128" alt="Mark Player icon">
 
@@ -17,7 +17,7 @@ Marker-first video review: open a file, mark the moments, land them in Premiere 
 *File → Export: SRT subtitles, JSON sidecar, single-video XML, playlist XML.*
 
 ![Imported playlist timeline in Premiere Pro](docs/screenshots/premiere-imported-timeline.jpg)
-*The payoff: playlist XML opens in Premiere as a ready timeline — clips, cuts and colored markers on the exact frames. File → Import the .xml; DaVinci Resolve takes it the same way.*
+*The payoff: playlist XML opens in Premiere as a ready timeline — clips, cuts and colored markers on the exact frames. File → Import the .xml; DaVinci takes the timeline the same way, markers arrive via Markers (EDL).*  
 
 ## Why: twenty years in three megabytes
 
@@ -118,6 +118,8 @@ Native bundles land in
   for one video or the whole playlist (Premiere / DaVinci-ready sequence).
   Review Notes (.txt) for humans — and Visual Review Notes: a frame from
   every marker (JPEG ≤ 960px) packed as self-contained .html + .txt + folder.
+  Markers for DaVinci Resolve travel as EDL (Timelines → Import →
+  Timeline Markers from EDL) — XMEML markers are Premiere-only.
   Every export answers: `Saved: <file>` / `No markers to export.` /
   `Export failed: <reason>`. Markers store locally
   (`vetka_player_lab_markers_v1`); files leave only via save dialog.

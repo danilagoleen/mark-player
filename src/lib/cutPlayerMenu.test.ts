@@ -38,7 +38,7 @@ describe("cutPlayerMenu", () => {
     const spec = buildCutPlayerMenuSpec();
     const byId = Object.fromEntries(flattenItems(spec).map((i) => [i.id, i]));
     const disabled = [
-      "file_import_project", "file_export_edl", "file_export_otio", "file_screenshot",
+      "file_import_project", "file_export_otio", "file_screenshot",
       "pb_jump", "audio_device", "audio_device_default",
       "video_aspect", "video_aspect_fit", "video_aspect_16_9", "video_aspect_4_3",
       "sub_track", "sub_track_next", "sub_delay", "sub_style",
@@ -53,7 +53,7 @@ describe("cutPlayerMenu", () => {
     }
     const enabled = [
       "file_open", "file_export_srt", "file_export_json", "file_export_xml",
-      "file_export_playlist_xml", "file_export_review_notes", "file_export_visual_notes", "file_send_to_editor",
+      "file_export_playlist_xml", "file_export_review_notes", "file_export_visual_notes", "file_export_edl", "file_send_to_editor",
       "file_import_srt", "edit_undo", "edit_redo",
       "edit_clear_comments", "edit_clear_favorites", "edit_clear_negatives",
       "edit_clear_inout", "edit_clear_all",

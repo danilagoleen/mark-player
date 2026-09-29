@@ -41,7 +41,7 @@ import { createSingleDoubleClick, type SingleDoubleClick } from "./lib/singleDou
 import MycoProbeApp from "./MycoProbeApp";
 // Bell №2: agent chat is a separate module — no chat imports in the default
 // player bundle. Chat components stay in the repo as extraction stock.
-import { exportMarkersToSrtV2, exportToSidecar, exportMarkersToXmeml, exportPlaylistToXmeml, exportCommentsToText, resolvePlaylistMetadata, formatTimecode, resolveXmlFps, resolveXmlFpsSource, resolveXmlHasAudio, reviewMarkerName } from "./srtUtils";
+import { exportMarkersToSrtV2, exportToSidecar, exportMarkersToXmeml, exportPlaylistToXmeml, exportCommentsToText, resolvePlaylistMetadata, formatTimecode, resolveXmlFps, resolveXmlFpsSource, resolveXmlHasAudio, reviewMarkerName, exportMarkersToEdl } from "./srtUtils";
 import {
   buildVisualReviewHtml,
   frameToDataUrl,
@@ -1642,6 +1642,21 @@ function App() {
     });
     announceExport("srt", false, result);
   }
+  // 0.24: маркеры для DaVinci — ввоз через Timeline Markers from EDL
+  // (XMEML-маркеры он игнорит). Чистый текст, те же метки, что таймлайн.
+  async function performExportEdl(): Promise<void> {
+    const mm = markers
+      .filter((m) => markerBelongsToMedia(m, mediaIdentity))
+      .sort((a, b) => a.anchor_sec - b.anchor_sec);
+    if (!mm.length) { announceExport("srt", true, null); return; }
+    const fps = resolveXmlFps(probeResult?.fps, estimatedFps);
+    const stem = ((fileName || "markers").replace(/\.[^.]+$/, "") || "markers");
+    const edl = exportMarkersToEdl(mm, fps, `Review notes — ${fileName || "markers"}`);
+    const edlResult = await saveFileDialogResult(edl, `${stem}.markers.edl`, {
+      filters: [{ name: "EDL", extensions: ["edl"] }],
+    });
+    announceExport("srt", false, edlResult);
+  }
   // 0.23: Visual Review Notes (таск Белла) — кадры в точках маркеров.
   // seek → canvas → JPEG из уже открытого <video>: ни FFmpeg, ни новых
   // зависимостей. Позицию и play-state возвращаем; зависший seek (HEVC)
@@ -2079,7 +2094,7 @@ function App() {
         setContextToast("Task Board — в разработке (THALAMUS).");
         break;
       case "export_edl":
-        setContextToast("Export EDL — в разработке (NLE).");
+        void performExportEdl();
         break;
       case "export_otio":
         setContextToast("Export OTIO — в разработке (NLE).");

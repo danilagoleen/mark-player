@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { exportMarkersToSrt, importSrtToMarkers, MARKER_PREFIX, appendMarkerToSrt, exportMarkersToSrtV2, exportToSidecar, exportMarkersToXml, exportMarkersToXmeml, exportPlaylistToXmeml, resolvePlaylistMetadata, exportCommentsToText, reviewMarkerName, formatTimecode, resolveXmlFps, resolveXmlFpsSource, resolveXmlHasAudio } from "./srtUtils";
+import { exportMarkersToSrt, importSrtToMarkers, MARKER_PREFIX, appendMarkerToSrt, exportMarkersToSrtV2, exportToSidecar, exportMarkersToXml, exportMarkersToXmeml, exportPlaylistToXmeml, resolvePlaylistMetadata, exportCommentsToText, reviewMarkerName, formatTimecode, resolveXmlFps, resolveXmlFpsSource, resolveXmlHasAudio, exportMarkersToEdl, resolveMarkerColor, sanitizeEdlNote } from "./srtUtils";
 
 interface TestMarker {
   marker_id: string;
@@ -688,5 +688,51 @@ describe("reviewMarkerName", () => {
     expect(reviewMarkerName("favorite", "good")).toBe("★ good");
     expect(reviewMarkerName("favorite", "")).toContain("FAVORITE");
     expect(reviewMarkerName("comment", "")).toContain("comment");
+  });
+});
+
+// [signal: 0.24 EDL для DaVinci — диалект BMD] [project: cut-player]
+describe("exportMarkersToEdl", () => {
+  const MARKERS = [
+    { kind: "comment", start_sec: 4, end_sec: 5, label: "", text: "look" },
+    { kind: "favorite", start_sec: 1, end_sec: 2, label: "good", text: "" },
+  ];
+
+  it("шапка TITLE + FCM и события в диалекте BMD", () => {
+    const edl = exportMarkersToEdl(MARKERS, 25, "Review notes — clip");
+    const lines = edl.split("\n");
+    expect(lines[0]).toBe("TITLE: Review notes — clip");
+    expect(lines[1]).toBe("FCM: NON-DROP FRAME");
+    // сортировка по времени: favorite первый
+    expect(lines[3]).toMatch(/^001  AX\s+V\s+C\s+00:00:01:00 00:00:01:00 00:00:01:00 00:00:01:00$/);
+    expect(lines[4]).toBe("* MARKER |C:ResolveColorGreen |M:★ good |D:25");
+    expect(lines[6]).toContain("|C:ResolveColorBlue |M:comment: look |D:25");
+  });
+
+  it("in/out-пары — одно событие Cut диапазоном", () => {
+    const edl = exportMarkersToEdl(
+      [
+        { kind: "in", start_sec: 2, end_sec: 2, label: "", text: "" },
+        { kind: "out", start_sec: 5, end_sec: 5, label: "", text: "" },
+      ],
+      50,
+      "t",
+    );
+    expect(edl).toContain("|C:ResolveColorYellow |M:Cut |D:150");
+  });
+
+  it("пусто — только шапка, мусора нет", () => {
+    expect(exportMarkersToEdl([], 25, "t")).toBe("TITLE: t\nFCM: NON-DROP FRAME\n");
+  });
+
+  it("маппинг цветов и санитизация", () => {
+    expect(resolveMarkerColor("favorite")).toBe("Green");
+    expect(resolveMarkerColor("comment")).toBe("Blue");
+    expect(resolveMarkerColor("negative")).toBe("Red");
+    expect(resolveMarkerColor("in")).toBe("Yellow");
+    expect(resolveMarkerColor("chat")).toBe("Cyan");
+    expect(resolveMarkerColor("???")).toBe("Blue");
+    expect(sanitizeEdlNote("a|b\nc\td")).toBe("a/b c d");
+    expect(sanitizeEdlNote(null)).toBe("");
   });
 });
