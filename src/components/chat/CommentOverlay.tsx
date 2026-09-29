@@ -17,6 +17,9 @@ interface CommentOverlayProps {
   onClose: () => void;
   onUpdateText: (markerId: string, text: string) => void;
   onDeleteMarker: (markerId: string) => void;
+  // 0.20: Clear all — опциональный колбэк от standalone-окна (там confirm
+  // и undo-стек). Без колбэка кнопки нет.
+  onClearAll?: () => void;
   // 0.12 слайс 1: fps для HH:MM:SS:FF едет из главного окна в ?fps=
   // (та же цепочка probe→rVFC); нет параметра — честные 25.
   fps?: number;
@@ -43,6 +46,11 @@ const S = {
     background: "none", border: "none", color: "#f87171", fontSize: 11,
     cursor: "pointer", padding: "2px 6px", borderRadius: 4, whiteSpace: "nowrap" as const,
   },
+  clearAllBtn: {
+    background: "none", border: "1px solid rgba(248,113,113,0.4)", color: "#f87171", fontSize: 11,
+    cursor: "pointer", padding: "2px 10px", borderRadius: 6, whiteSpace: "nowrap" as const,
+    marginLeft: "auto" as const,
+  },
   edit: { display: "flex" as const, flexDirection: "column" as const, gap: 8, flex: 1 },
   textarea: {
     background: "rgba(0,0,0,0.4)", border: "1px solid #333",
@@ -58,7 +66,7 @@ const S = {
   }),
 };
 
-export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDeleteMarker, fps = 25, standalone }: CommentOverlayProps) {
+export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDeleteMarker, onClearAll, fps = 25, standalone }: CommentOverlayProps) {
   // Баг 2026-09-27: editing был boolean + Edit только для marker из ?marker=
   // (query не обновляется когда окно уже открыто) — правился один коммент.
   // Теперь editingId на каждый айтем, Edit/Delete у всех.
@@ -120,6 +128,11 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
           fontSize: 12, fontWeight: 600, color: "#e4e6eb",
         }}>
           Comments
+          {onClearAll && commentMarkers.length > 0 && (
+            <button style={S.clearAllBtn} type="button" onClick={onClearAll}>
+              Clear all
+            </button>
+          )}
         </div>
         <div style={{ flex: 1, overflow: "auto" }}>
           {expandedContent}

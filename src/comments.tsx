@@ -1,6 +1,8 @@
-import { StrictMode, useCallback, useEffect, useState } from "react";
+import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { CommentOverlay } from "./components/chat/CommentOverlay";
+import { createMarkerHistory, historyPush, historyRedo, historyUndo } from "./lib/markerHistory";
+import { resolvePlayerHotkey } from "./lib/playerHotkeys";
 import "./index.css";
 
 const MARKERS_STORAGE_KEY = "vetka_player_lab_markers_v1";
@@ -54,8 +56,42 @@ function loadAllMarkers(): BareMarker[] {
   }
 }
 
+function persistMarkers(next: BareMarker[]): void {
+  try {
+    localStorage.setItem(MARKERS_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // panel stays usable in-memory when storage is unavailable
+  }
+}
+
+// 0.20: нативный confirm очистки. Tauri — plugin-dialog, браузер (dev) —
+// window.confirm. Текст честный: откат есть через Undo.
+export async function confirmClearComments(count: number): Promise<boolean> {
+  const message = `Delete all ${count} comments? You can bring them back with Undo (Cmd+Z).`;
+  try {
+    if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+      const dialog = await import("@tauri-apps/plugin-dialog");
+      return await dialog.confirm(message, { title: "Clear comments", kind: "warning", okLabel: "Delete" });
+    }
+  } catch {
+    // fall through to window.confirm
+  }
+  try {
+    if (typeof window !== "undefined" && typeof window.confirm === "function") return window.confirm(message);
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
 function CommentsStandalone() {
   const [markers, setMarkers] = useState<BareMarker[]>(loadAllMarkers);
+  // 0.20: ref-зеркало + своя история (main-окно историю комментов не видит —
+  // правки идут мимо него через LS). Мутации считают "до" из ref, а не из
+  // setState-апдейтера: апдейтеры в StrictMode двоятся, ref — нет.
+  const markersRef = useRef(markers);
+  markersRef.current = markers;
+  const historyRef = useRef(createMarkerHistory<BareMarker>());
 
   // Main window persists markers to the same key — refresh when it writes.
   useEffect(() => {
@@ -82,28 +118,64 @@ function CommentsStandalone() {
   const selectedMarker = visibleMarkers.find((m) => m.marker_id === selectedId) ?? null;
 
   const handleUpdateText = useCallback((markerId: string, text: string) => {
-    setMarkers((prev) => {
-      const updated = prev.map((m) => (m.marker_id === markerId ? { ...m, text } : m));
-      try {
-        localStorage.setItem(MARKERS_STORAGE_KEY, JSON.stringify(updated));
-      } catch {
-        // panel stays usable in-memory when storage is unavailable
-      }
-      return updated;
-    });
+    const prev = markersRef.current;
+    historyRef.current = historyPush(historyRef.current, prev);
+    const updated = prev.map((m) => (m.marker_id === markerId ? { ...m, text } : m));
+    persistMarkers(updated);
+    setMarkers(updated);
   }, []);
 
   const handleDeleteMarker = useCallback((markerId: string) => {
-    setMarkers((prev) => {
-      const updated = prev.filter((m) => m.marker_id !== markerId);
-      try {
-        localStorage.setItem(MARKERS_STORAGE_KEY, JSON.stringify(updated));
-      } catch {
-        // panel stays usable in-memory when storage is unavailable
-      }
-      return updated;
-    });
+    const prev = markersRef.current;
+    historyRef.current = historyPush(historyRef.current, prev);
+    const updated = prev.filter((m) => m.marker_id !== markerId);
+    persistMarkers(updated);
+    setMarkers(updated);
   }, []);
+
+  const performUndo = useCallback(() => {
+    const undone = historyUndo(historyRef.current, markersRef.current);
+    if (!undone) return;
+    historyRef.current = undone.history;
+    persistMarkers(undone.snapshot);
+    setMarkers(undone.snapshot);
+  }, []);
+
+  const performRedo = useCallback(() => {
+    const redone = historyRedo(historyRef.current, markersRef.current);
+    if (!redone) return;
+    historyRef.current = redone.history;
+    persistMarkers(redone.snapshot);
+    setMarkers(redone.snapshot);
+  }, []);
+
+  // 0.20: ⌘Z / ⇧⌘Z в окне комментов. Typing-guard внутри resolvePlayerHotkey:
+  // в textarea остаётся нативный undo текста.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const action = resolvePlayerHotkey(event);
+      if (action !== "undo" && action !== "redo") return;
+      event.preventDefault();
+      if (action === "undo") performUndo();
+      else performRedo();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [performUndo, performRedo]);
+
+  // 0.20: Clear all — сносит комменты ТЕКУЩЕГО видео (visible scope), after
+  // нативного confirm. Сама очистка кладётся в undo-стек: ⌘Z возвращает.
+  const handleClearAll = useCallback(async () => {
+    const prev = markersRef.current;
+    const victims = prev.filter((m) => m.kind === "comment" && m.media_path === media);
+    if (!victims.length) return;
+    if (!(await confirmClearComments(victims.length))) return;
+    historyRef.current = historyPush(historyRef.current, prev);
+    const victimIds = new Set(victims.map((m) => m.marker_id));
+    const updated = prev.filter((m) => !victimIds.has(m.marker_id));
+    persistMarkers(updated);
+    setMarkers(updated);
+  }, [media]);
 
   if (!selectedMarker) {
     return (
@@ -120,6 +192,7 @@ function CommentsStandalone() {
       onClose={() => { if (typeof window !== "undefined") window.close(); }}
       onUpdateText={handleUpdateText}
       onDeleteMarker={handleDeleteMarker}
+      onClearAll={visibleMarkers.length > 0 ? () => { void handleClearAll(); } : undefined}
       fps={fps}
       standalone
     />

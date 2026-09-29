@@ -41,6 +41,17 @@ describe("resolvePlayerHotkey", () => {
     expect(resolvePlayerHotkey(key("ArrowLeft", { metaKey: true, ctrlKey: true }))).toBeNull();
   });
 
+  it("cmd/ctrl+Z = undo, +shift = redo (0.20)", () => {
+    expect(resolvePlayerHotkey(key("KeyZ", { metaKey: true }))).toBe("undo");
+    expect(resolvePlayerHotkey(key("KeyZ", { metaKey: true, shiftKey: true }))).toBe("redo");
+    expect(resolvePlayerHotkey(key("KeyZ", { ctrlKey: true }))).toBe("undo");
+    expect(resolvePlayerHotkey(key("KeyZ", { ctrlKey: true, shiftKey: true }))).toBe("redo");
+    expect(resolvePlayerHotkey(key("KeyZ"))).toBeNull();
+    expect(resolvePlayerHotkey(key("KeyZ", { metaKey: true, ctrlKey: true }))).toBeNull();
+    expect(resolvePlayerHotkey(key("KeyZ", { metaKey: true, altKey: true }))).toBeNull();
+    expect(resolvePlayerHotkey(key("KeyZ", { metaKey: true, repeat: true }))).toBeNull();
+  });
+
   it("resolveProportionalStep: duration/100 с клампами [0.5, 5]", () => {
     expect(resolveProportionalStep(3)).toBe(0.5);
     expect(resolveProportionalStep(60)).toBeCloseTo(0.6, 10);

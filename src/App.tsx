@@ -22,6 +22,7 @@ import { resolveExternalMarkers } from "./lib/markersSync";
 import type { CutPlayerMenuAction } from "./lib/cutPlayerMenu";
 import { useDragDrop } from "./lib/useDragDrop";
 import { ReverseShuttle, getShuttleDisplay, resolveJumpTarget, resolvePlayerHotkey, resolveProportionalStep, shuttleSlotClass } from "./lib/playerHotkeys";
+import { createMarkerHistory, historyPush, historyRedo, historyUndo } from "./lib/markerHistory";
 import {
   VOLUME_STEP,
   createFrameCalibrator,
@@ -871,6 +872,12 @@ function App() {
   // позицию берём из живого video.currentTime.
   const markersRef = useRef(markers);
   markersRef.current = markers;
+  // 0.20: undo/redo истории маркеров. Стек живёт в ref (не в state —
+  // перерендер на каждый push не нужен); "текущим" для future служит
+  // markersRef. Чужие записи из storage-событий стек не пушат: last-writer-wins.
+  const markerHistoryRef = useRef(createMarkerHistory<PlayerTimeMarker>());
+  const performUndoRef = useRef(() => {});
+  const performRedoRef = useRef(() => {});
   const currentMediaKeyRef = useRef(currentMediaKey);
   currentMediaKeyRef.current = currentMediaKey;
   // 0.10.29: зеркала fps для stale-замыканий (тот же паттерн, что выше).
@@ -1035,6 +1042,14 @@ function App() {
         case "addCommentMarker":
           event.preventDefault();
           addCommentAndOpenPanelRef.current();
+          break;
+        case "undo":
+          event.preventDefault();
+          performUndoRef.current();
+          break;
+        case "redo":
+          event.preventDefault();
+          performRedoRef.current();
           break;
         case "exitFullscreen": {
           event.preventDefault();
@@ -1289,6 +1304,8 @@ function App() {
 
   const menuHandlersRef = useRef({
     onOpen: () => { void handleOpenClick(); },
+    onUndo: () => {},
+    onRedo: () => {},
     onImportMarkersJson: () => {
       const input = document.createElement("input");
       input.type = "file";
@@ -1317,6 +1334,7 @@ function App() {
               }
             }
             if (added.length) {
+              pushMarkerHistory();
               setMarkers((prev) => [...prev, ...added]);
               setContextToast(`Markers imported: ${added.length}`);
             } else {
@@ -1362,6 +1380,37 @@ function App() {
     },
   });
   menuHandlersRef.current.onOpen = () => { void handleOpenClick(); };
+
+  // 0.20: undo/redo. Push — снимок "до" каждой ЛОКАЛЬНОЙ мутации маркеров
+  // (создание/удаление/старт перетаскивания/импорт). Перетаскивание пушит
+  // один раз на mousedown, а не на каждый mousemove. Persist-эффект пишет
+  // LS после setMarkers — окно комментов подхватывает откат само.
+  function pushMarkerHistory(): void {
+    markerHistoryRef.current = historyPush(markerHistoryRef.current, markersRef.current);
+  }
+  function performUndo(): void {
+    const undone = historyUndo(markerHistoryRef.current, markersRef.current);
+    if (!undone) { setContextToast("Nothing to undo."); return; }
+    markerHistoryRef.current = undone.history;
+    setMarkers(undone.snapshot);
+  }
+  function performRedo(): void {
+    const redone = historyRedo(markerHistoryRef.current, markersRef.current);
+    if (!redone) { setContextToast("Nothing to redo."); return; }
+    markerHistoryRef.current = redone.history;
+    setMarkers(redone.snapshot);
+  }
+  function deleteMarkerById(markerId: string): void {
+    pushMarkerHistory();
+    setMarkers((prev) => prev.filter((m) => m.marker_id !== markerId));
+    setContextToast("Marker deleted.");
+  }
+  function beginMarkerDrag(markerId: string): void {
+    pushMarkerHistory();
+    setDraggingMarkerId(markerId);
+  }
+  performUndoRef.current = performUndo;
+  performRedoRef.current = performRedo;
 
   // Bell №5: единый тракт экспорта — все пути (меню ×2, кнопки debug-панели)
   // идут через эти три функции, иначе копии разъезжаются.
@@ -1559,6 +1608,12 @@ function App() {
   menuHandlersRef.current.onExportReviewNotes = () => {
     void performExportReviewNotes();
   };
+  menuHandlersRef.current.onUndo = () => {
+    performUndoRef.current();
+  };
+  menuHandlersRef.current.onRedo = () => {
+    performRedoRef.current();
+  };
   menuHandlersRef.current.onImportSrt = () => {
     const input = document.createElement("input");
     input.type = "file";
@@ -1581,6 +1636,12 @@ function App() {
     switch (action) {
       case "open":
         void handleOpenMultiple();
+        break;
+      case "undo":
+        menuHandlersRef.current.onUndo();
+        break;
+      case "redo":
+        menuHandlersRef.current.onRedo();
         break;
       case "export_srt":
         menuHandlersRef.current.onExportSrt();
@@ -2186,6 +2247,7 @@ function App() {
   function addMomentMarker(kind: PlayerMarkerKind, text = "") {
     const marker = buildMarker(kind, text);
     if (!marker) return null;
+    pushMarkerHistory();
     setMarkers((prev) => [...prev, marker]);
     return marker;
   }
@@ -2607,11 +2669,10 @@ function App() {
                                       onMouseDown={(e) => {
                                         e.stopPropagation();
                                         e.preventDefault();
-                                        setDraggingMarkerId(marker.marker_id);
+                                        beginMarkerDrag(marker.marker_id);
                                       }}
                                       onDoubleClick={() => {
-                                        setMarkers((prev) => prev.filter((m) => m.marker_id !== marker.marker_id));
-                                        setContextToast("Marker deleted.");
+                                        deleteMarkerById(marker.marker_id);
                                       }}
                                     >
                                       {icon}
@@ -2636,15 +2697,14 @@ function App() {
                                     className={`transport-progress-inout-marker ${marker.kind === "in" ? "in" : "out"} ${draggingMarkerId === marker.marker_id ? "dragging" : ""}`}
                                     style={{ left: `${(marker.anchor_sec / Math.max(duration, 0.001)) * 100}%` }}
                                     title={marker.kind === "in" ? "In point" : "Out point"}
-                                    onMouseDown={(e) => {
-                                      e.stopPropagation();
-                                      e.preventDefault();
-                                      setDraggingMarkerId(marker.marker_id);
-                                    }}
-                                    onDoubleClick={() => {
-                                      setMarkers((prev) => prev.filter((m) => m.marker_id !== marker.marker_id));
-                                      setContextToast("Marker deleted.");
-                                    }}
+                                      onMouseDown={(e) => {
+                                        e.stopPropagation();
+                                        e.preventDefault();
+                                        beginMarkerDrag(marker.marker_id);
+                                      }}
+                                      onDoubleClick={() => {
+                                        deleteMarkerById(marker.marker_id);
+                                      }}
                                   >
                                     {marker.kind === "in" ? "[" : "]"}
                                   </span>

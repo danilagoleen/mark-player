@@ -54,7 +54,7 @@ describe("cutPlayerMenu", () => {
     const enabled = [
       "file_open", "file_export_srt", "file_export_json", "file_export_xml",
       "file_export_playlist_xml", "file_export_review_notes", "file_send_to_editor",
-      "file_import_srt", "pb_play_pause", "pb_loop", "audio_mute",
+      "file_import_srt", "edit_undo", "edit_redo", "pb_play_pause", "pb_loop", "audio_mute",
       "video_fullscreen", "sub_file", "view_playlist", "win_playlist",
       "win_comments", "help_about", "help_feedback", "help_github", "help_updates",
       "app_about",
@@ -63,6 +63,18 @@ describe("cutPlayerMenu", () => {
       expect(byId[id], `missing: ${id}`).toBeDefined();
       expect(byId[id].enabled ?? true, `working item disabled: ${id}`).toBe(true);
     }
+  });
+
+  it("Edit Undo/Redo are custom marker-history actions, not native (0.20)", () => {
+    const spec = buildCutPlayerMenuSpec();
+    const byId = Object.fromEntries(flattenItems(spec).map((i) => [i.id, i]));
+    expect(byId.edit_undo.action).toBe("undo");
+    expect(byId.edit_redo.action).toBe("redo");
+    expect(byId.edit_undo.kind).not.toBe("predefined");
+    expect(byId.edit_redo.kind).not.toBe("predefined");
+    // Без accelerator: ⌘Z ловит DOM-хендлер с typing-guard, иначе двойной откат.
+    expect(byId.edit_undo.accelerator).toBeUndefined();
+    expect(byId.edit_redo.accelerator).toBeUndefined();
   });
 
   it("Window menu has Media Info accelerator, Video has Fullscreen, File has Screenshot", () => {

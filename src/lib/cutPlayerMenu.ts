@@ -1,5 +1,7 @@
 export type CutPlayerMenuAction =
   | "open"
+  | "undo"
+  | "redo"
   | "open_folder"
   | "open_playlist_file"
   | "save_playlist_file"
@@ -141,8 +143,12 @@ export function buildCutPlayerMenuSpec(): CutPlayerMenuSectionSpec[] {
       id: "edit",
       label: "Edit",
       items: [
-        { id: "edit_undo", label: "Undo", kind: "predefined", predefined: "Undo" },
-        { id: "edit_redo", label: "Redo", kind: "predefined", predefined: "Redo" },
+        // 0.20: свои Undo/Redo поверх истории маркеров (нативные правили
+        // бы только текст в фокусе). Без accelerator: ⌘Z ловит DOM-хендлер
+        // с typing-guard (в инпутах остаётся нативный undo), иначе был бы
+        // двойной откат — меню-акселератор плюс keydown.
+        { id: "edit_undo", label: "Undo", action: "undo" },
+        { id: "edit_redo", label: "Redo", action: "redo" },
         { id: "edit_markers", label: "Markers", kind: "submenu", separatorBefore: true, items: [
           { id: "edit_mark_in", label: "Mark In", action: "mark_in" },
           { id: "edit_mark_out", label: "Mark Out", action: "mark_out" },

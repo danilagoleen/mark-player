@@ -20,6 +20,8 @@ export type PlayerHotkeyAction =
   | "addCommentMarker"
   | "toggleFullscreen"
   | "exitFullscreen"
+  | "undo"
+  | "redo"
   | "toggleDebug"
   | "cycleQuality";
 
@@ -63,6 +65,11 @@ export function resolvePlayerHotkey(e: KeyboardEvent): PlayerHotkeyAction | null
   }
   if (e.ctrlKey || e.altKey || e.metaKey) {
     if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.code === "KeyF") return "toggleFullscreen";
+    // 0.20: ⌘Z / Ctrl+Z — undo истории маркеров, с Shift — redo.
+    // Typing-guard выше уже отработал: в инпутах остаётся нативный undo.
+    // e.repeat глушится общим правилом (KeyZ не в REPEATABLE): зажатый ⌘Z
+    // откатывает один шаг, а не всю историю.
+    if ((e.metaKey !== e.ctrlKey) && !e.altKey && e.code === "KeyZ") return e.shiftKey ? "redo" : "undo";
     if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyI") return "toggleDebug";
     // 0.12: ⌘+←/→ — прыжки к соседним маркерам (стрелки от раскладки не зависят).
     if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.code === "ArrowLeft") return "jumpPrevMarker";

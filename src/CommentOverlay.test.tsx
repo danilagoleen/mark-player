@@ -52,3 +52,29 @@ describe("CommentOverlay (баг 2026-09-27: правится только вы�
     expect(onDeleteMarker).toHaveBeenCalledWith("m1");
   });
 });
+
+describe("CommentOverlay Clear all (0.20)", () => {
+  it("кнопка видна с onClearAll и зовёт его", () => {
+    const onClearAll = vi.fn();
+    const { container } = render(
+      <CommentOverlay
+        marker={MARKERS[0]}
+        markers={MARKERS}
+        onClose={() => {}}
+        onUpdateText={() => {}}
+        onDeleteMarker={() => {}}
+        onClearAll={onClearAll}
+        standalone
+      />,
+    );
+    const btns = buttonsByName(container, "Clear all");
+    expect(btns).toHaveLength(1);
+    fireEvent.click(btns[0]);
+    expect(onClearAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("кнопки нет без onClearAll", () => {
+    const { container } = renderTwoSelectedFirst();
+    expect(buttonsByName(container, "Clear all")).toHaveLength(0);
+  });
+});

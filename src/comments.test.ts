@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { filterCommentMarkers, selectCommentMarkerId, selectMediaFromSearch } from "./comments";
+import { describe, expect, it, vi } from "vitest";
+import { confirmClearComments, filterCommentMarkers, selectCommentMarkerId, selectMediaFromSearch } from "./comments";
 
 const MARKERS = [
   { marker_id: "m1", kind: "comment", start_sec: 1, media_path: "a.mp4" },
@@ -57,5 +57,27 @@ describe("filterCommentMarkers (0.10.16c list scope)", () => {
     expect(selectMediaFromSearch("?media=a.mp4&marker=m1")).toBe("a.mp4");
     expect(selectMediaFromSearch("?marker=m1")).toBeNull();
     expect(selectMediaFromSearch("")).toBeNull();
+  });
+});
+
+describe("confirmClearComments (0.20)", () => {
+  it("в браузере спрашивает window.confirm с числом и возвращает его ответ", async () => {
+    const spy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      await expect(confirmClearComments(3)).resolves.toBe(true);
+      expect(spy).toHaveBeenCalledOnce();
+      expect(String(spy.mock.calls[0][0])).toContain("3");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("отмена возвращает false", async () => {
+    const spy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    try {
+      await expect(confirmClearComments(2)).resolves.toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
