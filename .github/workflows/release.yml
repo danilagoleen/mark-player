@@ -60,10 +60,16 @@ jobs:
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
       # Guard: a bundle whose signature does not seal its resources ships as
-      # "damaged". Fails the job (red release) instead of failing on users' Macs.
+      # "damaged". Checks the .app inside the built .dmg — exactly what users
+      # download (with --bundles dmg the bundle/macos dir is not kept).
+      # Fails the job (red release) instead of failing on users' Macs.
       - name: Verify macOS bundle signature
         if: runner.os == 'macOS'
         run: |
-          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Mark Player.app"
-          codesign --verify --deep --strict --verbose=2 "$APP"
-          codesign -dv "$APP" 2>&1 | grep -E "Identifier=|Sealed Resources"
+          DMG=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -1)
+          echo "dmg: $DMG"
+          MNT=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$DMG"
+          trap 'hdiutil detach -quiet "$MNT"' EXIT
+          codesign --verify --deep --strict --verbose=2 "$MNT/Mark Player.app"
+          codesign -dv "$MNT/Mark Player.app" 2>&1 | grep -E "Identifier=|Sealed Resources"
