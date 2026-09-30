@@ -1,12 +1,12 @@
-# Mark Player 0.24.1 beta, by VETKA lab
+# Mark Player 0.24.2 beta, by VETKA lab
 
 <img src="docs/screenshots/icon-128.png" width="128" alt="Mark Player icon">
 
 Marker-first video review: open a file, mark the moments, land them in Premiere — frame-accurately.
 
-[⬇ Download for macOS (Apple Silicon)](https://github.com/danilagoleen/mark-player/releases/download/v0.24.1/Mark.Player_0.24.1_aarch64.dmg) ·
-[Intel Mac](https://github.com/danilagoleen/mark-player/releases/download/v0.24.1/Mark.Player_0.24.1_x64.dmg) ·
-[Windows](https://github.com/danilagoleen/mark-player/releases/download/v0.24.1/Mark.Player_0.24.1_x64-setup.exe)
+[⬇ Download for macOS (Apple Silicon)](https://github.com/danilagoleen/mark-player/releases/download/v0.24.2/Mark.Player_0.24.2_aarch64.dmg) ·
+[Intel Mac](https://github.com/danilagoleen/mark-player/releases/download/v0.24.2/Mark.Player_0.24.2_x64.dmg) ·
+[Windows](https://github.com/danilagoleen/mark-player/releases/download/v0.24.2/Mark.Player_0.24.2_x64-setup.exe)
 
 ## Screenshots
 
@@ -56,32 +56,38 @@ Marilyn marked the frames she didn't like. Now any producer marks right in the p
 Grab the latest beta from
 **[Releases](https://github.com/danilagoleen/mark-player/releases)**:
 
-- **macOS Apple Silicon** — `Mark.Player_0.24.1_aarch64.dmg`
-- **macOS Intel** — `Mark.Player_0.24.1_x64.dmg`
-- **Windows 10/11** — `Mark.Player_0.24.1_x64-setup.exe` (installer) or `Mark.Player_0.24.1_x64_en-US.msi`
+- **macOS Apple Silicon** — `Mark.Player_0.24.2_aarch64.dmg`
+- **macOS Intel** — `Mark.Player_0.24.2_x64.dmg`
+- **Windows 10/11** — `Mark.Player_0.24.2_x64-setup.exe` (installer) or `Mark.Player_0.24.2_x64_en-US.msi`
 
 ## Installation (macOS)
 
 Download the `.dmg`, drag **Mark Player** to Applications, then open it.
 
-> **Mark Player is not notarized yet**, so macOS blocks the first launch
-> ("…is damaged and can't be opened"). Current macOS has no "Anywhere"
-> switch — unblock it through Settings instead:
+> **Mark Player is not notarized by Apple yet**, so the first launch is
+> blocked with "Apple could not verify Mark Player is free of malware".
+> Unblock it once:
 >
-> 1. Try to open the app (double-click) — macOS shows the blocking dialog.
+> 1. Double-click the app — macOS shows the dialog, press **Done**.
 > 2. Open **System Settings → Privacy & Security**, scroll to Security —
 >    there is an **Open Anyway** button for Mark Player.
-> 3. Click **Open Anyway** and confirm in the dialog. It asks only once.
+> 3. Click **Open Anyway** and confirm. It asks only once.
 >
-> If the Settings button is not there, remove the quarantine flag once
-> via Terminal:
+> Or do it in Terminal:
 >
 > ```bash
 > xattr -cr "/Applications/Mark Player.app"
 > ```
 >
-> Safari sometimes quarantines downloads more aggressively — the same command
-> fixes it. Many open-source video tools ship this way (IINA, mpv).
+> **Downloaded 0.24.1 or older and macOS says "…is damaged"?** Those builds
+> shipped without a bundle signature (fixed in 0.24.2). Download the new
+> version, or repair the installed one:
+>
+> ```bash
+> codesign --force --deep --sign - "/Applications/Mark Player.app" && xattr -cr "/Applications/Mark Player.app"
+> ```
+>
+> Many open-source video tools ship without notarization the same way (IINA, mpv).
 
 ## Installation (Windows)
 
