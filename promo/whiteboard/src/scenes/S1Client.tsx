@@ -1,6 +1,7 @@
 import React from "react";
 import { scene } from "../timing";
-import { Draw, DrawSeq, G, Hand, INK, Wipe, layoutText, useT } from "../lib/draw";
+import { Draw, DrawSeq, FONT, G, Hand, INK, Wipe, layoutText, useT } from "../lib/draw";
+import { Pop } from "../lib/parts";
 import { SceneFrame, useLayout } from "../lib/layout";
 import { ellipse, line, poly, rect, roundRect, smooth, type P } from "../lib/rough";
 
@@ -104,13 +105,47 @@ const Client: React.FC<{ cx: number; cy: number; at: number }> = ({ cx, cy, at }
     [cx + 112, cy + 140],
     [cx + 128, cy + 222],
   ]);
+  const eyes: P[] = [
+    [cx - 22, cy - 6],
+    [cx + 20, cy - 8],
+  ];
+  const look: P = [-4, -4]; // glancing up at the bubbles
   return (
     <>
       <Draw d={ellipse(cx, cy, r, r * 1.08, "head", { start: -2.6 })} at={at} dur={0.32} w={6} />
       <Draw d={shoulders} at={at + 0.34} dur={0.28} w={6} />
+      <Wipe at={at + 0.5} dur={0.14} x={cx - 44} y={cy - 40} w={88} h={84} rows={2}>
+        <g stroke={INK} strokeWidth={4} fill="none" strokeLinecap="round">
+          {eyes.map(([ex, ey], i) => (
+            <React.Fragment key={i}>
+              <path d={ellipse(ex, ey, 11, 12, "eye" + i, { over: 0.2 })} />
+              <circle cx={ex + look[0]} cy={ey + look[1]} r={4.5} fill={INK} stroke="none" />
+            </React.Fragment>
+          ))}
+          <path d={line([cx - 34, cy - 30], [cx - 12, cy - 26], "brow1", 0.6)} />
+          <path d={line([cx + 10, cy - 34], [cx + 32, cy - 26], "brow2", 0.6)} />
+          <path d={smooth([[cx - 14, cy + 34], [cx - 6, cy + 30], [cx + 2, cy + 35], [cx + 10, cy + 31], [cx + 16, cy + 34]])} />
+        </g>
+      </Wipe>
     </>
   );
 };
+
+/** Puzzled "?" marks over the client's head, popping in one after another. */
+const Puzzled: React.FC<{ cx: number; cy: number; at: number }> = ({ cx, cy, at }) => (
+  <>
+    <Pop at={at} x={cx + 92} y={cy - 64}>
+      <text textAnchor="middle" fontFamily={FONT} fontWeight={700} fontSize={74} fill={INK} transform="rotate(12)">
+        ?
+      </text>
+    </Pop>
+    <Pop at={at + 0.22} x={cx + 138} y={cy - 104}>
+      <text textAnchor="middle" fontFamily={FONT} fontWeight={700} fontSize={54} fill={INK} transform="rotate(-8)">
+        ?
+      </text>
+    </Pop>
+  </>
+);
 
 export const S1Client: React.FC = () => {
   const L = useLayout();
@@ -161,6 +196,7 @@ export const S1Client: React.FC = () => {
   return (
     <SceneFrame def={def} captionAt={CAPTION}>
       <Client cx={C.head[0]} cy={C.head[1]} at={T_CLIENT} />
+      <Puzzled cx={C.head[0]} cy={C.head[1]} at={T_CLOCK + 0.3} />
       {BUBBLE_TEXT.map((text, i) => (
         <Bubble
           key={i}

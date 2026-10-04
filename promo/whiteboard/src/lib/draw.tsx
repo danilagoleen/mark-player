@@ -7,6 +7,8 @@ import { arrowHead, line, starFill, type P } from "./rough";
 export const INK = "#141414";
 export const PAPER = "#f7f5f0";
 export const FONT = "Caveat";
+/** Upright hand lettering for everything that is app UI (labels, menus, timecodes). */
+export const UI_FONT = "Patrick Hand";
 
 /* ------------------------------------------------------------------ time */
 
@@ -219,11 +221,11 @@ export const Wipe: React.FC<{
 /* ------------------------------------------------------------------- text */
 
 let canvas: HTMLCanvasElement | null = null;
-export const measure = (text: string, size: number, weight = 400) => {
+export const measure = (text: string, size: number, weight = 400, font = FONT) => {
   if (typeof document === "undefined") return text.length * size * 0.42;
   canvas = canvas ?? document.createElement("canvas");
   const ctx = canvas.getContext("2d")!;
-  ctx.font = `${weight} ${size}px ${FONT}`;
+  ctx.font = `${weight} ${size}px "${font}"`;
   return ctx.measureText(text).width;
 };
 
@@ -231,13 +233,13 @@ export const measure = (text: string, size: number, weight = 400) => {
 const GLYPHS: Record<string, number> = { "★": 0.62, "✗": 0.5, "→": 0.8 };
 type Tok = { s: string; glyph: boolean; x: number; w: number };
 
-export const layoutText = (text: string, size: number, weight = 400) => {
+export const layoutText = (text: string, size: number, weight = 400, font = FONT) => {
   const toks: Tok[] = [];
   let x = 0;
   for (const part of text.split(/([★✗→])/)) {
     if (!part) continue;
     const glyph = part in GLYPHS;
-    const w = glyph ? GLYPHS[part] * size : measure(part, size, weight);
+    const w = glyph ? GLYPHS[part] * size : measure(part, size, weight, font);
     toks.push({ s: part, glyph, x, w });
     x += w;
   }
@@ -284,11 +286,12 @@ export const Hand: React.FC<{
   anchor?: "start" | "middle" | "end";
   pen?: boolean;
   o?: number;
-}> = ({ x, y, text, size = 48, weight = 500, at, dur, anchor = "start", pen = true, o = 1 }) => {
+  font?: string;
+}> = ({ x, y, text, size = 48, weight = 500, at, dur, anchor = "start", pen = true, o = 1, font = FONT }) => {
   const t = useT();
   const id = useId().replace(/[^a-zA-Z0-9]/g, "");
   const register = usePenRegister();
-  const { toks, width } = layoutText(text, size, weight);
+  const { toks, width } = layoutText(text, size, weight, font);
   const x0 = anchor === "start" ? x : anchor === "middle" ? x - width / 2 : x - width;
   const D = dur ?? Math.max(0.2, text.length * 0.04);
   if (pen)
@@ -305,7 +308,7 @@ export const Hand: React.FC<{
             key={i}
             x={x0 + tk.x}
             y={y}
-            fontFamily={FONT}
+            fontFamily={font}
             fontSize={size}
             fontWeight={weight}
             fill={INK}
@@ -332,18 +335,64 @@ export const Hand: React.FC<{
 
 /* ------------------------------------------------------------------ board */
 
-const PenSprite: React.FC<{ x: number; y: number; o: number; scale: number }> = ({ x, y, o, scale }) => (
-  <g transform={`translate(${x} ${y}) scale(${scale}) rotate(52)`} opacity={o}>
-    <g transform="translate(10 16)" opacity={0.14} filter="url(#penShadow)">
-      <path d="M0 0 L22 -9 L270 -22 L280 0 L270 22 L22 9 Z" fill="#000" />
+const PEN_ANGLE = 32; // degrees below horizontal, body to the lower right
+
+/** A chunky felt marker: black/white bands, shaded like a cylinder, soft shadow converging at the nib. */
+const PenSprite: React.FC<{ x: number; y: number; o: number; scale: number; lift?: number }> = ({ x, y, o, scale, lift = 0 }) => {
+  const a = (PEN_ANGLE * Math.PI) / 180;
+  const L = 300 * scale;
+  const dx = Math.cos(a);
+  const dy = Math.sin(a);
+  // shadow: touches at the nib, falls further away along the body
+  const sOff = (k: number) => [x + dx * L * k + (6 + 34 * k + lift) * scale, y + dy * L * k + (10 + 46 * k + lift) * scale];
+  const nx = -dy * 20 * scale;
+  const ny = dx * 20 * scale;
+  const [e0x, e0y] = sOff(0);
+  const [e1x, e1y] = sOff(1);
+  const shadow = `M ${e0x} ${e0y} L ${e1x + nx} ${e1y + ny} L ${e1x - nx} ${e1y - ny} Z`;
+  const R = 22;
+  const seg = (x0: number, x1: number, dark: boolean) => (
+    <rect key={x0} x={x0} y={-R} width={x1 - x0} height={R * 2} fill={dark ? "url(#penDark)" : "url(#penLight)"} />
+  );
+  return (
+    <g opacity={o}>
+      <path d={shadow} fill="#000" opacity={0.2} filter="url(#penShadow)" />
+      <g transform={`translate(${x} ${y - lift * scale}) scale(${scale}) rotate(${PEN_ANGLE})`}>
+        <path d="M -1 0 L 17 -7 L 17 7 Z" fill="#161616" stroke="#161616" strokeWidth={3} strokeLinejoin="round" />
+        <path d="M 16 -9 L 36 -16 L 36 16 L 16 9 Z" fill="url(#penDark)" />
+        <g clipPath="url(#penBody)">
+          {seg(34, 86, true)}
+          {seg(86, 156, false)}
+          {seg(156, 214, true)}
+          {seg(214, 262, false)}
+          {seg(262, 306, true)}
+          <rect x={34} y={-15} width={272} height={5} fill="#fff" opacity={0.28} />
+        </g>
+        <rect x={34} y={-R} width={272} height={R * 2} rx={12} fill="none" stroke="#0c0c0c" strokeWidth={1.5} />
+      </g>
     </g>
-    <path d="M0 0 L20 -8 L20 8 Z" fill={INK} stroke={INK} strokeWidth={2} strokeLinejoin="round" />
-    <rect x={19} y={-14} width={26} height={28} rx={3} fill="#2a2a2a" stroke={INK} strokeWidth={3} />
-    <rect x={44} y={-21} width={214} height={42} rx={10} fill="#fcfbf8" stroke={INK} strokeWidth={3.5} />
-    <line x1={112} y1={-21} x2={112} y2={21} stroke={INK} strokeWidth={2.5} />
-    <line x1={196} y1={-21} x2={196} y2={21} stroke={INK} strokeWidth={2.5} />
-    <rect x={252} y={-19} width={26} height={38} rx={8} fill={INK} />
-  </g>
+  );
+};
+
+const PenDefs: React.FC = () => (
+  <>
+    <linearGradient id="penDark" x1="0" y1="-22" x2="0" y2="22" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stopColor="#4a4a4a" />
+      <stop offset="0.3" stopColor="#1e1e1e" />
+      <stop offset="1" stopColor="#050505" />
+    </linearGradient>
+    <linearGradient id="penLight" x1="0" y1="-22" x2="0" y2="22" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stopColor="#ffffff" />
+      <stop offset="0.45" stopColor="#f1f1ef" />
+      <stop offset="1" stopColor="#b9b9b6" />
+    </linearGradient>
+    <clipPath id="penBody">
+      <rect x={34} y={-22} width={272} height={44} rx={12} />
+    </clipPath>
+    <filter id="penShadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation={9} />
+    </filter>
+  </>
 );
 
 const Pen: React.FC<{ col: Collector; scale: number }> = ({ col, scale }) => {
@@ -372,20 +421,25 @@ const Pen: React.FC<{ col: Collector; scale: number }> = ({ col, scale }) => {
     const u = easeInOut((t - prev.end) / (next.start - prev.end));
     const a = prev.at(1);
     const b = next.at(0);
-    return <PenSprite x={lerp(a[0], b[0], u)} y={lerp(a[1], b[1], u) - Math.sin(u * Math.PI) * 14} o={1} scale={scale} />;
+    return <PenSprite x={lerp(a[0], b[0], u)} y={lerp(a[1], b[1], u)} lift={Math.sin(u * Math.PI) * 16} o={1} scale={scale} />;
   }
   if (prev && t - prev.end < LIFT) {
     const u = easeIn((t - prev.end) / LIFT);
     const [x, y] = prev.at(1);
-    return <PenSprite x={x + 140 * u} y={y + 220 * u} o={1 - u} scale={scale} />;
+    return <PenSprite x={x + 160 * u} y={y + 200 * u} lift={30 * u} o={1 - u} scale={scale} />;
   }
   if (next && next.start - t < LIFT) {
     const u = easeOut(1 - (next.start - t) / LIFT);
     const [x, y] = next.at(0);
-    return <PenSprite x={x + 140 * (1 - u)} y={y + 220 * (1 - u)} o={u} scale={scale} />;
+    return <PenSprite x={x + 160 * (1 - u)} y={y + 200 * (1 - u)} lift={30 * (1 - u)} o={u} scale={scale} />;
   }
   return null;
 };
+
+/** Boil: the ink trembles like hand-drawn animation shot "on threes". */
+const BOIL_FRAMES = 3;
+const WOBBLE = 7; // px, low-frequency warp of every line
+const TREMBLE = 1.8; // px, fine tremor along the stroke
 
 export const Board: React.FC<{ W: number; H: number; penScale?: number; fade?: number; children: React.ReactNode }> = ({
   W,
@@ -395,6 +449,7 @@ export const Board: React.FC<{ W: number; H: number; penScale?: number; fade?: n
   children,
 }) => {
   const col: Collector = { entries: [] };
+  const boil = Math.floor(useCurrentFrame() / BOIL_FRAMES) % 64;
   return (
     <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ display: "block", background: PAPER }}>
       <defs>
@@ -406,16 +461,26 @@ export const Board: React.FC<{ W: number; H: number; penScale?: number; fade?: n
           <feTurbulence type="fractalNoise" baseFrequency="0.0035" numOctaves={3} seed={3} />
           <feColorMatrix type="matrix" values="0 0 0 0 0.35  0 0 0 0 0.3  0 0 0 0 0.22  0 0 0 0.9 -0.35" />
         </filter>
-        <filter id="penShadow" x="-20%" y="-50%" width="140%" height="200%">
-          <feGaussianBlur stdDeviation={6} />
+        {/* hand: wobble + tremor (boiling) and dry-marker grit fixed to the paper */}
+        <filter id="hand" filterUnits="userSpaceOnUse" x={-40} y={-40} width={W + 80} height={H + 80}>
+          <feTurbulence type="fractalNoise" baseFrequency="0.016" numOctaves={2} seed={boil} result="warp" />
+          <feDisplacementMap in="SourceGraphic" in2="warp" scale={WOBBLE} xChannelSelector="R" yChannelSelector="G" result="w1" />
+          <feTurbulence type="fractalNoise" baseFrequency="0.28" numOctaves={1} seed={boil + 101} result="fine" />
+          <feDisplacementMap in="w1" in2="fine" scale={TREMBLE} xChannelSelector="R" yChannelSelector="G" result="w2" />
+          <feTurbulence type="fractalNoise" baseFrequency="1.1" numOctaves={1} seed={11} result="grit" />
+          <feColorMatrix in="grit" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -0.9 1.45" result="gritA" />
+          <feComposite in="w2" in2="gritA" operator="in" />
         </filter>
+        <PenDefs />
       </defs>
       <rect width={W} height={H} fill={PAPER} />
       <rect width={W} height={H} filter="url(#blotch)" opacity={0.07} />
       <rect width={W} height={H} filter="url(#grain)" opacity={0.22} />
-      <PenCtx.Provider value={col}>
-        <MatrixCtx.Provider value={I}>{children}</MatrixCtx.Provider>
-      </PenCtx.Provider>
+      <g filter="url(#hand)">
+        <PenCtx.Provider value={col}>
+          <MatrixCtx.Provider value={I}>{children}</MatrixCtx.Provider>
+        </PenCtx.Provider>
+      </g>
       <Pen col={col} scale={penScale} />
       {fade > 0 && <rect width={W} height={H} fill={PAPER} opacity={fade} />}
     </svg>

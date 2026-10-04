@@ -86,34 +86,30 @@ export const smooth = (pts: P[], closed = false) => {
   return d;
 };
 
-/** Rounded rectangle, drawn as one smooth closed loop with a small overshoot. */
+/** Rounded rectangle in one stroke: bowed straight edges, real corner curves, a small overshoot. */
 export const roundRect = (x: number, y: number, w: number, h: number, rad: number, seed: string, amp = 1.4) => {
   const r = rng(seed);
-  const pts: P[] = [];
-  const corners: [number, number, number][] = [
-    [x + w - rad, y + rad, -90],
-    [x + w - rad, y + h - rad, 0],
-    [x + rad, y + h - rad, 90],
-    [x + rad, y + rad, 180],
-  ];
   const j = () => (r() * 2 - 1) * amp;
-  // Start mid-top-left so the overshoot lands on a straight edge.
-  pts.push([x + rad + Math.min(w * 0.1, 40), y + j()]);
-  for (const [cx, cy, a0] of corners) {
-    const edgeStart = pts[pts.length - 1];
-    for (let k = 0; k <= 3; k++) {
-      const a = ((a0 + k * 30) * Math.PI) / 180;
-      const p: P = [cx + Math.cos(a) * rad + j() * 0.5, cy + Math.sin(a) * rad + j() * 0.5];
-      if (k === 0) {
-        // midpoint of the straight edge, bowed a touch
-        pts.push([(edgeStart[0] + p[0]) / 2 + j(), (edgeStart[1] + p[1]) / 2 + j()]);
-      }
-      pts.push(p);
-    }
+  const rr = Math.min(rad, w / 2, h / 2);
+  const start: P = [x + rr + Math.min(w * 0.1, 40), y + j() * 0.5];
+  const pts: { edgeTo: P; ctrl: P; end: P }[] = [
+    { edgeTo: [x + w - rr, y], ctrl: [x + w, y], end: [x + w, y + rr] },
+    { edgeTo: [x + w, y + h - rr], ctrl: [x + w, y + h], end: [x + w - rr, y + h] },
+    { edgeTo: [x + rr, y + h], ctrl: [x, y + h], end: [x, y + h - rr] },
+    { edgeTo: [x, y + rr], ctrl: [x, y], end: [x + rr, y] },
+  ];
+  let d = `M ${n(start[0])} ${n(start[1])}`;
+  let cur = start;
+  for (const c of pts) {
+    const e: P = [c.edgeTo[0] + j() * 0.5, c.edgeTo[1] + j() * 0.5];
+    d += " " + segment(cur, e, r, amp);
+    const end: P = [c.end[0] + j() * 0.5, c.end[1] + j() * 0.5];
+    d += ` Q ${n(c.ctrl[0] + j() * 0.4)} ${n(c.ctrl[1] + j() * 0.4)} ${n(end[0])} ${n(end[1])}`;
+    cur = end;
   }
-  pts.push([x + rad + Math.min(w * 0.1, 40) + 10, y + j()]);
-  pts.push([x + rad + Math.min(w * 0.1, 40) + 26, y + 1.5 + j()]);
-  return smooth(pts);
+  const over: P = [start[0] + Math.min(18, w * 0.06), start[1] + amp * 0.9];
+  d += " " + segment(cur, over, r, amp);
+  return d;
 };
 
 /** Ellipse drawn in one stroke, starting at `start` radians, overshooting a little. */

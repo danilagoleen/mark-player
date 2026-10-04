@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Audio, Sequence, continueRender, delayRender, staticFile } from "remotion";
 import { FPS, SCENES, fr, DURATION_SEC } from "./timing";
-import { Board, FONT, prog, useT } from "./lib/draw";
+import { Board, FONT, UI_FONT, prog, useT } from "./lib/draw";
 import { LAYOUTS, LayoutProvider, type Kind } from "./lib/layout";
 import { S1Client } from "./scenes/S1Client";
 import { S2Mark } from "./scenes/S2Mark";
@@ -21,6 +21,7 @@ const useFont = () => {
     const faces = [
       new FontFace(FONT, `url(${staticFile("fonts/Caveat-Regular.ttf")})`, { weight: "400 600" }),
       new FontFace(FONT, `url(${staticFile("fonts/Caveat-Bold.ttf")})`, { weight: "700" }),
+      new FontFace(UI_FONT, `url(${staticFile("fonts/PatrickHand-Regular.ttf")})`, { weight: "400 700" }),
     ];
     Promise.all(faces.map((f) => f.load()))
       .then((loaded) => {
