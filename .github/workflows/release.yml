@@ -64,6 +64,10 @@ jobs:
           releaseBody: "Marker-first video review — playlist to Premiere XML timeline, SRT, JSON sidecar. Beta without Apple notarization: on first launch macOS says it cannot verify the app — open System Settings → Privacy & Security → Open Anyway. Windows: More info → Run anyway."
           releaseDraft: false
           prerelease: true
+          # tb_1791126220_70644_1: latest.json + .sig заливает сам экшен
+          # (includeUpdaterJson, свой updater-json job удалён — у экшена нет
+          # checkout и он дублировал бы мерж). Windows едет через nsis.zip.
+          updaterJsonPreferNsis: true
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
       # Guard: a bundle whose signature does not seal its resources ships as
@@ -80,54 +84,3 @@ jobs:
           trap 'hdiutil detach -quiet "$MNT"' EXIT
           codesign --verify --deep --strict --verbose=2 "$MNT/Mark Player.app"
           codesign -dv "$MNT/Mark Player.app" 2>&1 | grep -E "Identifier=|Sealed Resources"
-
-  # tb_1790710861_12931_16: latest.json для апдейтера — один раз после всех
-  # платформ (нужны .sig всех трёх). ВАЖНО: /latest/download отдаёт только
-  # НЕ-пререлизные релизы — пока релизы помечены prerelease, endpoint
-  # отвечает 404 и приложение молча остаётся на текущей версии (сеть в
-  # тихой проверке не показывается). Апдейтер оживает на первом полном
-  # релизе; prerelease-флаг меняет Commander, не этот workflow.
-  updater-json:
-    needs: [build]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Craft and upload latest.json
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          rm -rf ./sigs latest.json && mkdir -p ./sigs
-          gh release download "$TAG" --pattern '*.sig' --dir ./sigs
-          node -e '
-            const fs = require("node:fs");
-            const path = require("node:path");
-            const tag = process.env.TAG;
-            const repo = "danilagoleen/mark-player";
-            const files = fs.readdirSync("./sigs").filter((f) => f.endsWith(".sig")).sort();
-            const platforms = {};
-            for (const sigFile of files) {
-              const bundle = sigFile.slice(0, -".sig".length);
-              if (bundle.endsWith(".msi.zip")) continue; // windows едет через nsis.zip
-              let platform = null;
-              if (bundle.endsWith(".app.tar.gz")) {
-                platform = bundle.includes("aarch64") ? "darwin-aarch64"
-                  : bundle.includes("x86_64") || bundle.includes("x64") ? "darwin-x86_64" : null;
-              } else if (bundle.endsWith(".nsis.zip")) {
-                platform = "windows-x86_64";
-              }
-              if (!platform) continue;
-              platforms[platform] = {
-                signature: fs.readFileSync(path.join("./sigs", sigFile), "utf8").trim(),
-                url: `https://github.com/${repo}/releases/download/${tag}/${bundle}`,
-              };
-            }
-            if (!Object.keys(platforms).length) { console.error("no updater bundles found"); process.exit(1); }
-            fs.writeFileSync("latest.json", JSON.stringify({
-              version: tag,
-              notes: `Mark Player ${tag}`,
-              pub_date: new Date().toISOString(),
-              platforms,
-            }, null, 2) + "\n");
-          '
-          cat latest.json
-          gh release upload "$TAG" latest.json --clobber

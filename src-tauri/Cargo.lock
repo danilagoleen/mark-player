@@ -4520,7 +4520,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vetka_player_lab"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "objc2",
  "objc2-app-kit",
