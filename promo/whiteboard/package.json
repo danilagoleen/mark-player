@@ -1,0 +1,25 @@
+{
+  "name": "mark-player-whiteboard-promo",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Mark Player — whiteboard promo (Remotion)",
+  "scripts": {
+    "studio": "remotion studio",
+    "render": "remotion render Whiteboard16x9 out/whiteboard-16x9.mp4 && remotion render Whiteboard9x16 out/whiteboard-9x16.mp4",
+    "carousel": "node scripts/carousel.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/bundler": "4.0.532",
+    "@remotion/cli": "4.0.532",
+    "@remotion/paths": "4.0.532",
+    "@remotion/renderer": "4.0.532",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "remotion": "4.0.532"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "typescript": "5.9.3"
+  }
+}

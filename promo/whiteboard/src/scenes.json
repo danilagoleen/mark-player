@@ -1,0 +1,175 @@
+{
+  "title": "Mark Player — notes pinned to the frame, then a ready rough cut (whiteboard)",
+  "fps": 50,
+  "duration_sec": 60.0,
+  "formats": [
+    {
+      "id": "Whiteboard16x9",
+      "width": 1920,
+      "height": 1080
+    },
+    {
+      "id": "Whiteboard9x16",
+      "width": 1080,
+      "height": 1920
+    }
+  ],
+  "carousel": {
+    "width": 1080,
+    "height": 1350,
+    "rule": "one PNG per scene = the last fully drawn frame of that scene, caption included"
+  },
+  "beat_grid": {
+    "bpm": 90,
+    "beat_sec": 0.6667,
+    "formula": "G(k) = 6.04 + k * 0.6667",
+    "sections": [
+      {
+        "from": 0.0,
+        "to": 6.04,
+        "music": "ambient intro, no drums — slow drawing"
+      },
+      {
+        "from": 6.04,
+        "to": 16.71,
+        "music": "groove enters on 6.04"
+      },
+      {
+        "from": 16.71,
+        "to": 27.37,
+        "music": "lift"
+      },
+      {
+        "from": 27.37,
+        "to": 38.04,
+        "music": "full — the killer feature starts here"
+      },
+      {
+        "from": 38.04,
+        "to": 48.71,
+        "music": "full continues"
+      },
+      {
+        "from": 48.71,
+        "to": 60.0,
+        "music": "breakdown — lighter; fade out over the last 1.0 s"
+      }
+    ]
+  },
+  "scenes": [
+    {
+      "id": "S1_client",
+      "from": 0.0,
+      "to": 6.04,
+      "draw": "A pile of video files (film-strip rectangles) grows. Two speech bubbles from a client: \"fix it around minute two…\" and \"…where the drummer kicks in.\" A clock spins. No numbers anywhere.",
+      "caption": "Client notes. No timecodes.",
+      "vo": "Client notes without timecodes. Hours of footage to search."
+    },
+    {
+      "id": "S2_mark",
+      "from": 6.04,
+      "to": 16.71,
+      "draw": "A simple player is drawn: frame, scrub bar, play triangle. Keycap M on the beat: a speech-note pin drops onto the bar with a timecode tag \"00:01:59:10\" and handwritten text \"tighten here — on the snare\". Then keycap F: a filled ★ flies onto the bar; keycap N: a ✗ flies onto the bar.",
+      "beats": {
+        "key_M": "G(2) = 7.37",
+        "key_F": "G(12) = 14.04",
+        "key_N": "G(14) = 15.37"
+      },
+      "captions": [
+        {
+          "at": 6.14,
+          "text": "Mark the moment."
+        },
+        {
+          "at": 11.37,
+          "text": "Press M. Say what you mean."
+        }
+      ],
+      "vo": "In Mark Player, press M and say what you mean — the note is pinned to the frame. F for the best, N for the misses."
+    },
+    {
+      "id": "S3_editor",
+      "from": 16.71,
+      "to": 22.04,
+      "draw": "An arrow labeled \".xml\" leads from the player to a long timeline track labeled \"Premiere Pro\". The pin, ★ and ✗ drop onto the track at exactly the same positions, each with a short tick to its frame.",
+      "caption": "Export XML. Every note on its exact frame.",
+      "vo": "Export XML — every note lands in Premiere on its exact frame."
+    },
+    {
+      "id": "S4_agent",
+      "from": 22.04,
+      "to": 27.37,
+      "draw": "The same notes become a sheet of paper titled \"review.txt\" with lines like \"00:01:59:10 — · Comment: tighten here — on the snare\", \"00:02:05:44 — ★ Favorite\", \"00:02:08:27 — ✗ Negative\"; beside it a small grid of frame thumbnails (drawn rectangles). An arrow goes into a simple agent drawn as a terminal box with a blinking cursor.",
+      "caption": "Plain text for your agent.",
+      "vo": "Or save plain text, with frames — any AI agent reads it."
+    },
+    {
+      "id": "S5_in_out",
+      "from": 27.37,
+      "to": 38.04,
+      "draw": "Back to the player, one video. Keycap I on the beat: a [ bracket snaps onto the bar; keycap O: a ] snaps; the part between is hatched. Then on G(40) the player turns into a playlist: 4 files as rows, each row gets hatched [ ] segments, one per beat.",
+      "beats": {
+        "key_I": "G(34) = 28.71",
+        "key_O": "G(36) = 30.04",
+        "playlist": "G(40) = 32.71"
+      },
+      "captions": [
+        {
+          "at": 28.04,
+          "text": "Press I. Press O. Keep the good part."
+        },
+        {
+          "at": 33.37,
+          "text": "One video — or the whole playlist."
+        }
+      ],
+      "vo": "Now the real trick. Press I, press O — keep the good part. One video, or a whole playlist."
+    },
+    {
+      "id": "S6_rough_cut",
+      "from": 38.04,
+      "to": 48.71,
+      "draw": "On 38.04 the hatched segments lift off the rows and fly, in playlist order, onto ONE timeline track — end to end, markers riding along. Label \"Premiere Pro\". On G(56) a drawn hand grabs one cut point and nudges it slightly. Nothing else moves.",
+      "beats": {
+        "fly": "38.04",
+        "trim": "G(56) = 43.38"
+      },
+      "captions": [
+        {
+          "at": 38.71,
+          "text": "One export. A ready rough cut."
+        },
+        {
+          "at": 43.38,
+          "text": "You just trim."
+        }
+      ],
+      "vo": "One export — Playlist Timeline XML — and the rough cut is already assembled. You just trim."
+    },
+    {
+      "id": "S7_uses",
+      "from": 48.71,
+      "to": 54.04,
+      "draw": "Three small drawings appear one per beat-pair: a phone (vertical frame) for reels, a timeline for the editor, a terminal box for the agent with one line \"Cut 00:00:12:10 → 00:00:18:02\".",
+      "beats": {
+        "phone": "48.71",
+        "timeline": "G(66) = 50.04",
+        "agent": "G(68) = 51.38"
+      },
+      "caption": "Your reels. Your editor. Your agent.",
+      "vo": "For your reels, your editor, or your agent."
+    },
+    {
+      "id": "S8_finale",
+      "from": 54.04,
+      "to": 60.0,
+      "draw": "The real Mark Player icon (src-tauri/icons/128x128@2x.png) is wiped in by the marker, \"Mark Player\" written by hand under it, \"FREE\" stamped on a beat, then a small line \"macOS · Windows · github.com/danilagoleen/mark-player\". Fade to paper over the last 1.0 s.",
+      "beats": {
+        "logo": "54.04",
+        "free": "G(76) = 56.71"
+      },
+      "caption": "Video notes, pinned to the frame.",
+      "vo": "Mark Player. Free."
+    }
+  ]
+}
