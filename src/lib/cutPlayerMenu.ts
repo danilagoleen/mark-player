@@ -18,6 +18,7 @@ export type CutPlayerMenuAction =
   | "export_visual_notes"
   | "import_srt"
   | "import_markers_json"
+  | "import_markers_xml"
   | "screenshot"
   | "playlist"
   | "chat"
@@ -129,6 +130,7 @@ export function buildCutPlayerMenuSpec(): CutPlayerMenuSectionSpec[] {
         { id: "file_import", label: "Import", kind: "submenu", separatorBefore: true, items: [
           { id: "file_import_srt", label: "Subtitles (SRT)…", action: "import_srt", accelerator: "CmdOrCtrl+Shift+O" },
           { id: "file_import_markers", label: "Markers (JSON)…", action: "import_markers_json" },
+          { id: "file_import_markers_xml", label: "Markers (XML)…", action: "import_markers_xml" },
           { id: "file_import_project", label: "Project… (NLE — soon)", action: "export_otio", enabled: false },
         ] },
         { id: "file_export", label: "Export", kind: "submenu", items: [
@@ -281,7 +283,7 @@ export function buildCutPlayerMenuSpec(): CutPlayerMenuSectionSpec[] {
       id: "help",
       label: "Help",
       items: [
-        { id: "help_help", label: "CUT Player Help", action: "help" },
+        { id: "help_help", label: "Mark Player Help", action: "help" },
         { id: "help_shortcuts", label: "Keyboard Shortcuts", action: "shortcuts" },
         { id: "help_feedback", label: "Send Feedback…", action: "feedback", separatorBefore: true },
         { id: "help_github", label: "GitHub Repository", action: "github" },

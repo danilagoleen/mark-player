@@ -51,7 +51,8 @@ describe("estimateFpsFromSamples", () => {
 });
 
 describe("resolveFrameStepSeconds", () => {
-  it("цепочка: probe → оценка → фолбэк 25", () => {
+  it("цепочка: container → probe → оценка → фолбэк 25", () => {
+    expect(resolveFrameStepSeconds({ containerFps: 29.97, probeFps: 24, estimatedFps: 25 })).toBeCloseTo(1 / 29.97, 6);
     expect(resolveFrameStepSeconds({ probeFps: 24, estimatedFps: 25 })).toBeCloseTo(1 / 24, 6);
     expect(resolveFrameStepSeconds({ probeFps: null, estimatedFps: 25 })).toBeCloseTo(1 / 25, 6);
     expect(resolveFrameStepSeconds({})).toBeCloseTo(1 / FPS_FALLBACK, 6);

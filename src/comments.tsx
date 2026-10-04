@@ -189,7 +189,7 @@ function CommentsStandalone() {
 
   if (!selectedMarker) {
     return (
-      <div style={{ padding: 24, color: "#888", background: "#1a1a1a", height: "100vh" }}>
+      <div style={{ padding: 24, color: "rgba(255,255,255,0.6)", background: "rgba(30,30,30,0.94)", height: "100vh", boxSizing: "border-box", fontSize: 13 }}>
         No comments yet.
       </div>
     );
@@ -211,6 +211,8 @@ function CommentsStandalone() {
 
 const root = document.getElementById("root");
 if (root) {
+  // Окно не прозрачное: без этого под контентом просвечивает градиент index.css.
+  document.body.style.background = "rgb(30,30,30)";
   createRoot(root).render(
     <StrictMode>
       <CommentsStandalone />

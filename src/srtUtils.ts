@@ -16,7 +16,7 @@ const MARKER_KIND_TO_PREFIX: Record<string, string> = {
   chat: MARKER_PREFIX.NOTE,
 };
 
-const KIND_PREFIX: Record<string, string> = {
+export const KIND_PREFIX: Record<string, string> = {
   favorite: "\u2605 FAVORITE",
   negative: "\u2717 NEGATIVE",
   inout: "\u2912 IN-OUT",
@@ -24,7 +24,7 @@ const KIND_PREFIX: Record<string, string> = {
 };
 
 // 0.10.27: глиф для имён с label («✗ Negative») — символ без слова-дубля.
-const KIND_GLYPH: Record<string, string> = {
+export const KIND_GLYPH: Record<string, string> = {
   favorite: "\u2605",
   negative: "\u2717",
   inout: "\u2912",
@@ -38,7 +38,7 @@ const KIND_GLYPH: Record<string, string> = {
 // ABGR(R210 G44 B54) = красный. Упаковка: 0xFF | B<<16 | G<<8 | R.
 // Значения ниже — чистые цвета видов в той же упаковке; ABGR-гипотеза
 // проверяется глазами при импорте (если цвета поплывут — пересчитать).
-const KIND_PPRO_COLOR: Record<string, number> = {
+export const KIND_PPRO_COLOR: Record<string, number> = {
   negative: 4278190335, // 0xFF0000FF — красный
   favorite: 4278255360, // 0xFF00FF00 — зелёный
   comment: 4294901760, // 0xFFFF0000 — синий
@@ -292,24 +292,31 @@ interface XmemlMarkerInput {
   text: string;
 }
 
-// Bell №3: fps-цепочка XML = probe → rVFC-оценка → 25. Раньше XML брал только
-// probe (в релизе мёртвый) и всегда врал timebase 25.
+// Bell №3 + tb_1790752061_6128_1: fps-цепочка XML = container → probe →
+// rVFC-оценка → 25. Container (заголовок MP4/MOV) точнее всех: probe в
+// релизе мёртв, оценка на E2E давала 46 вместо 50. Раньше XML брал только
+// probe и всегда врал timebase 25.
 export function resolveXmlFps(
+  containerFps: number | null | undefined,
   probeFps: number | null | undefined,
   estimatedFps: number | null | undefined,
 ): number {
+  if (containerFps && containerFps > 0) return containerFps;
   if (probeFps && probeFps > 0) return probeFps;
   if (estimatedFps && estimatedFps > 0) return estimatedFps;
   return 25;
 }
 
-export type XmlFpsSource = "probe" | "estimated" | "fallback";
+export type XmlFpsSource = "container" | "probe" | "estimated" | "fallback";
 // EN-тост estimated fps (E2E Premiere 46 vs 50): источник наружу — та же
 // цепочка, что resolveXmlFps, чтобы тост и timebase не разъезжались.
+// Тост «estimated/fallback» — только для не-контейнерных случаев.
 export function resolveXmlFpsSource(
+  containerFps: number | null | undefined,
   probeFps: number | null | undefined,
   estimatedFps: number | null | undefined,
 ): XmlFpsSource {
+  if (containerFps && containerFps > 0) return "container";
   if (probeFps && probeFps > 0) return "probe";
   if (estimatedFps && estimatedFps > 0) return "estimated";
   return "fallback";
@@ -382,10 +389,13 @@ function splitSourceClips(
     const prefix = KIND_PREFIX[m.kind] || "";
     // 0.10.27: имя — глиф + label («✗ Negative», «★ good»); слово-префикс
     // только когда label пуст (решение пользователя — символы оставить).
+    // tb_1790752061_6128_1: без label — один префикс («✗ NEGATIVE»), без
+    // прилипшего вида («✗ NEGATIVEnegative»). Виды без префикса (comment,
+    // chat) — как раньше, словом-видом.
     const label = (m.label || "").trim();
     const glyph = KIND_GLYPH[m.kind] || "";
     clipMarkers.push({
-      name: label ? (glyph ? `${glyph} ${label}` : label) : `${prefix}${m.kind}`.trim(),
+      name: label ? (glyph ? `${glyph} ${label}` : label) : prefix || m.kind,
       comment: m.text || "",
       color: KIND_PPRO_COLOR[m.kind] ?? null,
       inF: toFrames(m.start_sec),
@@ -422,6 +432,27 @@ interface XmemlSequenceSpec {
 
 function xmemlNtsc(fps: number | undefined): "TRUE" | "FALSE" {
   return typeof fps === "number" && Number.isInteger(fps) && fps > 0 ? "FALSE" : "TRUE";
+}
+
+// tb_1790752061_6128_1 (а): NTSC-таймбейс 30 — это 30000/1001 кадр/с, а не 30.
+// Раньше кадры считались как sec*30 при ntsc=TRUE: маркеры уезжали на +0.1%
+// (~3.6 с/час). Теперь toFrames считает sec*timebase*1000/1001, тики —
+// обратное отображение (стена-время), чтобы in/out и pproTicks не разъезжались.
+function xmemlFrameRate(fps: number | undefined): {
+  timebase: number;
+  ntsc: "TRUE" | "FALSE";
+  toFrames: (sec: number) => number;
+  toTicks: (frame: number) => number;
+} {
+  const timebase = Math.max(1, Math.round(fps || 25));
+  const ntsc = xmemlNtsc(fps);
+  const frameLen = ntsc === "TRUE" ? 1001 / 1000 : 1;
+  return {
+    timebase,
+    ntsc,
+    toFrames: (sec: number) => Math.max(0, Math.round((sec * timebase) / frameLen)),
+    toTicks: (frame: number) => Math.floor(((frame * XMEML_TICKS_PER_SECOND) / timebase) * frameLen),
+  };
 }
 
 function xmemlRateBlock(timebase: number, ntsc: "TRUE" | "FALSE", indent: string): string {
@@ -484,7 +515,9 @@ function pushXmemlMarkers(L: string[], clipMarkers: XmemlClipMarker[], indent: s
 
 function buildXmemlDocument(sources: XmemlSourceBuild[], seq: XmemlSequenceSpec): string {
   const { timebase } = seq;
-  const toTicks = (frame: number) => Math.floor((frame * XMEML_TICKS_PER_SECOND) / timebase);
+  // Тики — стена-время: при NTSC кадр длится 1001/1000 номинала.
+  const frameLen = seq.ntsc === "TRUE" ? 1001 / 1000 : 1;
+  const toTicks = (frame: number) => Math.floor(((frame * XMEML_TICKS_PER_SECOND) / timebase) * frameLen);
   const rateBlock = (indent: string) => xmemlRateBlock(timebase, seq.ntsc, indent);
 
   const L: string[] = [];
@@ -616,8 +649,7 @@ export interface XmemlPlaylistOptions {
 }
 
 export function exportPlaylistToXmeml(items: XmemlPlaylistItemInput[], opts: XmemlPlaylistOptions): string {
-  const timebase = Math.max(1, Math.round(opts.fps || 25));
-  const toFrames = (sec: number) => Math.max(0, Math.round(sec * timebase));
+  const { timebase, ntsc, toFrames } = xmemlFrameRate(opts.fps);
   const seqName = opts.sequenceName || "Playlist";
   const seqWidth = Math.max(1, Math.round(opts.seqWidth || 1280));
   const seqHeight = Math.max(1, Math.round(opts.seqHeight || 720));
@@ -643,7 +675,7 @@ export function exportPlaylistToXmeml(items: XmemlPlaylistItemInput[], opts: Xme
   );
   return buildXmemlDocument(sources, {
     timebase,
-    ntsc: xmemlNtsc(opts.fps),
+    ntsc,
     name: seqName,
     width: seqWidth,
     height: seqHeight,
@@ -717,7 +749,7 @@ export function reviewMarkerName(kind: string, label: string): string {
   const glyph = KIND_GLYPH[kind] || "";
   if (clean) return glyph ? `${glyph} ${clean}` : clean;
   const prefix = KIND_PREFIX[kind] || "";
-  return `${prefix}${kind}`.trim();
+  return prefix || kind;
 }
 
 export function exportCommentsToText(
@@ -879,10 +911,7 @@ export function exportMarkersToEdl(markers: EdlMarkerInput[], fps: number, title
 // 0.18: shared core below (splitSourceClips/buildXmemlDocument) serves single + playlist.
 // [signal: xmeml v4 каркас] [project: cut-player]
 export function exportMarkersToXmeml(markers: XmemlMarkerInput[], opts: XmemlExportOptions): string {
-  const timebase = Math.max(1, Math.round(opts.fps || 25));
-  const ntsc = Number.isInteger(opts.fps) && opts.fps > 0 ? "FALSE" : "TRUE";
-  const toFrames = (sec: number) => Math.max(0, Math.round(sec * timebase));
-  const toTicks = (frame: number) => Math.floor((frame * XMEML_TICKS_PER_SECOND) / timebase);
+  const { timebase, ntsc, toFrames, toTicks } = xmemlFrameRate(opts.fps);
   const rateBlock = (indent: string) =>
     `${indent}<rate>\n${indent}\t<timebase>${timebase}</timebase>\n${indent}\t<ntsc>${ntsc}</ntsc>\n${indent}</rate>`;
 

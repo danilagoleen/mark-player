@@ -14,6 +14,8 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "opener:default",
+    "updater:default",
+    "process:default",
     "fs:default",
     "fs:allow-write-text-file",
     "fs:allow-write-file",

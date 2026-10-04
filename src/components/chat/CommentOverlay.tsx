@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { MessageSquare } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { MessageSquare, Pencil, Trash2 } from "lucide-react";
 import { formatTimecode } from "../../srtUtils";
 import { MiniWindow } from "./MiniWindow";
 
@@ -26,43 +26,54 @@ interface CommentOverlayProps {
   standalone?: boolean;
 }
 
+const HATCH = "repeating-linear-gradient(135deg, rgba(255,255,255,0.10) 0 6px, transparent 6px 12px)";
+const MONO = "'SF Mono', Menlo, ui-monospace, monospace";
+const SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,sans-serif";
+// Окно нативное и непрозрачное: углы и рамку рисует система, внутри — только
+// сплошной фон 0.94 (скруглённая карточка в квадратном окне выглядела нелепо).
+const GLASS_BG = "rgba(30,30,30,0.94)";
+const HAIRLINE = "1px solid rgba(255,255,255,0.10)";
+const DELETE_ARM_MS = 3000;
+
+const CSS = `
+.cm-ghost{background:none;border:none;color:#fff;opacity:.55;cursor:pointer;padding:4px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;transition:opacity .12s}
+.cm-ghost:hover,.cm-ghost:focus-visible{opacity:1;outline:none}
+.cm-ghost[data-armed="true"]{opacity:1;background:${HATCH};box-shadow:inset 0 0 0 1px rgba(255,255,255,0.35)}
+.cm-row[data-armed="true"]{background-image:${HATCH} !important}
+.cm-list::-webkit-scrollbar{width:8px}
+.cm-list::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.14);border-radius:4px}
+`;
+
 const S = {
-  overlay: { display: "flex", flexDirection: "column" as const, height: "100%", fontSize: 13, color: "#ccc" },
-  empty: { padding: "24px 16px", color: "#888", fontSize: 13 },
+  overlay: { display: "flex", flexDirection: "column" as const, height: "100%", fontSize: 15, color: "#fff", fontFamily: SANS },
+  empty: { padding: "24px 16px", color: "rgba(255,255,255,0.6)", fontSize: 13 },
   list: { listStyle: "none" as const, margin: 0, padding: 0, overflowY: "auto" as const, flex: 1 },
   item: (active: boolean) => ({
     padding: "12px 16px",
-    borderBottom: "1px solid rgba(255,255,255,0.04)",
+    borderBottom: HAIRLINE,
     background: active ? "rgba(255,255,255,0.04)" : "transparent",
   }),
-  time: { fontSize: 13, fontVariantNumeric: "tabular-nums" as const, color: "#9ca3af", marginBottom: 4 },
+  time: { fontFamily: MONO, fontSize: 12, fontVariantNumeric: "tabular-nums" as const, opacity: 0.6, marginBottom: 4 },
   body: { display: "flex" as const, alignItems: "flex-start" as const, justifyContent: "space-between" as const, gap: 8 },
-  textContent: { margin: 0, lineHeight: 1.4, flex: 1 },
-  editBtn: {
-    background: "none", border: "none", color: "#888", fontSize: 11,
-    cursor: "pointer", padding: "2px 6px", borderRadius: 4, whiteSpace: "nowrap" as const,
-  },
-  deleteBtn: {
-    background: "none", border: "none", color: "#f87171", fontSize: 11,
-    cursor: "pointer", padding: "2px 6px", borderRadius: 4, whiteSpace: "nowrap" as const,
-  },
+  textContent: { margin: 0, fontSize: 15, fontWeight: 400, lineHeight: 1.4, flex: 1, color: "#fff", wordBreak: "break-word" as const },
+  icons: { display: "flex" as const, gap: 2, flexShrink: 0 },
   clearAllBtn: {
-    background: "none", border: "1px solid rgba(248,113,113,0.4)", color: "#f87171", fontSize: 11,
+    background: "none", border: "1px solid rgba(255,255,255,0.20)", color: "rgba(255,255,255,0.7)", fontSize: 11,
     cursor: "pointer", padding: "2px 10px", borderRadius: 6, whiteSpace: "nowrap" as const,
     marginLeft: "auto" as const,
   },
   edit: { display: "flex" as const, flexDirection: "column" as const, gap: 8, flex: 1 },
   textarea: {
-    background: "rgba(0,0,0,0.4)", border: "1px solid #333",
-    borderRadius: 8, color: "#ccc", fontSize: 13, padding: 8,
+    background: "rgba(0,0,0,0.35)", border: "1px solid rgba(255,255,255,0.14)",
+    borderRadius: 8, color: "#fff", fontSize: 15, padding: 8,
     resize: "vertical" as const, minHeight: 56, fontFamily: "inherit", width: "100%", boxSizing: "border-box" as const,
     outline: "none",
   },
   actions: { display: "flex" as const, gap: 6 },
   btn: (primary: boolean) => ({
     padding: "4px 12px", borderRadius: 6, fontSize: 12, cursor: "pointer", border: "none",
-    background: primary ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.06)",
-    color: primary ? "#ccc" : "#888",
+    background: primary ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.06)",
+    color: primary ? "#fff" : "rgba(255,255,255,0.7)",
   }),
 };
 
@@ -72,6 +83,23 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
   // Теперь editingId на каждый айтем, Edit/Delete у всех.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  // Опасность без цвета: первый клик по корзине включает штриховку, второй
+  // (в течение DELETE_ARM_MS) удаляет. ⌘Z в окне всё равно вернёт.
+  const [armedId, setArmedId] = useState<string | null>(null);
+  const armTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (armTimer.current) clearTimeout(armTimer.current); }, []);
+
+  const handleDeleteClick = (id: string) => {
+    if (armTimer.current) clearTimeout(armTimer.current);
+    if (armedId === id) {
+      setArmedId(null);
+      if (editingId === id) setEditingId(null);
+      onDeleteMarker(id);
+      return;
+    }
+    setArmedId(id);
+    armTimer.current = setTimeout(() => setArmedId(null), DELETE_ARM_MS);
+  };
 
   const commentMarkers = useMemo(
     () => markers.filter((m) => m.kind === "comment").sort((a, b) => a.start_sec - b.start_sec),
@@ -80,12 +108,13 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
 
   const expandedContent = (
     <div style={S.overlay}>
+      {!standalone && <style>{CSS}</style>}
       {commentMarkers.length === 0 ? (
         <div style={S.empty}>No comments yet. Click the comment button to add one.</div>
       ) : (
         <ul style={S.list}>
           {commentMarkers.map((cm) => (
-            <li key={cm.marker_id} style={S.item(cm.marker_id === marker.marker_id)}>
+            <li key={cm.marker_id} className="cm-row" data-armed={armedId === cm.marker_id} style={S.item(cm.marker_id === marker.marker_id)}>
               <div style={S.time}>{formatTimecode(cm.start_sec, fps)}</div>
               {editingId === cm.marker_id ? (
                 <div style={S.edit}>
@@ -104,8 +133,14 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
               ) : (
                 <div style={S.body}>
                   <p style={S.textContent}>{cm.text || "No comment text."}</p>
-                  <button style={S.editBtn} type="button" onClick={() => { setDraft(cm.text ?? ""); setEditingId(cm.marker_id); }}>Edit</button>
-                  <button style={S.deleteBtn} type="button" onClick={() => { if (editingId === cm.marker_id) setEditingId(null); onDeleteMarker(cm.marker_id); }}>Delete</button>
+                  <div style={S.icons}>
+                    <button className="cm-ghost" type="button" aria-label="Edit comment" title="Edit" onClick={() => { setArmedId(null); setDraft(cm.text ?? ""); setEditingId(cm.marker_id); }}>
+                      <Pencil size={16} />
+                    </button>
+                    <button className="cm-ghost" type="button" data-armed={armedId === cm.marker_id} aria-label={armedId === cm.marker_id ? "Confirm delete" : "Delete comment"} title={armedId === cm.marker_id ? "Click again to delete" : "Delete"} onClick={() => handleDeleteClick(cm.marker_id)}>
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                   </div>
               )}
             </li>
@@ -118,14 +153,16 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
   if (standalone) {
     return (
       <div style={{
-        display: "flex", flexDirection: "column", height: "100vh",
-        background: "#1a1a1a", color: "#ccc", fontSize: 13,
-        fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,sans-serif",
+        display: "flex", flexDirection: "column", height: "100vh", boxSizing: "border-box",
+        background: GLASS_BG, color: "#fff", fontSize: 15, fontFamily: SANS,
+        overflow: "hidden",
+        backdropFilter: "blur(20px) saturate(140%)", WebkitBackdropFilter: "blur(20px) saturate(140%)",
       }}>
+        <style>{CSS}</style>
         <div style={{
           display: "flex", alignItems: "center", gap: 8,
-          padding: "8px 12px", borderBottom: "1px solid rgba(255,255,255,0.08)",
-          fontSize: 12, fontWeight: 600, color: "#e4e6eb",
+          padding: "10px 16px", borderBottom: HAIRLINE,
+          fontSize: 13, fontWeight: 600, color: "#fff",
         }}>
           Comments
           {onClearAll && commentMarkers.length > 0 && (
@@ -134,7 +171,7 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
             </button>
           )}
         </div>
-        <div style={{ flex: 1, overflow: "auto" }}>
+        <div className="cm-list" style={{ flex: 1, overflow: "auto" }}>
           {expandedContent}
         </div>
       </div>

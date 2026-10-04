@@ -408,6 +408,12 @@ fn main() {
     builder = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        // tb_1790710861_12931_16: автообновление (Check for Updates + тихая
+        // проверка на старте). Диалог плагина выключен (dialog:false в
+        // конфиге) — все строки ведёт фронт через тосты.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        // relaunch после install+relaunch (ядро api/process убрано в api 2.12).
+        .plugin(tauri_plugin_process::init())
         // About: внешние ссылки (GitHub/Releases/mailto) через openUrl.
         .plugin(tauri_plugin_opener::init());
 

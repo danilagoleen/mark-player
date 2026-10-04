@@ -19,6 +19,7 @@ import { createEmptyPlaylist, savePlaylist, loadPlaylist, addEntry, addEntryIfAb
 import { isSameMediaPath, resolveMediaContentHash } from "./lib/mediaOpen";
 import { mediaPlayability, mediaRefusalReason } from "./lib/mediaPlayability";
 import { markerBelongsToMedia, resolveExternalMarkers, type MediaIdentity } from "./lib/markersSync";
+import { isSameImportedMarker, matchGroupToPath, parseXmemlMarkers, type ImportedMarker } from "./lib/xmemlImport";
 import type { CutPlayerMenuAction } from "./lib/cutPlayerMenu";
 import { useDragDrop } from "./lib/useDragDrop";
 import { ReverseShuttle, getShuttleDisplay, resolveJumpTarget, resolvePlayerHotkey, resolveProportionalStep, shuttleSlotClass } from "./lib/playerHotkeys";
@@ -37,6 +38,9 @@ import {
   hasRequestVideoFrameCallback,
   resolveFrameStepSeconds,
 } from "./lib/fpsEstimator";
+import { loadContainerFps } from "./lib/mp4Fps";
+import { checkForUpdatesNow, checkForUpdatesSilent } from "./lib/appUpdater";
+import type { Update } from "@tauri-apps/plugin-updater";
 import { createSingleDoubleClick, type SingleDoubleClick } from "./lib/singleDoubleClick";
 import MycoProbeApp from "./MycoProbeApp";
 // Bell №2: agent chat is a separate module — no chat imports in the default
@@ -250,6 +254,38 @@ function getAvailableScreenBounds() {
 
 function createMarkerId() {
   return `marker_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function defaultMarkerLabel(kind: PlayerMarkerKind): string {
+  return kind === "favorite" ? "Favorite" : kind === "negative" ? "Negative" : kind === "in" ? "In point" : kind === "out" ? "Out point" : kind === "comment" ? "Comment" : kind === "chat" ? "Agent chat" : "Marker";
+}
+
+function createImportedMarker(m: ImportedMarker, mediaPath: string, contentHash: string | null): PlayerTimeMarker {
+  const now = new Date().toISOString();
+  return {
+    marker_id: createMarkerId(),
+    schema_version: "cut_time_marker_v1",
+    project_id: "cut_demo",
+    timeline_id: "main",
+    media_path: mediaPath,
+    content_hash: contentHash,
+    kind: m.kind,
+    start_sec: m.start_sec,
+    end_sec: m.end_sec,
+    anchor_sec: m.anchor_sec,
+    score: m.kind === "favorite" ? 0.85 : 0.6,
+    label: m.label || defaultMarkerLabel(m.kind),
+    text: m.text,
+    author: "xmeml_import",
+    context_slice: null,
+    cam_payload: null,
+    chat_thread_id: null,
+    comment_thread_id: null,
+    source_engine: "xmeml_import",
+    status: "active",
+    created_at: now,
+    updated_at: now,
+  };
 }
 
 function readStoredMarkers(): PlayerTimeMarker[] {
@@ -501,8 +537,11 @@ function App() {
     return initial;
   });
   // 0.10.29: оценка fps через rVFC (калибровка на rate=1, 50 сэмплов) —
-  // средний звен fps-цепочки: probe → rVFC → 25.
+  // среднее звено fps-цепочки: container → probe → rVFC → 25.
   const [estimatedFps, setEstimatedFps] = useState<number | null>(null);
+  // tb_1790752061_6128_1: fps из заголовка MP4/MOV (mdhd+stts) — первое звено
+  // цепочки. Грузится асинхронно при смене src, открытию не мешает.
+  const [containerFps, setContainerFps] = useState<number | null>(null);
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
   // 0.10.22: ref-зеркало currentFilePath — playlist:play-listener живёт в
   // useEffect([]) и видит только mount-замыкание, стейт там всегда stale.
@@ -511,6 +550,7 @@ function App() {
   // [duration, previewQuality], стейт probe/estimate там всегда stale).
   const probeFpsRef = useRef<number | null>(null);
   const estimatedFpsRef = useRef<number | null>(null);
+  const containerFpsRef = useRef<number | null>(null);
   const wheelVolumeAtRef = useRef(0);
   // 0.10.29 (Шаг 3): различитель сингл/дабл по видео — инстанс в ref,
   // иначе ре-рендеры роняют pending-одиночный; колбэки — через зеркала,
@@ -915,6 +955,7 @@ function App() {
   // 0.10.29: зеркала fps для stale-замыканий (тот же паттерн, что выше).
   probeFpsRef.current = probeResult?.fps && probeResult.fps > 0 ? probeResult.fps : null;
   estimatedFpsRef.current = estimatedFps;
+  containerFpsRef.current = containerFps;
 
   useEffect(() => {
     const reverse = new ReverseShuttle(
@@ -950,10 +991,11 @@ function App() {
       const action = resolvePlayerHotkey(event);
       if (!action) return;
       const video = videoRef.current;
-      // 0.10.29: честный покадровый шаг — fps-цепочка probe → rVFC → 25.
+      // 0.10.29: честный покадровый шаг — fps-цепочка container → probe → rVFC → 25.
       // seekBy (боковые зоны) намеренно остаётся на duration/100: это грубая
       // перемотка по дизайну, а не покадровая.
       const frameStep = resolveFrameStepSeconds({
+        containerFps: containerFpsRef.current,
         probeFps: probeFpsRef.current,
         estimatedFps: estimatedFpsRef.current,
       });
@@ -1154,6 +1196,44 @@ function App() {
     };
   }, [src]);
 
+  // tb_1790752061_6128_1: fps из заголовка контейнера (moov mdhd+stts) —
+  // голова/хвост по Range, мимо сети — молча null, цепочка падает дальше.
+  useEffect(() => {
+    setContainerFps(null);
+    if (!src) return;
+    let alive = true;
+    loadContainerFps(src).then((r) => {
+      if (alive) setContainerFps(r ? r.fps : null);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [src]);
+
+  // tb_1790710861_12931_16: тихая проверка обновлений при старте — тост,
+  // только если обновление нашлось; сеть и «всё свежо» молчат. Только
+  // главное окно (панели — те же бандлы, свой чек не нужен), с задержкой,
+  // чтобы не мешать открытию видео.
+  useEffect(() => {
+    if (!isTauriRuntimeSync()) return;
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const { getCurrentWindow } = await import("@tauri-apps/api/window");
+          if (getCurrentWindow().label !== "main") return;
+        } catch {
+          return;
+        }
+        if (alive) await checkForUpdatesSilent(updaterDeps());
+      })();
+    }, 10000);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, []);
+
   // 0.10.29: тачпад двумя пальцами — горизонталь = покадровый скраб,
   // вертикаль = громкость (троттлинг 50мс). Нативный listener с
   // passive:false: React вешает wheel как passive, preventDefault бы игнорил.
@@ -1164,6 +1244,7 @@ function App() {
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const frameStep = resolveFrameStepSeconds({
+        containerFps,
         probeFps: probeResult?.fps && probeResult.fps > 0 ? probeResult.fps : null,
         estimatedFps,
       });
@@ -1184,7 +1265,7 @@ function App() {
     return () => {
       node.removeEventListener("wheel", onWheel);
     };
-  }, [src, duration, probeResult, estimatedFps]);
+  }, [src, duration, probeResult, estimatedFps, containerFps]);
 
   useEffect(() => {
     if (transportTimerRef.current) {
@@ -1497,8 +1578,8 @@ function App() {
     // про probe убран — деградации больше нет, есть честная резолюция.
     // EN-тост estimated fps (E2E Premiere 46 vs 50): fps не из probe —
     // предупреждение в том же тосте, что и факт сохранения.
-    const fps = resolveXmlFps(probeResult?.fps, estimatedFps);
-    const fpsSource = resolveXmlFpsSource(probeResult?.fps, estimatedFps);
+    const fps = resolveXmlFps(containerFps, probeResult?.fps, estimatedFps);
+    const fpsSource = resolveXmlFpsSource(containerFps, probeResult?.fps, estimatedFps);
     const fpsNote = fpsSource === "estimated"
       ? `fps ~${fps} estimated, verify sequence settings`
       : fpsSource === "fallback"
@@ -1571,10 +1652,11 @@ function App() {
     // Timebase — fps-цепочка первого элемента; его probe известен, только
     // если первый элемент сейчас открыт. Иначе — цепочка текущего, иначе 25.
     const firstIsCurrent = entries[0]?.path === currentFilePath;
+    const chainContainer = firstIsCurrent ? containerFps : null;
     const chainProbe = (firstIsCurrent ? probeResult?.fps : null) ?? probeResult?.fps;
     const chainEst = (firstIsCurrent ? estimatedFps : null) ?? estimatedFps;
-    const fps = resolveXmlFps(chainProbe, chainEst);
-    const fpsSource = resolveXmlFpsSource(chainProbe, chainEst);
+    const fps = resolveXmlFps(chainContainer, chainProbe, chainEst);
+    const fpsSource = resolveXmlFpsSource(chainContainer, chainProbe, chainEst);
     const fpsNote = fpsSource === "estimated"
       ? `fps ~${fps} estimated, verify sequence settings`
       : fpsSource === "fallback"
@@ -1635,7 +1717,7 @@ function App() {
   async function performExportReviewNotes(): Promise<void> {
     const mm = markers.filter((m) => markerBelongsToMedia(m, mediaIdentity));
     if (!mm.length) { announceExport("srt", true, null); return; }
-    const fps = resolveXmlFps(probeResult?.fps, estimatedFps);
+    const fps = resolveXmlFps(containerFps, probeResult?.fps, estimatedFps);
     const txt = exportCommentsToText(mm, fps, `Review notes — ${fileName || "markers"}`);
     const result = await saveFileDialogResult(txt, `${fileName || "markers"}.review.txt`, {
       filters: [{ name: "Text", extensions: ["txt"] }],
@@ -1649,7 +1731,7 @@ function App() {
       .filter((m) => markerBelongsToMedia(m, mediaIdentity))
       .sort((a, b) => a.anchor_sec - b.anchor_sec);
     if (!mm.length) { announceExport("srt", true, null); return; }
-    const fps = resolveXmlFps(probeResult?.fps, estimatedFps);
+    const fps = resolveXmlFps(containerFps, probeResult?.fps, estimatedFps);
     const stem = ((fileName || "markers").replace(/\.[^.]+$/, "") || "markers");
     const edl = exportMarkersToEdl(mm, fps, `Review notes — ${fileName || "markers"}`);
     const edlResult = await saveFileDialogResult(edl, `${stem}.markers.edl`, {
@@ -1746,7 +1828,7 @@ function App() {
       .sort((a, b) => a.anchor_sec - b.anchor_sec);
     if (!mm.length) { announceExport("srt", true, null); return; }
     if (!videoRef.current) { setContextToast("Visual notes: open a video first."); return; }
-    const fps = resolveXmlFps(probeResult?.fps, estimatedFps);
+    const fps = resolveXmlFps(containerFps, probeResult?.fps, estimatedFps);
     const stem = ((fileName || "markers").replace(/\.[^.]+$/, "") || "markers");
     const title = `Review notes — ${fileName || "markers"}`;
     setContextToast(`Snapshots 0/${mm.length}…`);
@@ -1960,6 +2042,9 @@ function App() {
       case "import_markers_json":
         menuHandlersRef.current.onImportMarkersJson();
         break;
+      case "import_markers_xml":
+        void handleImportMarkersXml();
+        break;
       case "volume_up":
         syncVolume(Math.min(1, volume + 0.1), isMuted);
         break;
@@ -2040,7 +2125,7 @@ function App() {
         break;
       case "show_comments":
         setContextToast("Comments");
-        void openPanelWindow("panel-comments", "comments", "Comments", 380, 560, withContentHash(currentMediaKey ? `media=${encodeURIComponent(currentMediaKey)}` : undefined));
+        void openPanelWindow("panel-comments", "comments", "", 380, 560, withContentHash(currentMediaKey ? `media=${encodeURIComponent(currentMediaKey)}` : undefined));
         break;
       case "theme":
         setContextToast("Theme — тёмная тема по умолчанию (заготовка).");
@@ -2055,7 +2140,7 @@ function App() {
         setContextToast("Bring All to Front — системное поведение macOS.");
         break;
       case "comments_panel":
-        void openPanelWindow("panel-comments", "comments", "Comments", 380, 560, withContentHash(currentMediaKey ? `media=${encodeURIComponent(currentMediaKey)}` : undefined));
+        void openPanelWindow("panel-comments", "comments", "", 380, 560, withContentHash(currentMediaKey ? `media=${encodeURIComponent(currentMediaKey)}` : undefined));
         break;
       case "load_module_playlist":
         setContextToast("Load Playlist/Scanner Module — в разработке.");
@@ -2109,13 +2194,59 @@ function App() {
         void openExternalLink(GITHUB_REPO_URL);
         break;
       case "updates":
-        void openExternalLink(GITHUB_RELEASES_URL);
+        // tb_1790710861_12931_16: настоящая проверка изнутри приложения.
+        // Вне десктопа (браузер) апдейтера нет — честный фолбэк на релизы.
+        if (!isTauriRuntimeSync()) {
+          void openExternalLink(GITHUB_RELEASES_URL);
+          break;
+        }
+        void runManualUpdateCheck();
         break;
     }
   };
 
-  async function openExternalLink(url: string): Promise<void> {
-    try {
+  // tb_1790710861_12931_16: настоящая проверка обновлений изнутри приложения
+  // (tauri-plugin-updater). Объект Update живёт в ref между check и install.
+  const pendingUpdateRef = useRef<Update | null>(null);
+
+  function updaterDeps() {
+    return {
+      currentVersion: __APP_VERSION__,
+      check: async () => {
+        const { check } = await import("@tauri-apps/plugin-updater");
+        const u = await check();
+        if (!u) return null;
+        pendingUpdateRef.current = u;
+        return { version: u.version, currentVersion: u.currentVersion };
+      },
+      downloadAndInstall: async (onProgress: (downloaded: number, total: number | null) => void) => {
+        const u = pendingUpdateRef.current;
+        if (!u) throw new Error("update object lost");
+        let downloaded = 0;
+        let total: number | null = null;
+        await u.downloadAndInstall((e) => {
+          if (e.event === "Started") {
+            total = e.data.contentLength ?? null;
+          } else if (e.event === "Progress") {
+            downloaded += e.data.chunkLength;
+            onProgress(downloaded, total);
+          }
+        });
+        pendingUpdateRef.current = null;
+      },
+      relaunch: async () => {
+        const { relaunch } = await import("@tauri-apps/plugin-process");
+        await relaunch();
+      },
+      toast: (msg: string) => setContextToast(msg),
+    };
+  }
+
+  async function runManualUpdateCheck(): Promise<void> {
+    await checkForUpdatesNow(updaterDeps());
+  }
+
+  async function openExternalLink(url: string): Promise<void> {    try {
       const { openUrl } = await import("@tauri-apps/plugin-opener");
       await openUrl(url);
     } catch {
@@ -2329,6 +2460,70 @@ function App() {
     await handleOpenPath(path);
   }
 
+  async function handleImportMarkersXml(): Promise<void> {
+    // File > Import > Markers (XML)…: обратный путь к экспорту — маркеры из
+    // XMEML (наш экспорт, Premiere, DaVinci) на файлы, которые плеер знает
+    // (открытое видео и плейлист). Неопознанный файл не угадываем.
+    if (!isTauriRuntimeSync()) {
+      setContextToast("Import Markers (XML) is available in the desktop app only.");
+      return;
+    }
+    try {
+      const path = await openFileDialog({ filters: [{ name: "Timeline XML", extensions: ["xml"] }] });
+      if (!path) return;
+      const { readTextFile } = await import("@tauri-apps/plugin-fs");
+      const parsed = parseXmemlMarkers(await readTextFile(path));
+      if (!parsed.ok) {
+        setContextToast(`Import Markers (XML): ${parsed.error}`);
+        return;
+      }
+      const seqNote = parsed.skippedSequenceMarkers > 0
+        ? ` ${parsed.skippedSequenceMarkers} sequence marker${parsed.skippedSequenceMarkers === 1 ? "" : "s"} skipped (timeline time, not tied to a file).`
+        : "";
+      if (!parsed.groups.length) {
+        setContextToast(`No source-clip markers found in this XML.${seqNote}`);
+        return;
+      }
+      const candidates = [
+        ...(currentMediaKeyRef.current ? [currentMediaKeyRef.current] : []),
+        ...((loadPlaylist()?.entries ?? []).map((e) => e.path)),
+      ];
+      const snapshot = markersRef.current;
+      const added: PlayerTimeMarker[] = [];
+      const unmatched: string[] = [];
+      let alreadyThere = 0;
+      for (const group of parsed.groups) {
+        const target = matchGroupToPath(group, candidates);
+        if (!target) { unmatched.push(group.name); continue; }
+        const isCurrent = target === currentMediaKeyRef.current;
+        const hash = isCurrent ? contentHashRef.current : null;
+        const existing = snapshot.filter((m) => (isCurrent
+          ? markerBelongsToMedia(m, { mediaKey: target, contentHash: hash })
+          : m.media_path === target));
+        for (const im of group.markers) {
+          const dup = existing.some((m) => isSameImportedMarker(m, im, group.fps))
+            || added.some((m) => m.media_path === target && isSameImportedMarker(m, im, group.fps));
+          if (dup) { alreadyThere += 1; continue; }
+          added.push(createImportedMarker(im, target, hash));
+        }
+      }
+      const missing = unmatched.length
+        ? ` No matching file in the player for: ${unmatched.slice(0, 3).join(", ")}${unmatched.length > 3 ? `, +${unmatched.length - 3}` : ""}.`
+        : "";
+      if (!added.length) {
+        setContextToast(alreadyThere
+          ? `Nothing new: ${alreadyThere} marker${alreadyThere === 1 ? "" : "s"} already present.${missing}${seqNote}`
+          : `No markers imported.${missing || " Open the video first, or add it to the playlist."}${seqNote}`);
+        return;
+      }
+      pushMarkerHistory();
+      setMarkers((prev) => [...prev, ...added]);
+      setContextToast(`Markers imported: ${added.length}${alreadyThere ? ` (${alreadyThere} already present)` : ""}.${missing}${seqNote}`);
+    } catch {
+      setContextToast("Import Markers (XML): could not read the file.");
+    }
+  }
+
   async function handleOpenPlaylistFile(): Promise<void> {
     // File > Open Playlist…: импорт JSON-плейлиста + открытие панели
     // [signal: меню открывает плейлист] [project: cut-player].
@@ -2516,7 +2711,7 @@ function App() {
       end_sec: end,
       anchor_sec: Number(anchor.toFixed(2)),
       score: kind === "favorite" ? 0.85 : 0.6,
-      label: kind === "favorite" ? "Favorite" : kind === "negative" ? "Negative" : kind === "in" ? "In point" : kind === "out" ? "Out point" : kind === "comment" ? "Comment" : kind === "chat" ? "Agent chat" : "Marker",
+      label: defaultMarkerLabel(kind),
       text,
       author: "player_lab",
       context_slice: null,
@@ -2542,9 +2737,9 @@ function App() {
   function addCommentAndOpenPanel(): void {
     const m = addMomentMarker("comment", "");
     // 0.12 слайс 1: окно комментов показывает HH:MM:SS:FF — fps едет в query,
-    // та же цепочка probe→rVFC, что XML timebase и таймкоды транспорта.
-    const fps = resolveXmlFps(probeResult?.fps, estimatedFps);
-    if (m) void openPanelWindow("panel-comments", "comments", "Comments", 380, 560, withContentHash(`marker=${encodeURIComponent(m.marker_id)}&media=${encodeURIComponent(m.media_path ?? currentMediaKey ?? "")}&fps=${fps}`));
+    // та же цепочка container→probe→rVFC, что XML timebase и таймкоды транспорта.
+    const fps = resolveXmlFps(containerFps, probeResult?.fps, estimatedFps);
+    if (m) void openPanelWindow("panel-comments", "comments", "", 380, 560, withContentHash(`marker=${encodeURIComponent(m.marker_id)}&media=${encodeURIComponent(m.media_path ?? currentMediaKey ?? "")}&fps=${fps}`));
   }
 
   function addProvisionalVetkaCapture() {
@@ -2916,7 +3111,7 @@ function App() {
                               {isMoving ? <IconPause /> : <IconPlay />}
                             </button>
                             <span className="transport-time-col">
-                              <span className="transport-time">{formatTimecode(currentTime, resolveXmlFps(probeResult?.fps, estimatedFps))}</span>
+                              <span className="transport-time">{formatTimecode(currentTime, resolveXmlFps(containerFps, probeResult?.fps, estimatedFps))}</span>
                               <span className={shuttleSlotClass(shuttleDisplay.badge)} data-testid="transport-shuttle-badge" title={shuttleDisplay.label}>
                                 {shuttleDisplay.badge ?? ""}
                               </span>
@@ -3015,7 +3210,7 @@ function App() {
                                 style={{ left: `${(currentTime / Math.max(duration, 0.001)) * 100}%` }}
                               />
                             </div>
-                            <span className="transport-time">{formatTimecode(duration, resolveXmlFps(probeResult?.fps, estimatedFps))}</span>
+                            <span className="transport-time">{formatTimecode(duration, resolveXmlFps(containerFps, probeResult?.fps, estimatedFps))}</span>
                           </div>
                           <div className="transport-group">
                             <div className="transport-volume-wrap">

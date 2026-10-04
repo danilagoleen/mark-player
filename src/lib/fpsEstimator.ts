@@ -1,6 +1,6 @@
 /**
  * FPS-цепочка для честного покадрового шага (UPD 11–13, Шаг 2/7).
- * probe fps → оценка requestVideoFrameCallback → фолбэк 25.
+ * container (заголовок MP4/MOV) → probe fps → оценка requestVideoFrameCallback → фолбэк 25.
  * Формула: fps = n / Σ(Δt/Δframes).
  */
 
@@ -50,10 +50,11 @@ export function estimateFpsFromSamples(samples: number[]): number | null {
 }
 
 export function resolveFrameStepSeconds(opts: {
+  containerFps?: number | null;
   probeFps?: number | null;
   estimatedFps?: number | null;
 }): number {
-  const candidates = [opts.probeFps, opts.estimatedFps];
+  const candidates = [opts.containerFps, opts.probeFps, opts.estimatedFps];
   for (const fps of candidates) {
     if (typeof fps === "number" && Number.isFinite(fps) && fps > 0 && fps <= MAX_SANE_FPS) {
       return 1 / fps;

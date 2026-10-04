@@ -379,49 +379,61 @@ describe("exportMarkersToXmeml", () => {
   });
 
   // [signal: 0.10.25 префикс без label] [project: cut-player]
+  // tb_1790752061_6128_1: без label — один префикс, без прилипшего вида.
   it("keeps kind prefix when label is empty", () => {
     const markers = [
       { marker_id: "u1", kind: "favorite", start_sec: 1, end_sec: 1, label: "", text: "" },
     ];
     const xml = exportMarkersToXmeml(markers, opts);
-    expect(xml).toContain("FAVORITEfavorite");
+    expect(xml).toContain("★ FAVORITE");
+    expect(xml).not.toContain("FAVORITEfavorite");
   });
 });
 
 // [signal: Bell №3 честный fps + аудио] [project: cut-player]
+// tb_1790752061_6128_1: container — первое звено (заголовок MP4/MOV).
 describe("resolveXmlFps", () => {
+  it("prefers container fps over everything", () => {
+    expect(resolveXmlFps(29.97, 30, 25)).toBe(29.97);
+    expect(resolveXmlFps(25, null, null)).toBe(25);
+  });
+
   it("prefers live probe fps", () => {
-    expect(resolveXmlFps(30, 29.7)).toBe(30);
+    expect(resolveXmlFps(null, 30, 29.7)).toBe(30);
   });
 
   it("falls back to rVFC estimate when probe is dead", () => {
-    expect(resolveXmlFps(null, 29.7)).toBe(29.7);
-    expect(resolveXmlFps(0, 24)).toBe(24);
-    expect(resolveXmlFps(-1, 24)).toBe(24);
+    expect(resolveXmlFps(null, null, 29.7)).toBe(29.7);
+    expect(resolveXmlFps(null, 0, 24)).toBe(24);
+    expect(resolveXmlFps(0, -1, 24)).toBe(24);
   });
 
   it("defaults to 25 with no signal at all", () => {
-    expect(resolveXmlFps(null, null)).toBe(25);
-    expect(resolveXmlFps(undefined, undefined)).toBe(25);
+    expect(resolveXmlFps(null, null, null)).toBe(25);
+    expect(resolveXmlFps(undefined, undefined, undefined)).toBe(25);
   });
 });
 
 // EN-тост estimated fps: источник наружу — та же цепочка, что resolveXmlFps.
 describe("resolveXmlFpsSource", () => {
+  it("reports container when the header gave fps", () => {
+    expect(resolveXmlFpsSource(29.97, 30, 25)).toBe("container");
+  });
+
   it("reports probe when the probe is alive", () => {
-    expect(resolveXmlFpsSource(30, 29.7)).toBe("probe");
+    expect(resolveXmlFpsSource(null, 30, 29.7)).toBe("probe");
   });
 
   it("reports estimated when the probe is dead but rVFC has a value", () => {
-    expect(resolveXmlFpsSource(null, 29.7)).toBe("estimated");
-    expect(resolveXmlFpsSource(0, 24)).toBe("estimated");
-    expect(resolveXmlFpsSource(-1, 24)).toBe("estimated");
+    expect(resolveXmlFpsSource(null, null, 29.7)).toBe("estimated");
+    expect(resolveXmlFpsSource(null, 0, 24)).toBe("estimated");
+    expect(resolveXmlFpsSource(0, -1, 24)).toBe("estimated");
   });
 
   it("reports fallback with no signal at all", () => {
-    expect(resolveXmlFpsSource(null, null)).toBe("fallback");
-    expect(resolveXmlFpsSource(undefined, undefined)).toBe("fallback");
-    expect(resolveXmlFpsSource(0, -1)).toBe("fallback");
+    expect(resolveXmlFpsSource(null, null, null)).toBe("fallback");
+    expect(resolveXmlFpsSource(undefined, undefined, undefined)).toBe("fallback");
+    expect(resolveXmlFpsSource(0, 0, -1)).toBe("fallback");
   });
 });
 
@@ -686,8 +698,9 @@ describe("exportCommentsToText", () => {
 describe("reviewMarkerName", () => {
   it("matches the XMEML naming: glyph+label, prefix only bare", () => {
     expect(reviewMarkerName("favorite", "good")).toBe("★ good");
-    expect(reviewMarkerName("favorite", "")).toContain("FAVORITE");
-    expect(reviewMarkerName("comment", "")).toContain("comment");
+    expect(reviewMarkerName("favorite", "")).toBe("★ FAVORITE");
+    expect(reviewMarkerName("negative", "")).toBe("✗ NEGATIVE");
+    expect(reviewMarkerName("comment", "")).toBe("comment");
   });
 });
 

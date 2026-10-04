@@ -1,7 +1,10 @@
 name: Release
 
-# Tag push (v0.18.0) → signed-by-nobody beta binaries:
+# Tag push (v0.18.0) → beta binaries without Developer ID:
 # macOS Apple Silicon dmg, macOS Intel dmg, Windows setup.
+# macOS .app is ad-hoc signed (tauri.conf.json bundle.macOS.signingIdentity "-"):
+# without it only the linker signs the Mach-O, the bundle has no CodeResources
+# and a downloaded (quarantined) copy is rejected as "damaged" (P0 0.24.1).
 on:
   push:
     tags:
@@ -18,10 +21,12 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-            bundles: dmg
+            # tb_1790710861_12931_16: app нужен апдейтеру (.app.tar.gz+.sig),
+            # dmg — людям. CLI --bundles ниже перебивает конфиг точечно.
+            bundles: dmg app
           - os: macos-latest
             target: x86_64-apple-darwin
-            bundles: dmg
+            bundles: dmg app
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bundles: nsis msi
@@ -48,10 +53,81 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # tb_1790710861_12931_16: подпись апдейтер-бандлов (.app.tar.gz/.sig,
+          # .nsis.zip/.sig). Без TAURI_SIGNING_PRIVATE_KEY релиз соберётся,
+          # но обновление из приложения работать не будет.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Mark Player ${{ github.ref_name }} beta"
-          releaseBody: "Marker-first video review — playlist to Premiere XML timeline, SRT, JSON sidecar. Unsigned beta: macOS right-click Open on first launch, Windows More info / Run anyway."
+          releaseBody: "Marker-first video review — playlist to Premiere XML timeline, SRT, JSON sidecar. Beta without Apple notarization: on first launch macOS says it cannot verify the app — open System Settings → Privacy & Security → Open Anyway. Windows: More info → Run anyway."
           releaseDraft: false
           prerelease: true
           args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      # Guard: a bundle whose signature does not seal its resources ships as
+      # "damaged". Checks the .app inside the built .dmg — exactly what users
+      # download (with --bundles dmg the bundle/macos dir is not kept).
+      # Fails the job (red release) instead of failing on users' Macs.
+      - name: Verify macOS bundle signature
+        if: runner.os == 'macOS'
+        run: |
+          DMG=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -1)
+          echo "dmg: $DMG"
+          MNT=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$DMG"
+          trap 'hdiutil detach -quiet "$MNT"' EXIT
+          codesign --verify --deep --strict --verbose=2 "$MNT/Mark Player.app"
+          codesign -dv "$MNT/Mark Player.app" 2>&1 | grep -E "Identifier=|Sealed Resources"
+
+  # tb_1790710861_12931_16: latest.json для апдейтера — один раз после всех
+  # платформ (нужны .sig всех трёх). ВАЖНО: /latest/download отдаёт только
+  # НЕ-пререлизные релизы — пока релизы помечены prerelease, endpoint
+  # отвечает 404 и приложение молча остаётся на текущей версии (сеть в
+  # тихой проверке не показывается). Апдейтер оживает на первом полном
+  # релизе; prerelease-флаг меняет Commander, не этот workflow.
+  updater-json:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Craft and upload latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          rm -rf ./sigs latest.json && mkdir -p ./sigs
+          gh release download "$TAG" --pattern '*.sig' --dir ./sigs
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const tag = process.env.TAG;
+            const repo = "danilagoleen/mark-player";
+            const files = fs.readdirSync("./sigs").filter((f) => f.endsWith(".sig")).sort();
+            const platforms = {};
+            for (const sigFile of files) {
+              const bundle = sigFile.slice(0, -".sig".length);
+              if (bundle.endsWith(".msi.zip")) continue; // windows едет через nsis.zip
+              let platform = null;
+              if (bundle.endsWith(".app.tar.gz")) {
+                platform = bundle.includes("aarch64") ? "darwin-aarch64"
+                  : bundle.includes("x86_64") || bundle.includes("x64") ? "darwin-x86_64" : null;
+              } else if (bundle.endsWith(".nsis.zip")) {
+                platform = "windows-x86_64";
+              }
+              if (!platform) continue;
+              platforms[platform] = {
+                signature: fs.readFileSync(path.join("./sigs", sigFile), "utf8").trim(),
+                url: `https://github.com/${repo}/releases/download/${tag}/${bundle}`,
+              };
+            }
+            if (!Object.keys(platforms).length) { console.error("no updater bundles found"); process.exit(1); }
+            fs.writeFileSync("latest.json", JSON.stringify({
+              version: tag,
+              notes: `Mark Player ${tag}`,
+              pub_date: new Date().toISOString(),
+              platforms,
+            }, null, 2) + "\n");
+          '
+          cat latest.json
+          gh release upload "$TAG" latest.json --clobber
