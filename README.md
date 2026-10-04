@@ -1,12 +1,12 @@
-# Mark Player 0.25.2 beta, by VETKA lab
+# Mark Player 0.25.3 beta, by VETKA lab
 
 <img src="docs/screenshots/icon-128.png" width="128" alt="Mark Player icon">
 
 Marker-first video review: open a file, mark the moments, land them in Premiere — frame-accurately.
 
-[⬇ Download for macOS (Apple Silicon)](https://github.com/danilagoleen/mark-player/releases/download/v0.25.2/Mark.Player_0.25.2_aarch64.dmg) ·
-[Intel Mac](https://github.com/danilagoleen/mark-player/releases/download/v0.25.2/Mark.Player_0.25.2_x64.dmg) ·
-[Windows](https://github.com/danilagoleen/mark-player/releases/download/v0.25.2/Mark.Player_0.25.2_x64-setup.exe)
+[⬇ Download for macOS (Apple Silicon)](https://github.com/danilagoleen/mark-player/releases/download/v0.25.3/Mark.Player_0.25.3_aarch64.dmg) ·
+[Intel Mac](https://github.com/danilagoleen/mark-player/releases/download/v0.25.3/Mark.Player_0.25.3_x64.dmg) ·
+[Windows](https://github.com/danilagoleen/mark-player/releases/download/v0.25.3/Mark.Player_0.25.3_x64-setup.exe)
 
 ## Screenshots
 
@@ -56,9 +56,9 @@ Marilyn marked the frames she didn't like. Now any producer marks right in the p
 Grab the latest beta from
 **[Releases](https://github.com/danilagoleen/mark-player/releases)**:
 
-- **macOS Apple Silicon** — `Mark.Player_0.25.2_aarch64.dmg`
-- **macOS Intel** — `Mark.Player_0.25.2_x64.dmg`
-- **Windows 10/11** — `Mark.Player_0.25.2_x64-setup.exe` (installer) or `Mark.Player_0.25.2_x64_en-US.msi`
+- **macOS Apple Silicon** — `Mark.Player_0.25.3_aarch64.dmg`
+- **macOS Intel** — `Mark.Player_0.25.3_x64.dmg`
+- **Windows 10/11** — `Mark.Player_0.25.3_x64-setup.exe` (installer) or `Mark.Player_0.25.3_x64_en-US.msi`
 
 ## Installation (macOS)
 
@@ -80,7 +80,7 @@ Download the `.dmg`, drag **Mark Player** to Applications, then open it.
 > ```
 >
 > **Downloaded 0.24.1 or older and macOS says "…is damaged"?** Those builds
-> shipped without a bundle signature (fixed in 0.25.2). Download the new
+> shipped without a bundle signature (fixed in 0.25.3). Download the new
 > version, or repair the installed one:
 >
 > ```bash
