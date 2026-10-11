@@ -46,11 +46,12 @@ describe("resolveExportToast (Bell №5)", () => {
   });
 });
 
-describe("VETKA_PROMO_TOAST (плеер работает на нас)", () => {
-  it("несёт VETKA lab + github, только EN", () => {
-    expect(VETKA_PROMO_TOAST).toContain("VETKA lab");
-    expect(VETKA_PROMO_TOAST).toContain("github.com/danilagoleen");
-    expect(VETKA_PROMO_TOAST).toContain("Moment registered locally");
+describe("VETKA_PROMO_TOAST (честная заглушка _17)", () => {
+  it("расшифровывает VETKA + coming soon + About, только EN", () => {
+    expect(VETKA_PROMO_TOAST).toContain("VETKA");
+    expect(VETKA_PROMO_TOAST).toContain("Visual Enhanced Tree Knowledge Architecture");
+    expect(VETKA_PROMO_TOAST).toContain("coming soon");
+    expect(VETKA_PROMO_TOAST).toContain("About");
     expect(/[а-яё]/i.test(VETKA_PROMO_TOAST)).toBe(false);
   });
 

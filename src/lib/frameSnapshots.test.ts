@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildVisualReviewHtml,
+  editorPackageDir,
+  editorPackagePlan,
   escapeReviewHtml,
   frameToDataUrl,
   resolveSnapshotSize,
@@ -112,5 +114,30 @@ describe("splitDirName / snapshotDirForFile", () => {
   it("папка кадров рядом с файлом", () => {
     expect(snapshotDirForFile("/a/b/clip.review.html", "clip")).toBe("/a/b/clip.review");
     expect(snapshotDirForFile("clip.review.html", "clip")).toBe("clip.review");
+  });
+});
+
+describe("editorPackageDir / editorPackagePlan (tb_1790711530_12931_17)", () => {
+  it("папка пакета: <parent>/<stem>.editor", () => {
+    expect(editorPackageDir("/a/b", "clip")).toBe("/a/b/clip.editor");
+    expect(editorPackageDir("", "clip")).toBe("clip.editor");
+  });
+
+  it("состав пакета: xml + txt + html + frames/", () => {
+    expect(editorPackagePlan("clip", ["a.jpg", "b.jpg"])).toEqual([
+      "clip.timeline.xml",
+      "clip.review.txt",
+      "clip.review.html",
+      "frames/a.jpg",
+      "frames/b.jpg",
+    ]);
+  });
+
+  it("без кадров — только xml/txt/html", () => {
+    expect(editorPackagePlan("clip", [])).toEqual([
+      "clip.timeline.xml",
+      "clip.review.txt",
+      "clip.review.html",
+    ]);
   });
 });

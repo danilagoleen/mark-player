@@ -707,7 +707,7 @@ function MessageBubbleComponent({ message, onReply, onOpenArtifact, onReaction, 
                 : 'Voice response is being generated'
             }
           >
-            {showVoiceTranscript ? message.content || '' : 'Генерирую голосовое сообщение...'}
+            {showVoiceTranscript ? message.content || '' : 'Generating voice message...'}
           </div>
         </div>
       );

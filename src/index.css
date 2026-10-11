@@ -217,10 +217,60 @@ select {
   display: block;
   transform-origin: center center;
   will-change: transform;
+  position: relative;
+}
+
+/* tb_1791156671_82609_1: дорожка субтитров — низ кадра, safe-area 8%. */
+.subtitle-overlay {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 8%;
+  max-width: 90%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  text-align: center;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.subtitle-cue {
+  color: #fff;
+  background: rgba(0, 0, 0, 0.65);
+  padding: 4px 12px;
+  border-radius: 6px;
+  white-space: pre-line;
+  line-height: 1.35;
 }
 
 .viewer-shell.flex-footer .viewer-area {
   flex: 1 1 auto;
+}
+
+/* tb_1791146301_70644_14: фулскрин — шелл занимает весь вьюпорт, а video-raster
+   становится fluid (100%×100%). Пока raster жил на фиксированных px из snapshot,
+   протухший memo (гонка layout vs fullscreenchange, px-пин shellSizeOverride)
+   оставлял маленькое видео сверху и черноту снизу — и раскладка застревала,
+   потому что ResizeObserver больше не стрелял. CSS-размер неубиваем stale-стейтом:
+   .viewer-video и так 100%×100% + object-fit contain. */
+.viewer-shell.is-fullscreen {
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+  border: 0;
+  box-shadow: none;
+}
+
+.viewer-shell.is-fullscreen .video-raster {
+  width: 100% !important;
+  height: 100% !important;
+  transform: none !important;
+}
+
+.stage-wrap:has(> .viewer-shell.is-fullscreen) {
+  min-height: 100vh;
 }
 
 .player-canvas {
@@ -609,10 +659,15 @@ select {
  * Слот всегда в DOM с мин-высотой — тулбар не прыгает; стиль слота =
  * стиль таймкода, никакого жёлтого. */
 .transport-time-col {
+  position: relative;
   display: inline-flex;
   flex-direction: column;
   align-items: flex-start;
   line-height: 1.25;
+  /* tb_1791689890_1275_2: середина между строками плейхед/сумма — на центр
+   * кнопки play (кончик треугольника смотрит между таймкодами). */
+  margin-top: -2px;
+  margin-top: calc(-2px * var(--player-scale, 1));
 }
 .transport-shuttle-badge {
   min-height: 13px;
@@ -631,6 +686,136 @@ select {
   /* 0.12 слайс 1: HH:MM:SS:FF всегда 11 знаков + крупнее по просьбе оператора */
   font-size: 13px;
   font-size: calc(13px * var(--player-scale, 1));
+  /* tb_1791689890_1275_2: якорь для суммы (flex-элемент и так блочный). */
+  position: relative;
+}
+
+/* tb_1791688104_1275_2: сумма in-out — маленький таймкод в скобках сразу
+ * под таймкодом плейхеда (без слов и иконки). */
+.transport-sum {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  color: #9aa3ad;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  font-size: 10px;
+  font-size: calc(10px * var(--player-scale, 1));
+  /* tb_1791689190_1275_1: чуть ниже таймкода плейхеда. */
+  margin-top: 2px;
+  margin-top: calc(2px * var(--player-scale, 1));
+}
+
+/* tb_1791172090_2308_6 п.3: честный статус зависшей перемотки. */
+.transport-seeking {
+  min-height: 13px;
+  min-height: calc(13px * var(--player-scale, 1));
+  color: #d4dae2;
+  font-size: 11px;
+  font-size: calc(11px * var(--player-scale, 1));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  font-style: italic;
+}
+/* tb_1791233964_7043_5: сумма in-out — прямой ребёнок пилюли
+   transport-bar (position:relative). Висит ПОД пилюлей и никогда не
+   перекрывает шкалу/маркеры; absolute — транспорт не раздвигается.
+   Тот же ряд, тише; длинный текст режется многоточием. */
+.transport-selection {
+  position: absolute;
+  top: 100%;
+  left: 24px;
+  margin-top: 3px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 48px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  color: #9aa3af;
+  font-size: 11px;
+  font-size: calc(11px * var(--player-scale, 1));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.transport-selection svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+/* tb_1791146301_70644_17: окно всех маркеров — тёмная панель в школу Playlist. */
+.panel-page {
+  min-height: 100vh;
+  background: #121416;
+  color: #e8eaed;
+  padding: 12px 14px;
+  font-size: 13px;
+}
+.panel-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.panel-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.panel-count {
+  color: #9aa3af;
+  font-variant-numeric: tabular-nums;
+}
+.panel-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.panel-empty {
+  color: #9aa3af;
+  padding: 18px 4px;
+}
+.panel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.panel-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  color: inherit;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.panel-row:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.panel-row-glyph {
+  flex: none;
+  width: 18px;
+  text-align: center;
+}
+.panel-row-time {
+  flex: none;
+  color: #9aa3af;
+}
+.panel-row-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .transport-progress,
@@ -850,6 +1035,8 @@ select {
 .transport-progress-inout-marker.dragging {
   cursor: grabbing;
 }
+
+/* tb_1791654032_27281_1: пунктир вопрос-скобок упразднён (правила ниже удалены). */
 
 .transport-marker svg {
   width: 18px;

@@ -23,6 +23,6 @@ describe("TRANSPORT_TOOLTIPS", () => {
       expect(tooltipFor(want)).toBe(TRANSPORT_TOOLTIPS[want]);
     }
     expect(tooltipFor("marker-favorite")).toBe("Favorite moment (F)");
-    expect(tooltipFor("marker-comment")).toBe("Comment moment (M)");
+    expect(tooltipFor("marker-comment")).toBe("Markers (M)");
   });
 });

@@ -14,7 +14,7 @@ export const TRANSPORT_TOOLTIPS: Record<TransportTooltipId, string> = {
   "marker-negative": "Negative moment (N)",
   "marker-in": "Mark in point (I)",
   "marker-out": "Mark out point (O)",
-  "marker-comment": "Comment moment (M)",
+  "marker-comment": "Markers (M)",
 };
 
 export function tooltipFor(id: TransportTooltipId): string {

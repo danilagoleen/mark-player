@@ -1,8 +1,15 @@
 import { expect, test } from "@playwright/test";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const VIDEO_FIXTURE = "/Users/danilagulin/Documents/VETKA_Project/vetka_live_03/tools/back_to_ussr_app/docs/media/demo.mp4";
-const IMAGE_FIXTURE = "/Users/danilagulin/work/teletape_temp/berlin/style_lor/66187f5e-acf9-43bc-b3f6-49e697380b06.png";
-const PORTRAIT_IMAGE_FIXTURE = "/Users/danilagulin/work/teletape_temp/berlin/style_lor/319692_photo.jpg";
+// tb_1791169872_2308_5: было — абсолютные фикстуры мёртвых машин
+// (demo.mp4 удалён, картинки из /Users/.../teletape_temp) + мёртвые
+// селекторы (.hud-button, [data-testid="fullscreen-button"] снесены).
+// Стало — локальные фикстуры e2e/fixtures + живой debug-API и testid.
+const dir = path.dirname(fileURLToPath(import.meta.url));
+const VIDEO_FIXTURE = path.resolve(dir, "fixtures/subs_5s.mp4");
+const IMAGE_FIXTURE = path.resolve(dir, "fixtures/landscape.png");
+const PORTRAIT_IMAGE_FIXTURE = path.resolve(dir, "fixtures/portrait.jpg");
 
 test("pure player shell expands with viewport resize without changing action mode", async ({ page }) => {
   await page.setViewportSize({ width: 980, height: 680 });
@@ -39,7 +46,10 @@ test("fullscreen button requests fullscreen in web sandbox", async ({ page }) =>
     return Boolean(snapshot?.ok && snapshot.sourceKind === "video");
   });
 
-  await page.getByTestId("fullscreen-button").click();
+  // Отдельной кнопки фулскрина в UI больше нет (вход — хоткей/тумблер);
+  // глубокий регресс «пол-экрана чёрного» живёт в fullscreen.spec.ts.
+  // Здесь — что запрос фулскрина через API в песочнице срабатывает.
+  await page.evaluate(() => window.vetkaPlayerLab?.toggleFullscreen());
   await page.waitForFunction(() => Boolean(document.fullscreenElement));
 
   const isFullscreen = await page.evaluate(() => Boolean(document.fullscreenElement));
@@ -61,7 +71,7 @@ test("center play button toggles playback without seek jump", async ({ page }) =
     return Number(video?.currentTime || 0);
   });
 
-  await page.locator(".hud-button").click();
+  await page.getByTestId("transport-play-pause").click();
   await page.waitForTimeout(150);
 
   const after = await page.evaluate(() => {
@@ -112,7 +122,7 @@ test("video shows a real first frame preview before playback", async ({ page }) 
 test("image files load as media and keep geometry stable under suggested shell", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 860 });
   await page.goto("/?debug=1");
-  await page.locator('input[type="file"]').setInputFiles(IMAGE_FIXTURE);
+  await page.locator('input[accept="video/*,image/*"]').setInputFiles(IMAGE_FIXTURE);
 
   await page.waitForFunction(() => {
     const snapshot = window.vetkaPlayerLab?.snapshot();
@@ -131,7 +141,7 @@ test("image files load as media and keep geometry stable under suggested shell",
 test("portrait images request a portrait-oriented shell", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 860 });
   await page.goto("/?debug=1");
-  await page.locator('input[type="file"]').setInputFiles(PORTRAIT_IMAGE_FIXTURE);
+  await page.locator('input[accept="video/*,image/*"]').setInputFiles(PORTRAIT_IMAGE_FIXTURE);
 
   await page.waitForFunction(() => {
     const snapshot = window.vetkaPlayerLab?.snapshot();
@@ -144,4 +154,25 @@ test("portrait images request a portrait-oriented shell", async ({ page }) => {
   const snapshot = await page.evaluate(() => window.vetkaPlayerLab?.snapshot());
   expect(snapshot?.sourceKind).toBe("image");
   expect((snapshot?.suggestedShellHeight ?? 0) > (snapshot?.suggestedShellWidth ?? Number.MAX_SAFE_INTEGER)).toBe(true);
+});
+
+test("seek через шкалу сходится к фактическому времени, seeking-бейдж гаснет (tb_1791172090_2308_6 п.3)", async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 840 });
+  await page.goto("/");
+  await page.locator('input[accept="video/*,image/*"]').setInputFiles(VIDEO_FIXTURE);
+  await page.waitForFunction(() => {
+    const snapshot = window.vetkaPlayerLab?.snapshot();
+    return Boolean(snapshot?.ok && snapshot.sourceKind === "video");
+  });
+
+  await page.locator(".transport-progress").fill("3");
+  await page.waitForFunction(() => {
+    const video = document.querySelector("video") as HTMLVideoElement | null;
+    return video !== null && Math.abs(video.currentTime - 3) < 0.35;
+  });
+  // Декодер догнал: бейджа нет, цифра — фактическая позиция
+  // (сик сел на сэмпл 2.76, а не ровно на 3.00 — в этом и суть фикса).
+  await expect(page.getByTestId("transport-seeking")).toHaveCount(0);
+  const text = await page.locator(".transport-time").first().textContent();
+  expect(text).toMatch(/00:00:0[23]:\d{2}/);
 });

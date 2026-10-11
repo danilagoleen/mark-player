@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markerBelongsToMedia, resolveExternalMarkers } from "./markersSync";
+import { MARKERS_RELOAD_EVENT, MEDIA_CHANGED_EVENT, markerBelongsToMedia, notifyMarkersReloaded, resolveEffectiveMedia, resolveExternalMarkers } from "./markersSync";
 
 const ONE = [{ marker_id: "m1", kind: "comment", text: "hello" }];
 
@@ -54,5 +54,37 @@ describe("markerBelongsToMedia (0.22 content-hash identity)", () => {
 
   it("без ключа — false", () => {
     expect(markerBelongsToMedia({ media_path: "a.mp4" }, { mediaKey: null, contentHash: null })).toBe(false);
+  });
+});
+
+// tb_1791654032_27281_1: мост панель→main (иначе правки панели затираются).
+describe("notifyMarkersReloaded", () => {
+  it("имя события стабильно", () => {
+    expect(MARKERS_RELOAD_EVENT).toBe("markers:reload");
+  });
+
+  it("без Tauri — молча no-op, не бросает", () => {
+    expect(() => notifyMarkersReloaded()).not.toThrow();
+  });
+});
+
+describe("resolveEffectiveMedia (tb_1791663832_27409_5: окно следит за видео)", () => {
+  it("без override — identity из query", () => {
+    expect(resolveEffectiveMedia("/v/a.mp4", "hash1", null)).toEqual({ mediaKey: "/v/a.mp4", contentHash: "hash1" });
+  });
+  it("override новее query — берём событие", () => {
+    expect(resolveEffectiveMedia("/v/a.mp4", "hash1", { mediaKey: "/v/b.mp4", contentHash: null })).toEqual({
+      mediaKey: "/v/b.mp4",
+      contentHash: null,
+    });
+  });
+  it("событие без видео — пустой identity (окно пустое, не чужое)", () => {
+    expect(resolveEffectiveMedia("/v/a.mp4", null, { mediaKey: null, contentHash: null })).toEqual({
+      mediaKey: null,
+      contentHash: null,
+    });
+  });
+  it("имя события стабильно", () => {
+    expect(MEDIA_CHANGED_EVENT).toBe("player:media-changed");
   });
 });

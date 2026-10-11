@@ -1,6 +1,14 @@
 import { expect, test } from "@playwright/test";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const VIDEO_FIXTURE = "/Users/danilagulin/Documents/VETKA_Project/vetka_live_03/tools/back_to_ussr_app/docs/media/demo.mp4";
+// tb_1791169872_2308_5: фикстура указывала на удалённый demo.mp4.
+// Локальная фикстура e2e/fixtures; остальное (debug-API, testid,
+// строка «Moment registered locally») в коде живо.
+const VIDEO_FIXTURE = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "fixtures/subs_5s.mp4",
+);
 
 test("VETKA action stays provisional until Core/CUT connection exists", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 980 });
@@ -35,7 +43,9 @@ test("VETKA action stays provisional until Core/CUT connection exists", async ({
   expect(provisionalEvents).toHaveLength(1);
   expect(provisionalEvents?.[0]?.event_type).toBe("vetka_logo_capture");
   expect(provisionalEvents?.[0]?.migration_status).toBe("local_only");
-  await expect(page.getByText("Moment registered locally. VETKA Core/CUT is needed for full workflow.")).toBeVisible();
+  // Клик без Core/CUT: событие в сторе + честный VETKA-промо-тост
+  // (текст события живёт в provisionalEvents, в UI не рендерится).
+  await expect(page.getByTestId("vetka-promo-toast")).toBeVisible();
 });
 
 test("Core/CUT connection flips contextual action to star only when explicitly enabled", async ({ page }) => {

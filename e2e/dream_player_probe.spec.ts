@@ -1,8 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 
-const DEFAULT_VIDEO_FIXTURE = "/Users/danilagulin/Documents/VETKA_Project/vetka_live_03/tools/back_to_ussr_app/docs/media/demo.mp4";
+// tb_1791169872_2308_5: дефолтная фикстура указывала на удалённый demo.mp4.
+// Дефолт — локальная e2e/fixtures; переопределение через env живо.
+const DEFAULT_VIDEO_FIXTURE = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "fixtures/subs_5s.mp4",
+);
 
 test("capture player review screenshot and geometry snapshot", async ({ page }) => {
   const videoPath = process.env.PLAYER_LAB_VIDEO_PATH || DEFAULT_VIDEO_FIXTURE;

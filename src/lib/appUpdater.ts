@@ -17,6 +17,7 @@ export interface UpdateDeps {
 }
 
 export interface UpdateStrings {
+  checking: () => string;
   upToDate: (current: string) => string;
   available: (version: string) => string;
   availableSilent: (version: string) => string;
@@ -27,9 +28,10 @@ export interface UpdateStrings {
 }
 
 export const UPDATE_STRINGS: UpdateStrings = {
+  checking: () => "Checking for updates…",
   upToDate: (current) => `You're up to date (${current}).`,
   available: (version) => `Update available: ${version}. Downloading…`,
-  availableSilent: (version) => `Update ${version} available — install via Help → Check for Updates.`,
+  availableSilent: (version) => `Update ${version} available — install via Mark Player → Check for Updates.`,
   downloading: (version) => `Downloading update ${version}…`,
   progress: (pct) => `Downloading update… ${pct}%`,
   restarting: (version) => `Update ${version} installed. Restarting…`,
@@ -47,7 +49,10 @@ function errText(e: unknown): string {
 }
 
 // Ручная проверка (меню Check for Updates): говорит всё.
+// tb_1791172090_2308_6 п.5: первый тост — синхронно до сети, чтобы при
+// висящем check() пользователь видел реакцию сразу, а не тишину.
 export async function checkForUpdatesNow(deps: UpdateDeps, s: UpdateStrings = UPDATE_STRINGS): Promise<boolean> {
+  deps.toast(s.checking());
   let info: UpdateInfo | null;
   try {
     info = await deps.check();

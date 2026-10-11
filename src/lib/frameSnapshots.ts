@@ -79,6 +79,9 @@ export interface VisualReviewRow {
   text: string;
   fileName: string | null;
   dataUrl: string | null;
+  // tb_1791568769_28503_4: секция плейлиста («1. clip.mp4») — рендер
+  // печатает <h2> при смене секции; у одиночного ревью пусто.
+  section?: string | null;
 }
 
 // Самодостаточный .html: таймкод + тип + текст + превью в строку.
@@ -90,8 +93,13 @@ export function buildVisualReviewHtml(opts: {
   markerCount: number;
   rows: VisualReviewRow[];
 }): string {
+  let lastSection: string | null = null;
   const cards = opts.rows
     .map((r) => {
+      const header = r.section && r.section !== lastSection
+        ? `<h2 class="sec">${escapeReviewHtml(r.section)}</h2>`
+        : "";
+      lastSection = r.section ?? lastSection;
       const preview = r.dataUrl
         ? `<img class="thumb" src="${r.dataUrl}" alt="${escapeReviewHtml(r.fileName ?? "frame")}">`
         : `<div class="thumb missing">no frame</div>`;
@@ -99,7 +107,7 @@ export function buildVisualReviewHtml(opts: {
       const textLine = r.text.trim()
         ? `<div class="text">${escapeReviewHtml(r.text)}</div>`
         : "";
-      return `<div class="card">${preview}<div class="body"><div class="tc">${escapeReviewHtml(r.timecode)} <span class="kind">${escapeReviewHtml(r.kindLabel)}</span></div><div class="name">${escapeReviewHtml(r.name)}</div>${textLine}${fileLine}</div></div>`;
+      return `${header}<div class="card">${preview}<div class="body"><div class="tc">${escapeReviewHtml(r.timecode)} <span class="kind">${escapeReviewHtml(r.kindLabel)}</span></div><div class="name">${escapeReviewHtml(r.name)}</div>${textLine}${fileLine}</div></div>`;
     })
     .join("\n");
   return `<!DOCTYPE html>
@@ -111,6 +119,7 @@ export function buildVisualReviewHtml(opts: {
 body{background:#1a1a1a;color:#eee;font:14px -apple-system,"SF Pro Text",Inter,sans-serif;margin:0;padding:24px}
 h1{font-size:17px;font-weight:600;margin:0 0 4px}
 .sub{color:#999;font-size:12px;margin-bottom:20px}
+.sec{font-size:14px;font-weight:600;margin:20px 0 10px;color:#ccc}
 .card{display:flex;gap:16px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:12px 16px;margin-bottom:12px}
 .thumb{width:240px;max-height:135px;object-fit:cover;border-radius:8px;flex:none;background:#000}
 .thumb.missing{display:flex;align-items:center;justify-content:center;color:#777;font-size:12px;min-height:90px}
@@ -142,4 +151,21 @@ export function snapshotDirForFile(savedPath: string, stem: string): string {
   const { dir } = splitDirName(savedPath);
   const folder = `${stem}.review`;
   return dir ? `${dir}/${folder}` : folder;
+}
+
+// tb_1790711530_12931_17: пакет монтажёру — папка "<stem>.editor/" в
+// выбранном каталоге: timeline XML + review .txt + .html с base64 + frames/.
+export function editorPackageDir(parentDir: string, stem: string): string {
+  const folder = `${stem}.editor`;
+  return parentDir ? `${parentDir}/${folder}` : folder;
+}
+
+// Состав пакета (относительные пути внутри папки пакета).
+export function editorPackagePlan(stem: string, frameFileNames: string[]): string[] {
+  return [
+    `${stem}.timeline.xml`,
+    `${stem}.review.txt`,
+    `${stem}.review.html`,
+    ...frameFileNames.map((f) => `frames/${f}`),
+  ];
 }

@@ -344,6 +344,22 @@ fn emit_menu_event(window: WebviewWindow, action: String) -> Result<(), String> 
         .map_err(|e| format!("emit failed: {e}"))
 }
 
+// tb_1791583578_64923_1: имя пользователя ОС — дефолт подписи комментариев
+// (пассивно: при первом комменте один раз предлагают поправить).
+// Без новых крейтов: USER (macOS/Linux) → USERNAME (Windows) → честная ошибка.
+#[tauri::command]
+fn os_username() -> Result<String, String> {
+    for key in ["USER", "LOGNAME", "USERNAME"] {
+        if let Ok(v) = std::env::var(key) {
+            let clean = v.trim().to_string();
+            if (!clean.is_empty()) && clean.len() <= 64 {
+                return Ok(clean);
+            }
+        }
+    }
+    Err("no username in environment".to_string())
+}
+
 // 0.22: сэмпл байтов для content-hash identity маркеров (копия видео
 // не теряет разметку). Размер + голова/хвост 64KB: два seek, файл целиком
 // в память не грузится. Возвращает массивы байтов — base64-зависимостей
@@ -397,10 +413,17 @@ fn main() {
             open_panel_window,
             emit_menu_event,
             sample_file_bytes,
+            os_username,
         ]);
 
     // Bell №7 + UPD 9: pilot только по явному запросу И только в деве
     // (`npm run tauri:dev` включает фичу; релизный `tauri build` — нет).
+    // tb_1791233252_7043_4: eval pilot возвращается через __callback IPC —
+    // ему нужен pilot:default в capabilities. tauri.conf.json держит
+    // capabilities=["default"] (релиз чист), а dev докладывает инлайн
+    // dev-pilot через --config-оверлей в `npm run tauri:dev`.
+    // Наивный revert pilot:default в default.json невозможен: tauri-build
+    // роняет сборку на неизвестном пермишене, а в релизе pilot не скомпилирован.
     #[cfg(all(debug_assertions, feature = "pilot"))]
     {
         builder = builder.plugin(tauri_plugin_pilot::init());

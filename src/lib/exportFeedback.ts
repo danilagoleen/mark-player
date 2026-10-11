@@ -35,6 +35,7 @@ function basename(path: string): string {
 // VETKA-промо: тост vetka-add (плеер работает на нас). 10 секунд с плавным
 // затуханием (keyframes в index.css), только EN. Отдельный стейт/таймер —
 // общий contextToast 2.2с не трогаем.
+// tb_1791146301_70644_17: честная заглушка — что такое VETKA и куда читать.
 export const VETKA_PROMO_MS = 10_000;
 export const VETKA_PROMO_TOAST =
-  "Moment registered locally. This player is part of VETKA lab — github.com/danilagoleen. Support us!";
+  "VETKA — Visual Enhanced Tree Knowledge Architecture — coming soon, read the About";

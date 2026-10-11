@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { exportMarkersToSrt, importSrtToMarkers, MARKER_PREFIX, appendMarkerToSrt, exportMarkersToSrtV2, exportToSidecar, exportMarkersToXml, exportMarkersToXmeml, exportPlaylistToXmeml, resolvePlaylistMetadata, exportCommentsToText, reviewMarkerName, formatTimecode, resolveXmlFps, resolveXmlFpsSource, resolveXmlHasAudio, exportMarkersToEdl, resolveMarkerColor, sanitizeEdlNote, edlAscii } from "./srtUtils";
+import { exportMarkersToSrt, importSrtToMarkers, MARKER_PREFIX, appendMarkerToSrt, exportMarkersToSrtV2, exportToSidecar, exportMarkersToXml, exportMarkersToXmeml, exportPlaylistToXmeml, resolvePlaylistMetadata, exportCommentsToText, reviewMarkerName, formatTimecode, resolveXmlFps, resolveXmlFpsSource, resolveXmlHasAudio, exportMarkersToEdl, resolveMarkerColor, sanitizeEdlNote, edlAscii, describeFpsHonesty, fpsMismatchNote, formatFpsShort, splitMarkerPrefixLine } from "./srtUtils";
 
 interface TestMarker {
   marker_id: string;
@@ -638,6 +638,21 @@ describe("exportCommentsToText", () => {
     expect(lines[2]).toContain("illustration from 6th second");
   });
 
+  // tb_1791143015_70644_11: строка честности — шапкой после header.
+  it("puts honesty note right after the header", () => {
+    const txt = exportCommentsToText(
+      [{ kind: "favorite", start_sec: 4, end_sec: 4, label: "good", text: "" }],
+      30,
+      "Review notes — clip.mp4",
+      undefined,
+      "timeline 30 NTSC (detected 29.97) — verify fps in NLE",
+    );
+    const lines = txt.split("\n");
+    expect(lines[0]).toBe("Review notes — clip.mp4");
+    expect(lines[1]).toContain("verify fps in NLE");
+    expect(lines[2]).toContain("★ good");
+  });
+
   it("pairs in/out into Cut lines, lone in runs to end", () => {
     const txt = exportCommentsToText(
       [
@@ -702,6 +717,140 @@ describe("reviewMarkerName", () => {
     expect(reviewMarkerName("negative", "")).toBe("✗ NEGATIVE");
     expect(reviewMarkerName("comment", "")).toBe("comment");
   });
+
+  // tb_1791583578_64923_1: автор суффиксом, пустой — как раньше.
+  it("appends author when present", () => {
+    expect(reviewMarkerName("comment", "спорно", "agent:Beta")).toBe("· спорно · agent:Beta");
+    expect(reviewMarkerName("favorite", "good", "")).toBe("★ good");
+    expect(reviewMarkerName("favorite", "good")).toBe("★ good");
+  });
+});
+
+// tb_1791583578_64923_1: автор коммента — 3-й сегмент SRT.
+describe("comment author in SRT transport", () => {
+  it("split выделяет автора из 3 сегментов", () => {
+    expect(splitMarkerPrefixLine("· спорно | agent:Beta | проверить")).toEqual({
+      kind: "comment", label: "спорно", author: "agent:Beta", text: "проверить",
+    });
+    expect(splitMarkerPrefixLine("⇒ заминка 3")).toEqual({
+      kind: "in", label: "заминка 3", author: "", text: "",
+    });
+  });
+
+  it("2 сегмента — легаси (label | text); 4+ — весь хвост текст", () => {
+    expect(splitMarkerPrefixLine("★ Favorite | keep")).toEqual({
+      kind: "favorite", label: "Favorite", author: "", text: "keep",
+    });
+    expect(splitMarkerPrefixLine("★ Favorite | a | b | c")).toEqual({
+      kind: "favorite", label: "Favorite", author: "", text: "a | b | c",
+    });
+  });
+
+  it("V2 пишет автора только когда он есть, импорт возвращает", () => {
+    const withAuthor = {
+      marker_id: "m1", kind: "comment", start_sec: 1, end_sec: 2, anchor_sec: 1.5,
+      label: "спорно", text: "проверить", media_path: "v.mp4", author: "agent:Beta",
+    };
+    const srt = exportMarkersToSrtV2([withAuthor]);
+    expect(srt).toContain("· спорно | agent:Beta | проверить");
+    const [back] = importSrtToMarkers(srt, "v.mp4");
+    expect(back.author).toBe("agent:Beta");
+    expect(back.label).toBe("спорно");
+    expect(back.text).toBe("проверить");
+  });
+
+  it("без автора формат байт-в-байт как раньше", () => {
+    const plain = {
+      marker_id: "m1", kind: "comment", start_sec: 1, end_sec: 2, anchor_sec: 1.5,
+      label: "спорно", text: "проверить", media_path: "v.mp4",
+    };
+    expect(exportMarkersToSrtV2([plain])).toContain("· спорно | проверить");
+    expect(exportMarkersToSrtV2([plain])).not.toContain("agent:");
+  });
+
+  it("XML несёт автора в имени, EDL — в note", () => {
+    const opts = { fps: 25, durationSec: 10, sourcePath: "/v.mp4", width: 0, height: 0 };
+    const xml = exportMarkersToXmeml(
+      [{ marker_id: "m1", kind: "comment", start_sec: 1, end_sec: 1, label: "спорно", text: "t", author: "agent:Beta" }],
+      opts,
+    );
+    expect(xml).toContain("<name>· спорно · agent:Beta</name>");
+    const edl = exportMarkersToEdl(
+      [{ kind: "comment", start_sec: 1, end_sec: 2, label: "good", text: "", author: "Danila" }],
+      25, "t",
+    );
+    expect(edl).toContain("Danila");
+  });
+
+  it("sidecar пишет автора", () => {
+    const json = JSON.parse(exportToSidecar(
+      [{ marker_id: "m1", kind: "comment", start_sec: 1, end_sec: 2, anchor_sec: 1.5, label: "x", text: "", author: "agent:Beta" }],
+      [], "v.mp4",
+    ));
+    expect(json.markers[0].author).toBe("agent:Beta");
+  });
+});
+
+// tb_1791585558_31907_1: reply — ссылка ↳ <id>: в тексте SRT.
+describe("comment replies in transport", () => {
+  it("V2 пишет ссылку, импорт возвращает reply_to и чистый текст", () => {
+    const reply = {
+      marker_id: "r1", kind: "comment", start_sec: 2, end_sec: 2, anchor_sec: 2,
+      label: "re", text: "принято", media_path: "v.mp4", author: "Danila", reply_to: "q03-c1",
+    };
+    const srt = exportMarkersToSrtV2([reply]);
+    expect(srt).toContain("· re | Danila | ↳ q03-c1: принято");
+    const [back] = importSrtToMarkers(srt, "v.mp4");
+    expect(back.reply_to).toBe("q03-c1");
+    expect(back.text).toBe("принято");
+    expect(back.author).toBe("Danila");
+  });
+
+  it("старый плеер читает ответ как обычный коммент (деградация)", () => {
+    const [back] = importSrtToMarkers(
+      "1\n00:00:02,000 --> 00:00:02,000\n· re | Danila | ↳ q03-c1: принято\n",
+      "v.mp4",
+    );
+    // вид и автор на месте даже без понимания reply_to
+    expect(back.kind).toBe("comment");
+    expect(back.author).toBe("Danila");
+  });
+
+  it("без reply_to формат как раньше", () => {
+    const plain = {
+      marker_id: "m1", kind: "comment", start_sec: 1, end_sec: 2, anchor_sec: 1.5,
+      label: "x", text: "t", media_path: "v.mp4",
+    };
+    expect(exportMarkersToSrtV2([plain])).not.toContain("↳");
+  });
+
+  it("XML/EDL/txt помечают ответ ↳", () => {
+    const opts = { fps: 25, durationSec: 10, sourcePath: "/v.mp4", width: 0, height: 0 };
+    const xml = exportMarkersToXmeml(
+      [{ marker_id: "r1", kind: "comment", start_sec: 1, end_sec: 1, label: "re", text: "t", reply_to: "q03-c1" }],
+      opts,
+    );
+    expect(xml).toContain("<name>↳ · re</name>");
+    const edl = exportMarkersToEdl(
+      [{ kind: "comment", start_sec: 1, end_sec: 2, label: "re", text: "t", reply_to: "q03-c1" }],
+      25, "t",
+    );
+    // EDL строго ASCII: пометка ответа ">> " вместо ↳, глиф · тоже срезан
+    expect(edl).toContain(">> re: t");
+    const txt = exportCommentsToText(
+      [{ kind: "comment", start_sec: 1, end_sec: 1, label: "re", text: "t", reply_to: "q03-c1" }],
+      25,
+    );
+    expect(txt).toContain("↳ · re");
+  });
+
+  it("sidecar пишет reply_to", () => {
+    const json = JSON.parse(exportToSidecar(
+      [{ marker_id: "r1", kind: "comment", start_sec: 1, end_sec: 2, anchor_sec: 1.5, label: "x", text: "t", reply_to: "q03-c1" }],
+      [], "v.mp4",
+    ));
+    expect(json.markers[0].reply_to).toBe("q03-c1");
+  });
 });
 
 // [signal: 0.24 EDL для DaVinci — диалект BMD] [project: cut-player]
@@ -763,5 +912,78 @@ describe("exportMarkersToEdl", () => {
     expect(sanitizeEdlNote(null)).toBe("");
     expect(sanitizeEdlNote("ДО ★")).toBe("DO");
     expect(edlAscii("Монтаж—финал")).toBe("Montazhfinal");
+  });
+});
+
+// tb_1791146800_70644_20: текст на fav/neg едет в существующие поля экспорта.
+describe("marker text on any kind reaches exports", () => {
+  const fav = {
+    marker_id: "f1",
+    kind: "favorite",
+    start_sec: 1,
+    end_sec: 2,
+    anchor_sec: 1.5,
+    label: "good",
+    text: "держать — свет",
+    media_path: "a.mp4",
+  };
+  const neg = { ...fav, marker_id: "n1", kind: "negative", label: "bad", text: "брак" };
+
+  it("SRT V1 дописывает текст к favorite/negative", () => {
+    const srt = exportMarkersToSrt([fav, neg]);
+    expect(srt).toContain("держать — свет");
+    expect(srt).toContain("брак");
+  });
+
+  it("EDL несёт текст fav в note (|M:)", () => {
+    const edl = exportMarkersToEdl(
+      [{ kind: "favorite", start_sec: 1, end_sec: 2, label: "good", text: "keep this" }],
+      25,
+      "t",
+    );
+    expect(edl).toContain("keep this");
+  });
+
+  it("XMEML кладёт текст fav в <comment> маркера", () => {
+    const xml = exportMarkersToXmeml(
+      [{ marker_id: "f1", kind: "favorite", start_sec: 4, end_sec: 4, label: "good", text: "nice" }],
+      { fps: 25, width: 1280, height: 720, durationSec: 20, sourcePath: "/tmp/t.mp4", sequenceName: "R", hasAudio: true },
+    );
+    expect(xml).toContain("<comment>nice</comment>");
+  });
+
+  it("наш Markers XML кладёт текст fav в <text>", () => {
+    const xml = exportMarkersToXml(
+      [{ marker_id: "f1", kind: "favorite", start_sec: 4, end_sec: 5, label: "good", text: "nice" }],
+    );
+    expect(xml).toContain("<text>nice</text>");
+  });
+});
+
+// tb_1791143015_70644_11: FPS-честность — detected vs authored.
+describe("describeFpsHonesty", () => {
+  it("flags NTSC mismatch on fractional container fps", () => {
+    const h = describeFpsHonesty(29.97003, null, null);
+    expect(h).toMatchObject({ detected: 29.97003, authoredTimebase: 30, ntsc: true, mismatch: true });
+    expect(h.badge).toBe("29.97 → 30 NTSC");
+    expect(fpsMismatchNote(h)).toContain("verify fps in NLE");
+  });
+
+  it("is quiet on integer fps", () => {
+    const h = describeFpsHonesty(25, null, null);
+    expect(h).toMatchObject({ authoredTimebase: 25, ntsc: false, mismatch: false });
+    expect(h.badge).toBe("25");
+    expect(fpsMismatchNote(h)).toBeUndefined();
+  });
+
+  it("falls back without container, keeps chain", () => {
+    const h = describeFpsHonesty(null, null, null);
+    expect(h).toMatchObject({ detected: null, authoredTimebase: 25, mismatch: false });
+    expect(describeFpsHonesty(null, 23.976, null).mismatch).toBe(true);
+  });
+
+  it("formatFpsShort trims to 2 decimals", () => {
+    expect(formatFpsShort(29.97003)).toBe("29.97");
+    expect(formatFpsShort(25)).toBe("25");
   });
 });

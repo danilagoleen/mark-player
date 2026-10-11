@@ -1,3 +1,5 @@
+import type { QuestionEntryFields, QuestionPlaylistSource } from "./questionPlaylist";
+
 export interface PlaylistEntry {
   path: string;
   name: string;
@@ -5,11 +7,19 @@ export interface PlaylistEntry {
   addedAt: string;
 }
 
+// tb_1791521998_11250_5: запись-вопрос — все поля необязательные,
+// старый плейлист без них открывается как раньше.
+export interface QuestionPlaylistEntry extends PlaylistEntry, QuestionEntryFields {}
+
 export interface Playlist {
   id: string;
   name: string;
   entries: PlaylistEntry[];
   createdAt: string;
+  /** vetka.cut.question_playlist/1 — только у плейлиста-вопроса */
+  schema?: string;
+  /** кто спросил и о чём (by/task/layer) */
+  source?: QuestionPlaylistSource;
 }
 
 const STORAGE_KEY = "vetka_player_lab_playlist_v1";
@@ -56,6 +66,25 @@ export function addEntry(playlist: Playlist, entry: Omit<PlaylistEntry, "addedAt
 export function addEntryIfAbsent(playlist: Playlist, entry: Omit<PlaylistEntry, "addedAt">): Playlist {
   if (!entry.path || playlist.entries.some((e) => e.path === entry.path)) return playlist;
   return addEntry(playlist, entry);
+}
+
+// tb_1791563210_29299_4: открытое видео НЕ дописываем в плейлист-вопрос —
+// иначе в хвосте агентского «вот N мест для проверки» копятся левые записи.
+// Эвристика та же, что isQuestionPlaylist, но без импорта-цикла:
+// схема вопроса либо хоть одна запись с вопросом.
+export function trackOpenedFile(
+  base: Playlist | null,
+  entry: Omit<PlaylistEntry, "addedAt">,
+): Playlist {
+  const list = base ?? createEmptyPlaylist();
+  const entries = list.entries as (PlaylistEntry & { question_id?: unknown })[];
+  if (
+    (list as { schema?: unknown }).schema === "vetka.cut.question_playlist/1" ||
+    entries.some((e) => typeof e.question_id === "string")
+  ) {
+    return list;
+  }
+  return addEntryIfAbsent(list, entry);
 }
 
 export function removeEntry(playlist: Playlist, path: string): Playlist {
@@ -152,4 +181,18 @@ export function deserializePlaylist(json: string): Playlist | null {
   } catch {
     return null;
   }
+}
+
+// tb_1791143015_70644_10: имя плейлиста редактируется из шапки панели.
+// Пустое/пробельное — откат к дефолту, окаменелостей вроде «Bell gate» больше нет.
+export function renamePlaylist(playlist: Playlist, name: string): Playlist {
+  const clean = name.trim();
+  return { ...playlist, name: clean || "New Playlist" };
+}
+
+// Имя плейлиста → имя файла экспорта: только латиница/цифры, серии мусора —
+// в один _, края чистятся, пустое — «playlist».
+export function sanitizePlaylistFilename(name: string | null | undefined): string {
+  const flat = (name ?? "").trim().replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return flat || "playlist";
 }

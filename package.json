@@ -1,7 +1,7 @@
 {
   "name": "vetka-video-player-lab",
   "private": true,
-  "version": "0.25.3",
+  "version": "0.25.51",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,7 +11,7 @@
     "test:e2e": "playwright test",
     "test:e2e:player": "playwright test e2e/contextual_markers.spec.ts e2e/lab_geometry.spec.ts e2e/dream_player_probe.spec.ts e2e/player_stability.spec.ts",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev --features pilot",
+    "tauri:dev": "tauri dev --features pilot --config '{\"app\":{\"security\":{\"capabilities\":[\"default\",{\"identifier\":\"dev-pilot\",\"description\":\"Dev-only: tauri-pilot eval callback IPC (never in release)\",\"windows\":[\"main\",\"panel-playlist\",\"panel-comments\"],\"permissions\":[\"pilot:default\"]}]}}}'",
     "tauri:build": "tauri build"
   },
   "dependencies": {

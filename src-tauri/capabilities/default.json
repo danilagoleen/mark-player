@@ -17,9 +17,18 @@
     "updater:default",
     "process:default",
     "fs:default",
-    "fs:allow-write-text-file",
-    "fs:allow-write-file",
-    "fs:allow-mkdir",
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [{ "path": "$HOME/**" }, { "path": "/Volumes/**" }, { "path": "$TEMP/**" }]
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [{ "path": "$HOME/**" }, { "path": "/Volumes/**" }, { "path": "$TEMP/**" }]
+    },
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [{ "path": "$HOME/**" }, { "path": "/Volumes/**" }, { "path": "$TEMP/**" }]
+    },
     {
       "identifier": "fs:allow-read-text-file",
       "allow": [{ "path": "$HOME/**" }, { "path": "/Volumes/**" }, { "path": "$TEMP/**" }]

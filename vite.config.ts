@@ -18,6 +18,10 @@ export default defineConfig({
         comments: resolve(__dirname, "comments.html"),
         playlist: resolve(__dirname, "playlist.html"),
         about: resolve(__dirname, "about.html"),
+        // tb_1791654032_27281_1: окно маркеров упразднено (единое окно —
+        // comments.html, титр Markers).
+        // tb_1791156678_82609_2: окно-хост модульной страницы (§11).
+        "module-host": resolve(__dirname, "module-host.html"),
       },
     },
   },

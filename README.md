@@ -1,12 +1,12 @@
-# Mark Player 0.25.3 beta, by VETKA lab
+# Mark Player 0.25.51 beta, by VETKA lab
 
 <img src="docs/screenshots/icon-128.png" width="128" alt="Mark Player icon">
 
 Marker-first video review: open a file, mark the moments, land them in Premiere — frame-accurately.
 
-[⬇ Download for macOS (Apple Silicon)](https://github.com/danilagoleen/mark-player/releases/download/v0.25.3/Mark.Player_0.25.3_aarch64.dmg) ·
-[Intel Mac](https://github.com/danilagoleen/mark-player/releases/download/v0.25.3/Mark.Player_0.25.3_x64.dmg) ·
-[Windows](https://github.com/danilagoleen/mark-player/releases/download/v0.25.3/Mark.Player_0.25.3_x64-setup.exe)
+[⬇ Download for macOS (Apple Silicon)](https://github.com/danilagoleen/mark-player/releases/download/v0.25.51/Mark.Player_0.25.51_aarch64.dmg) ·
+[Intel Mac](https://github.com/danilagoleen/mark-player/releases/download/v0.25.51/Mark.Player_0.25.51_x64.dmg) ·
+[Windows](https://github.com/danilagoleen/mark-player/releases/download/v0.25.51/Mark.Player_0.25.51_x64-setup.exe)
 
 <video src="docs/promo/mark_player_promo_16x9_v4.mp4" width="100%" controls></video>
 *Watch it in action — mark the moments, land them in Premiere.*
@@ -59,9 +59,9 @@ Marilyn marked the frames she didn't like. Now any producer marks right in the p
 Grab the latest beta from
 **[Releases](https://github.com/danilagoleen/mark-player/releases)**:
 
-- **macOS Apple Silicon** — `Mark.Player_0.25.3_aarch64.dmg`
-- **macOS Intel** — `Mark.Player_0.25.3_x64.dmg`
-- **Windows 10/11** — `Mark.Player_0.25.3_x64-setup.exe` (installer) or `Mark.Player_0.25.3_x64_en-US.msi`
+- **macOS Apple Silicon** — `Mark.Player_0.25.51_aarch64.dmg`
+- **macOS Intel** — `Mark.Player_0.25.51_x64.dmg`
+- **Windows 10/11** — `Mark.Player_0.25.51_x64-setup.exe` (installer) or `Mark.Player_0.25.51_x64_en-US.msi`
 
 ## Installation (macOS)
 

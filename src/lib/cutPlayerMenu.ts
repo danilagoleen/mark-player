@@ -14,11 +14,19 @@ export type CutPlayerMenuAction =
   | "export_json"
   | "export_xml"
   | "export_playlist_xml"
+  | "export_playlist_srt"
+  | "export_playlist_json"
+  | "export_playlist_review_notes"
+  | "export_playlist_visual_notes"
+  | "export_playlist_edl"
+  | "send_playlist_editor_package"
   | "export_review_notes"
   | "export_visual_notes"
+  | "send_editor_package"
   | "import_srt"
   | "import_markers_json"
   | "import_markers_xml"
+  | "import_cutsheet"
   | "screenshot"
   | "playlist"
   | "chat"
@@ -31,6 +39,7 @@ export type CutPlayerMenuAction =
   | "audio_device"
   | "play_pause"
   | "stop"
+  | "inout_play_toggle"
   | "frame_step_back"
   | "frame_step_forward"
   | "jump_to_time"
@@ -48,6 +57,8 @@ export type CutPlayerMenuAction =
   | "float_on_top"
   | "aspect_ratio"
   | "subtitle_file"
+  | "subtitle_show"
+  | "subtitle_remove"
   | "subtitle_track"
   | "subtitle_delay"
   | "subtitle_style"
@@ -66,6 +77,8 @@ export type CutPlayerMenuAction =
   | "zoom"
   | "bring_all_front"
   | "load_module_chat"
+  | "load_module_index"
+  | "module_review_panel"
   | "load_module_playlist"
   | "load_module_nle"
   | "load_module_thalamus"
@@ -78,11 +91,12 @@ export type CutPlayerMenuAction =
   | "about"
   | "feedback"
   | "github"
+  | "releases"
   | "updates";
 
 export type CutPlayerMenuActionHandler = (action: CutPlayerMenuAction) => void;
 
-import type { MenuItem, PredefinedMenuItem, Submenu } from "@tauri-apps/api/menu";
+import type { CheckMenuItem, MenuItem, PredefinedMenuItem, Submenu } from "@tauri-apps/api/menu";
 
 export interface CutPlayerMenuItemSpec {
   id: string;
@@ -92,7 +106,9 @@ export interface CutPlayerMenuItemSpec {
   separatorBefore?: boolean;
   // Bell №4: false = visible but greyed (soon-stub). Default true.
   enabled?: boolean;
-  kind?: "item" | "predefined" | "submenu";
+  kind?: "item" | "predefined" | "submenu" | "check";
+  // tb_1791143015_70644_7: только для kind "check" (нативный чекбокс тумблера).
+  checked?: boolean;
   predefined?: "About" | "Hide" | "Quit" | "Separator" | "Undo" | "Redo" | "Cut" | "Copy" | "Paste" | "SelectAll";
   items?: CutPlayerMenuItemSpec[];
 }
@@ -105,7 +121,7 @@ export interface CutPlayerMenuSectionSpec {
 
 const NLE_ONLY_KEYS = [",", ".", "F9", "F10", "F11", "F12", "C", "B", "V", "A", "Q", "W", "ArrowUp", "ArrowDown", "CmdOrCtrl+K", "CmdOrCtrl+1", "CmdOrCtrl+2", "CmdOrCtrl+3", "CmdOrCtrl+4", "CmdOrCtrl+5", "Y", "U", "R", "H", "Z"];
 
-export function buildCutPlayerMenuSpec(): CutPlayerMenuSectionSpec[] {
+export function buildCutPlayerMenuSpec(opts?: { subtitlesVisible?: boolean; inOutPlayOn?: boolean }): CutPlayerMenuSectionSpec[] {
   return [
     {
       id: "app",
@@ -113,6 +129,9 @@ export function buildCutPlayerMenuSpec(): CutPlayerMenuSectionSpec[] {
       items: [
         // About — наше окно (версия + кнопки), а не нативный диалог без кнопок.
         { id: "app_about", label: "About Mark Player", action: "about" },
+        // HIG: Check for Updates живёт под именем продукта (app-меню),
+        // рядом с About — на macOS это нативное меню, action идёт тем же каналом.
+        { id: "app_updates", label: "Check for Updates…", action: "updates" },
         // Preferences убран: настроек нет, мёртвых кнопок не держим (Bell №4).
         // Вернуть когда появится первая настройка — вместе с CmdOrCtrl+,.
         { id: "app_hide", label: "Hide", kind: "predefined", predefined: "Hide", separatorBefore: true },
@@ -130,19 +149,34 @@ export function buildCutPlayerMenuSpec(): CutPlayerMenuSectionSpec[] {
         { id: "file_import", label: "Import", kind: "submenu", separatorBefore: true, items: [
           { id: "file_import_srt", label: "Subtitles (SRT)…", action: "import_srt", accelerator: "CmdOrCtrl+Shift+O" },
           { id: "file_import_markers", label: "Markers (JSON)…", action: "import_markers_json" },
-          { id: "file_import_markers_xml", label: "Markers (XML)…", action: "import_markers_xml" },
+          { id: "file_import_markers_xml", label: "Markers (XML)… (CUT)", action: "import_markers_xml", enabled: false },
+          { id: "file_import_cutsheet", label: "Cutsheet preview (.json)…", action: "import_cutsheet" },
           { id: "file_import_project", label: "Project… (NLE — soon)", action: "export_otio", enabled: false },
         ] },
         { id: "file_export", label: "Export", kind: "submenu", items: [
-          { id: "file_export_srt", label: "Subtitles (SRT)…", action: "export_srt", accelerator: "CmdOrCtrl+S" },
-          { id: "file_export_json", label: "Markers (JSON/SOS)…", action: "export_json" },
-          { id: "file_export_xml", label: "Timeline (XML)…", action: "export_xml" },
-          { id: "file_export_playlist_xml", label: "Playlist Timeline (XML)…", action: "export_playlist_xml" },
-          { id: "file_export_review_notes", label: "Review Notes (.txt)…", action: "export_review_notes" },
-          { id: "file_export_visual_notes", label: "Visual Review Notes (frames)…", action: "export_visual_notes" },
-          { id: "file_send_to_editor", label: "Send to editor…", action: "export_playlist_xml" },
-          { id: "file_export_edl", label: "Markers (EDL, DaVinci)…", action: "export_edl" },
-          { id: "file_export_otio", label: "OTIO/CUT Project… (NLE)", action: "export_otio", enabled: false },
+          // tb_1791568755_28503_2: два подменю — Current Video (8 живых
+          // пунктов, id/label/action не тронуты) и Playlist (названия типов
+          // один в один как в сингле, без слова Playlist — контекст уже дан
+          // заголовком подменю; soon-суффикс спадёт при включении).
+          { id: "file_export_current", label: "Current Video", kind: "submenu", items: [
+            { id: "file_export_srt", label: "Subtitles (SRT)…", action: "export_srt", accelerator: "CmdOrCtrl+S" },
+            { id: "file_export_json", label: "Markers (JSON/SOS)…", action: "export_json" },
+            { id: "file_export_xml", label: "Timeline (XML)…", action: "export_xml" },
+            { id: "file_export_review_notes", label: "Review Notes (.txt)…", action: "export_review_notes" },
+            { id: "file_export_visual_notes", label: "Visual Review Notes (frames)…", action: "export_visual_notes" },
+            { id: "file_send_to_editor", label: "Send to editor…", action: "send_editor_package" },
+            { id: "file_export_edl", label: "Markers (EDL, DaVinci)…", action: "export_edl" },
+            { id: "file_export_otio", label: "OTIO/CUT Project… (NLE)", action: "export_otio", enabled: false },
+          ] },
+          { id: "file_export_playlist", label: "Playlist", kind: "submenu", items: [
+            { id: "file_export_playlist_xml", label: "Timeline (XML)…", action: "export_playlist_xml" },
+            { id: "file_export_playlist_srt", label: "Subtitles (SRT)…", action: "export_playlist_srt" },
+            { id: "file_export_playlist_json", label: "Markers (JSON/SOS)…", action: "export_playlist_json" },
+            { id: "file_export_playlist_review_notes", label: "Review Notes (.txt)…", action: "export_playlist_review_notes" },
+            { id: "file_export_playlist_visual_notes", label: "Visual Review Notes (frames)…", action: "export_playlist_visual_notes" },
+            { id: "file_export_playlist_editor", label: "Send to editor…", action: "send_playlist_editor_package" },
+            { id: "file_export_playlist_edl", label: "Markers (EDL, DaVinci)…", action: "export_playlist_edl" },
+          ] },
         ] },
         { id: "file_screenshot", label: "Take Screenshot (soon)", action: "screenshot", accelerator: "CmdOrCtrl+Shift+S", separatorBefore: true, enabled: false },
         { id: "file_quit", label: "Quit", kind: "predefined", predefined: "Quit", separatorBefore: true },
@@ -158,6 +192,13 @@ export function buildCutPlayerMenuSpec(): CutPlayerMenuSectionSpec[] {
         // двойной откат — меню-акселератор плюс keydown.
         { id: "edit_undo", label: "Undo", action: "undo" },
         { id: "edit_redo", label: "Redo", action: "redo" },
+        // tb_1791566368_28503_1: нативный clipboard — без этих ролей macOS
+        // не отдаёт ⌘X/C/V/A в webview (в окне комментариев текст жил
+        // только через правклик). Свои Undo/Redo не трогаем.
+        { id: "edit_cut", label: "Cut", kind: "predefined", predefined: "Cut", separatorBefore: true },
+        { id: "edit_copy", label: "Copy", kind: "predefined", predefined: "Copy" },
+        { id: "edit_paste", label: "Paste", kind: "predefined", predefined: "Paste" },
+        { id: "edit_select_all", label: "Select All", kind: "predefined", predefined: "SelectAll" },
         // 0.21: Clear по видам (фидбэк оператора). Confirm с разбивкой +
         // undo-стек — в performClearMarkers, здесь только спецификация.
         { id: "edit_clear", label: "Clear", kind: "submenu", separatorBefore: true, items: [
@@ -192,6 +233,10 @@ export function buildCutPlayerMenuSpec(): CutPlayerMenuSectionSpec[] {
           { id: "pb_speed_2", label: "2x", action: "speed_2" },
         ] },
         { id: "pb_loop", label: "Loop / Repeat", action: "loop_toggle", separatorBefore: true },
+        // tb_1791143015_70644_7: тумблер In–Out Play (ножницы-плёнка).
+        // Без accelerator: голый S дублировался бы с DOM-хоткеем (двойной
+        // тоггл = нет эффекта); S ловит keydown с typing-guard.
+        { id: "pb_inout_play", label: "In–Out Play", action: "inout_play_toggle", kind: "check", checked: opts?.inOutPlayOn ?? true },
       ],
     },
     {
@@ -228,6 +273,10 @@ export function buildCutPlayerMenuSpec(): CutPlayerMenuSectionSpec[] {
       label: "Subtitle",
       items: [
         { id: "sub_file", label: "Add Subtitle File…", action: "subtitle_file" },
+        // tb_1791156671_82609_1: чекбокс текстом (✓) — меню строится один раз,
+        // App пересобирает его при смене видимости (Tauri-only, дёшево).
+        { id: "sub_show", label: opts?.subtitlesVisible ? "✓ Show Subtitles" : "Show Subtitles", action: "subtitle_show" },
+        { id: "sub_remove", label: "Remove Subtitles", action: "subtitle_remove" },
         { id: "sub_track", label: "Subtitle Track (soon)", kind: "submenu", separatorBefore: true, enabled: false, items: [
           { id: "sub_track_next", label: "Next Track", action: "subtitle_track", enabled: false },
         ] },
@@ -260,9 +309,11 @@ export function buildCutPlayerMenuSpec(): CutPlayerMenuSectionSpec[] {
         { id: "win_playlist", label: "Playlist", action: "playlist_panel", separatorBefore: true },
         { id: "win_chat", label: "Chat (AI module — soon)", action: "chat_panel", enabled: false },
         { id: "win_comments", label: "Comments", action: "comments_panel" },
+        // tb_1791156678_82609_2: окно проверки слоёв модуля (§11) — как Comments/Playlist.
+        { id: "win_module_review", label: "Index Review", action: "module_review_panel" },
         { id: "win_media_info", label: "Media Information (soon)", action: "media_info", accelerator: "CmdOrCtrl+I", enabled: false },
         { id: "win_task_board", label: "Task Board (THALAMUS, soon)", action: "task_board", separatorBefore: true, enabled: false },
-        { id: "win_bring_front", label: "Bring All to Front (soon)", action: "bring_all_front", enabled: false },
+        { id: "win_bring_front", label: "Bring All to Front", action: "bring_all_front" },
       ],
     },
     {
@@ -270,6 +321,10 @@ export function buildCutPlayerMenuSpec(): CutPlayerMenuSectionSpec[] {
       label: "Tools",
       items: [
         { id: "tools_load_module", label: "Load Module", kind: "submenu", items: [
+          // tb_1791156678_82609_2: хост модульного окна (§11) — читает module.json.
+          // tb_1791346290_38729_4: до готовности облачного модуля — честная
+          // soon-заглушка (Bell №4): пункт виден, но неактивен.
+          { id: "tools_lm_index", label: "Indexing (soon)", action: "load_module_index", enabled: false },
           { id: "tools_lm_chat", label: "Chat Module (soon)", action: "load_module_chat", enabled: false },
           { id: "tools_lm_playlist", label: "Playlist / Scanner (soon)", action: "load_module_playlist", enabled: false },
           { id: "tools_lm_nle", label: "CUT NLE (soon)", action: "load_module_nle", enabled: false },
@@ -287,7 +342,8 @@ export function buildCutPlayerMenuSpec(): CutPlayerMenuSectionSpec[] {
         { id: "help_shortcuts", label: "Keyboard Shortcuts", action: "shortcuts" },
         { id: "help_feedback", label: "Send Feedback…", action: "feedback", separatorBefore: true },
         { id: "help_github", label: "GitHub Repository", action: "github" },
-        { id: "help_updates", label: "Check for Updates", action: "updates" },
+        // HIG: проверка обновлений переехала в app-меню; в Help осталась ссылка на релизы.
+        { id: "help_releases", label: "Releases on GitHub", action: "releases" },
         { id: "help_about", label: "About Mark Player", action: "about", separatorBefore: true },
       ],
     },
@@ -303,14 +359,17 @@ export function isNleOnlyAccelerator(accelerator: string | undefined): boolean {
   });
 }
 
-export async function applyCutPlayerMenu(onAction: CutPlayerMenuActionHandler): Promise<boolean> {
+export async function applyCutPlayerMenu(
+  onAction: CutPlayerMenuActionHandler,
+  opts?: { subtitlesVisible?: boolean; inOutPlayOn?: boolean },
+): Promise<boolean> {
   try {
-    const { Menu, Submenu, MenuItem, PredefinedMenuItem } = await import("@tauri-apps/api/menu");
-    const sections = buildCutPlayerMenuSpec();
-    const items: (Submenu | MenuItem | PredefinedMenuItem)[] = [];
+    const { Menu, Submenu, MenuItem, PredefinedMenuItem, CheckMenuItem } = await import("@tauri-apps/api/menu");
+    const sections = buildCutPlayerMenuSpec(opts);
+    const items: (Submenu | MenuItem | CheckMenuItem | PredefinedMenuItem)[] = [];
 
-    async function buildChildren(specItems: CutPlayerMenuItemSpec[]): Promise<(MenuItem | PredefinedMenuItem | Submenu)[]> {
-      const children: (MenuItem | PredefinedMenuItem | Submenu)[] = [];
+    async function buildChildren(specItems: CutPlayerMenuItemSpec[]): Promise<(MenuItem | CheckMenuItem | PredefinedMenuItem | Submenu)[]> {
+      const children: (MenuItem | CheckMenuItem | PredefinedMenuItem | Submenu)[] = [];
       for (const item of specItems) {
         if (item.separatorBefore) {
           children.push(await PredefinedMenuItem.new({ item: "Separator" }));
@@ -324,6 +383,15 @@ export async function applyCutPlayerMenu(onAction: CutPlayerMenuActionHandler): 
         } else if (item.kind === "submenu") {
           const subChildren = await buildChildren(item.items ?? []);
           children.push(await Submenu.new({ text: item.label, items: subChildren, enabled: item.enabled ?? true }));
+        } else if (item.kind === "check") {
+          children.push(await CheckMenuItem.new({
+            id: item.id,
+            text: item.label,
+            accelerator: item.accelerator,
+            enabled: item.enabled ?? true,
+            checked: item.checked ?? false,
+            action: item.action ? () => onAction(item.action!) : undefined,
+          }));
         } else {
           children.push(await MenuItem.new({
             id: item.id,

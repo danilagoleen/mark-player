@@ -328,3 +328,11 @@ describe("saveFileDialog", () => {
     expect(await saveFileDialogResult("x", "a.srt")).toEqual({ status: "failed", error: "denied" });
   });
 });
+
+describe("bringAllWindowsToFront (tb_1791172090_2308_6 п.6)", () => {
+  it("вне Tauri — false (поднимать нечего)", async () => {
+    clearTauriInternals();
+    const { bringAllWindowsToFront } = await import("./nativeWindow");
+    expect(await bringAllWindowsToFront()).toBe(false);
+  });
+});

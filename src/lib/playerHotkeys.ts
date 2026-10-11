@@ -23,7 +23,8 @@ export type PlayerHotkeyAction =
   | "undo"
   | "redo"
   | "toggleDebug"
-  | "cycleQuality";
+  | "cycleQuality"
+  | "inOutPlayToggle";
 
 const TYPING_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT"]);
 
@@ -118,6 +119,9 @@ export function resolvePlayerHotkey(e: KeyboardEvent): PlayerHotkeyAction | null
       return "addNegativeMarker";
     case "KeyQ":
       return "cycleQuality";
+    // tb_1791143015_70644_7: S — тумблер In–Out Play (ножницы-плёнка).
+    case "KeyS":
+      return "inOutPlayToggle";
     default:
       break;
   }
@@ -132,6 +136,7 @@ export function resolvePlayerHotkey(e: KeyboardEvent): PlayerHotkeyAction | null
   if (k === "n" || k === "т") return "addNegativeMarker";
   if (k === "i" || k === "ш") return "markIn";
   if (k === "o" || k === "щ") return "markOut";
+  if (k === "s" || k === "ы") return "inOutPlayToggle";
   return null;
 }
 

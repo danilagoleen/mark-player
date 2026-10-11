@@ -1,3 +1,5 @@
+import { formatReplyText, parseReplyText } from "./lib/commentAuthor";
+
 export const MARKER_PREFIX = {
   FAVORITE: "\u2605 ",
   NEGATIVE: "\u2717 ",
@@ -65,7 +67,7 @@ function parseSrtTime(str: string): number {
   return Number(h) * 3600 + Number(m) * 60 + Number(s) + Number(ms) / 1000;
 }
 
-interface SrtExportable {
+export interface SrtExportable {
   marker_id: string;
   kind: string;
   start_sec: number;
@@ -74,6 +76,10 @@ interface SrtExportable {
   label: string;
   text: string;
   media_path: string;
+  /** tb_1791583578_64923_1: автор (agent:<роль> — пометка «ИИ”). */
+  author?: string;
+  /** tb_1791585558_31907_1: ссылка на родителя (ответ). */
+  reply_to?: string;
 }
 
 interface SrtImportResult {
@@ -85,6 +91,10 @@ interface SrtImportResult {
   label: string;
   text: string;
   media_path: string;
+  /** tb_1791583578_64923_1: автор из 3-го сегмента. */
+  author: string;
+  /** tb_1791585558_31907_1: ссылка из префикса ↳ <id>: (иначе undefined). */
+  reply_to?: string;
 }
 
 export function exportMarkersToSrt(markers: SrtExportable[]): string {
@@ -96,6 +106,72 @@ export function exportMarkersToSrt(markers: SrtExportable[]): string {
       return `${i + 1}\n${toSrtTime(m.start_sec)} --> ${toSrtTime(m.end_sec)}\n${prefix} | ${m.label}${text}`;
     })
     .join("\n\n") + "\n";
+}
+
+export interface MarkerPrefixSplit {
+  kind: string;
+  label: string;
+  /** tb_1791583578_64923_1: автор из 3-го сегмента ("" — нет). */
+  author: string;
+  text: string;
+}
+
+// Сегмент-автор: имя/роль без пайпов (agent:Beta, Danila).
+// Ровно 3 сегмента + средний под паттерном имени → автор; 4+ сегмента —
+// легаси (весь хвост — текст). Край: старый текст ровно с одним "|" внутри,
+// где середина похожа на имя, — прочитается как автор (редкость, принято).
+const AUTHOR_SEGMENT_RE = /^[\p{L}\p{N} _.\-+:]{1,64}$/u;
+
+// Одноглифные строки собственного V2-экспорта (★ ✗ ⇒ ← ·):
+// раньше не совпадали ни с одним словным префиксом и валились в favorite
+// целой строкой — теперь разбираются по видам (V1-файлы разбирает
+// словная ветка выше, она первая).
+const SINGLE_GLYPH_TO_KIND: Record<string, string> = {
+  "★": "favorite",
+  "✗": "negative",
+  "⇒": "in",
+  "←": "out",
+  "·": "comment",
+};
+
+function splitPipeSegments(body: string, kind: string): MarkerPrefixSplit {
+  const parts = body
+    .split("|")
+    .map((s) => s.trim());
+  if (parts.length === 3 && AUTHOR_SEGMENT_RE.test(parts[1])) {
+    return { kind, label: parts[0] || "", author: parts[1], text: parts[2] };
+  }
+  return { kind, label: parts[0] || "", author: "", text: parts.slice(1).join(" | ").trim() };
+}
+
+/**
+ * Выделяет префикс вида из строки реплики (SRT маркеров / кнопка хинта).
+ * Без префикса — favorite со всей строкой в label (поведение importSrtToMarkers).
+ * Формат с автором: `ГЛИФ label | author | text` (ровно 3 сегмента).
+ */
+export function splitMarkerPrefixLine(textLine: string): MarkerPrefixSplit {
+  for (const [prefix, k] of Object.entries(PREFIX_TO_KIND)) {
+    if (textLine.startsWith(prefix)) {
+      const pipeIdx = textLine.indexOf("|", prefix.length);
+      if (pipeIdx === -1) {
+        return { kind: k, label: textLine.slice(prefix.length).replace(/^\s*\|\s*/, "").trim(), author: "", text: "" };
+      }
+      const parts = textLine
+        .slice(pipeIdx + 1)
+        .trim()
+        .split("|")
+        .map((s) => s.trim());
+      if (parts.length === 3 && AUTHOR_SEGMENT_RE.test(parts[1])) {
+        return { kind: k, label: parts[0] || "", author: parts[1], text: parts[2] };
+      }
+      return { kind: k, label: parts[0] || "", author: "", text: parts.slice(1).join(" | ").trim() };
+    }
+  }
+  const glyphKind = SINGLE_GLYPH_TO_KIND[textLine.trimStart().charAt(0)];
+  if (glyphKind) {
+    return splitPipeSegments(textLine.trimStart().slice(1).trim(), glyphKind);
+  }
+  return { kind: "favorite", label: textLine, author: "", text: "" };
 }
 
 export function importSrtToMarkers(srt: string, mediaPath: string): SrtImportResult[] {
@@ -115,24 +191,8 @@ export function importSrtToMarkers(srt: string, mediaPath: string): SrtImportRes
     if (!timeMatch) continue;
     const startSec = parseSrtTime(timeMatch[1]);
     const endSec = parseSrtTime(timeMatch[2]);
-
-    let kind = "favorite";
-    let label = textLine;
-    let text = "";
-    for (const [prefix, k] of Object.entries(PREFIX_TO_KIND)) {
-      if (textLine.startsWith(prefix)) {
-        kind = k;
-        label = textLine.slice(prefix.length).replace(/^\s*\|\s*/, "").trim();
-        const pipeIdx = textLine.indexOf("|", prefix.length);
-        if (pipeIdx !== -1) {
-          const afterKind = textLine.slice(pipeIdx + 1).trim();
-          const parts = afterKind.split("|").map((s) => s.trim());
-          label = parts[0] || "";
-          text = parts.slice(1).join(" | ").trim();
-        }
-        break;
-      }
-    }
+    const { kind, label, author, text } = splitMarkerPrefixLine(textLine);
+    const { replyTo, text: cleanText } = parseReplyText(text);
 
     const anchorSec = (startSec + endSec) / 2;
     index++;
@@ -143,8 +203,10 @@ export function importSrtToMarkers(srt: string, mediaPath: string): SrtImportRes
       end_sec: endSec,
       anchor_sec: anchorSec,
       label: label || kind,
-      text,
+      author,
+      text: cleanText,
       media_path: mediaPath,
+      ...(replyTo ? { reply_to: replyTo } : null),
     });
   }
 
@@ -155,8 +217,12 @@ export function appendMarkerToSrt(srt: string, marker: SrtExportable): string {
   const blocks = srt.trim() ? srt.trim().split(/\n\n+/) : [];
   const idx = blocks.length + 1;
   const prefix = MARKER_KIND_TO_PREFIX[marker.kind] || MARKER_PREFIX.NOTE;
-  const textPart = marker.text ? ` | ${marker.text}` : "";
-  const entry = `${idx}\n${toSrtTime(marker.start_sec)} --> ${toSrtTime(marker.end_sec)}\n${prefix}${marker.label}${textPart}`;
+  const author = (marker.author || "").trim();
+  const authorPart = author ? ` | ${author}` : "";
+  // tb_1791585558_31907_1: ответ — ссылка в тексте (round-trip импорта).
+  const body = marker.reply_to ? formatReplyText(marker.reply_to, marker.text) : marker.text;
+  const textPart = body ? ` | ${body}` : "";
+  const entry = `${idx}\n${toSrtTime(marker.start_sec)} --> ${toSrtTime(marker.end_sec)}\n${prefix}${marker.label}${authorPart}${textPart}`;
   return srt.trim() ? `${srt.trim()}\n\n${entry}\n` : `${entry}\n`;
 }
 
@@ -165,8 +231,11 @@ export function exportMarkersToSrtV2(markers: SrtExportable[]): string {
   return markers
     .map((m, i) => {
       const prefix = MARKER_KIND_TO_PREFIX[m.kind] || MARKER_PREFIX.NOTE;
-      const textPart = m.text ? ` | ${m.text}` : "";
-      return `${i + 1}\n${toSrtTime(m.start_sec)} --> ${toSrtTime(m.end_sec)}\n${prefix}${m.label}${textPart}`;
+      const author = (m.author || "").trim();
+      const authorPart = author ? ` | ${author}` : "";
+      const body = m.reply_to ? formatReplyText(m.reply_to, m.text) : m.text;
+      const textPart = body ? ` | ${body}` : "";
+      return `${i + 1}\n${toSrtTime(m.start_sec)} --> ${toSrtTime(m.end_sec)}\n${prefix}${m.label}${authorPart}${textPart}`;
     })
     .join("\n\n") + "\n";
 }
@@ -179,6 +248,10 @@ interface SidecarMarker {
   anchor_sec: number;
   label: string;
   text: string;
+  /** tb_1791583578_64923_1: автор (agent:<роль> — пометка «ИИ”). */
+  author?: string;
+  /** tb_1791585558_31907_1: ссылка на родителя (ответ). */
+  reply_to?: string;
   created_at?: string;
 }
 
@@ -213,6 +286,8 @@ export function exportToSidecar(
       anchor_sec: m.anchor_sec,
       label: m.label,
       text: m.text,
+      author: m.author || "",
+      reply_to: m.reply_to || "",
       created_at: m.created_at || "",
     })),
     provisional_events: provisionalEvents.map((e) => ({
@@ -290,6 +365,10 @@ interface XmemlMarkerInput {
   end_sec: number;
   label: string;
   text: string;
+  /** tb_1791583578_64923_1: автор (идёт в имя маркера, виден в Premiere). */
+  author?: string;
+  /** tb_1791585558_31907_1: ответ — имя с пометкой ↳ (Premiere плоский). */
+  reply_to?: string;
 }
 
 // Bell №3 + tb_1790752061_6128_1: fps-цепочка XML = container → probe →
@@ -320,6 +399,50 @@ export function resolveXmlFpsSource(
   if (probeFps && probeFps > 0) return "probe";
   if (estimatedFps && estimatedFps > 0) return "estimated";
   return "fallback";
+}
+
+// tb_1791143015_70644_11 (FPS-честность): эвристику не калибруем — честно
+// показываем, что детектили и что записали в таймлайн. Дробный detected
+// (29.97) → целочисленный timebase (30) + флаг NTSC, который NLE вправе
+// прочесть как ровно 30.00 (дрейф ~2 кадра/мин) — это и есть mismatch.
+export interface FpsHonesty {
+  /** fps из контейнера как распарсили (29.97) — null, если контейнера нет. */
+  detected: number | null;
+  /** целочисленный timebase, записанный в XML/EDL (30). */
+  authoredTimebase: number;
+  /** дробный detected → таймлайн с флагом NTSC. */
+  ntsc: boolean;
+  /** true, когда NLE может прочесть таймлайн иначе, чем детектили. */
+  mismatch: boolean;
+  /** короткий текст бейджа: «29.97 → 30 NTSC» или «25». */
+  badge: string;
+}
+
+export function formatFpsShort(fps: number): string {
+  return String(Math.round(fps * 100) / 100);
+}
+
+export function describeFpsHonesty(
+  containerFps: number | null | undefined,
+  probeFps: number | null | undefined,
+  estimatedFps: number | null | undefined,
+): FpsHonesty {
+  const resolved = resolveXmlFps(containerFps, probeFps, estimatedFps);
+  const authoredTimebase = Math.max(1, Math.round(resolved));
+  // Та же граница, что xmemlNtsc на fps, уходящем в экспорт: целое — CFR.
+  const ntsc = !Number.isInteger(resolved);
+  const detected = typeof containerFps === "number" && containerFps > 0 ? containerFps : null;
+  const badge = ntsc && detected !== null
+    ? `${formatFpsShort(detected)} → ${authoredTimebase} NTSC`
+    : formatFpsShort(authoredTimebase);
+  return { detected, authoredTimebase, ntsc, mismatch: ntsc, badge };
+}
+
+/** Одна формулировка честности для тостов экспорта и шапки Review Notes. */
+export function fpsMismatchNote(h: FpsHonesty): string | undefined {
+  if (!h.mismatch) return undefined;
+  const src = h.detected !== null ? `detected ${formatFpsShort(h.detected)}` : "non-container source";
+  return `timeline ${h.authoredTimebase} NTSC (${src}) — verify fps in NLE`;
 }
 
 // 0.12 слайс 1: взрослый таймкод HH:MM:SS:FF как в Premiere — всегда 11
@@ -394,8 +517,12 @@ function splitSourceClips(
     // chat) — как раньше, словом-видом.
     const label = (m.label || "").trim();
     const glyph = KIND_GLYPH[m.kind] || "";
+    const base = label ? (glyph ? `${glyph} ${label}` : label) : prefix || m.kind;
+    const by = (m.author || "").trim();
+    const named = by ? `${base} · ${by}` : base;
     clipMarkers.push({
-      name: label ? (glyph ? `${glyph} ${label}` : label) : prefix || m.kind,
+      // tb_1791585558_31907_1: ответ — отдельный маркер с пометкой ↳.
+      name: m.reply_to ? `↳ ${named}` : named,
       comment: m.text || "",
       color: KIND_PPRO_COLOR[m.kind] ?? null,
       inF: toFrames(m.start_sec),
@@ -740,16 +867,23 @@ export interface ReviewNoteInput {
   end_sec: number;
   label: string;
   text: string;
+  /** tb_1791583578_64923_1: автор (идёт в имя строкой reviewMarkerName). */
+  author?: string;
+  /** tb_1791585558_31907_1: ответ — пометка ↳ в имени. */
+  reply_to?: string;
 }
 
 // Имя маркера как в XMEML (глиф + label, префикс только без label) —
 // человек читает те же слова, что монтажка.
-export function reviewMarkerName(kind: string, label: string): string {
+// tb_1791583578_64923_1: автор — суффиксом (виден в Premiere/EDL/txt).
+// tb_1791585558_31907_1: ответ — префикс ↳ (плоский список, без дерева).
+export function reviewMarkerName(kind: string, label: string, author?: string, replyTo?: string): string {
   const clean = (label || "").trim();
   const glyph = KIND_GLYPH[kind] || "";
-  if (clean) return glyph ? `${glyph} ${clean}` : clean;
-  const prefix = KIND_PREFIX[kind] || "";
-  return prefix || kind;
+  const base = clean ? (glyph ? `${glyph} ${clean}` : clean) : KIND_PREFIX[kind] || kind;
+  const by = (author || "").trim();
+  const named = by ? `${base} · ${by}` : base;
+  return (replyTo || "").trim() ? `↳ ${named}` : named;
 }
 
 export function exportCommentsToText(
@@ -759,9 +893,12 @@ export function exportCommentsToText(
   // 0.23: ссылка на кадр у строки (таск Белла: заметки с картинками).
   // Нет колбэка или null для маркера — строка как раньше, без ссылки.
   frameNameOf?: (marker: ReviewNoteInput & { marker_id?: string }) => string | null,
+  // tb_1791143015_70644_11: строка честности (fpsMismatchNote) — шапкой после header.
+  honestyNote?: string | null,
 ): string {
   const L: string[] = [];
   if (header) L.push(header);
+  if (honestyNote) L.push(honestyNote);
   const tc = (sec: number) => formatTimecode(sec, fps);
   const sorted = [...markers].sort((a, b) => a.start_sec - b.start_sec);
   let pendingIn: ReviewNoteInput | null = null;
@@ -779,7 +916,7 @@ export function exportCommentsToText(
   }
   if (pendingIn !== null) L.push(`Cut ${tc(pendingIn.start_sec)} → end`);
   for (const m of singles) {
-    const name = reviewMarkerName(m.kind, m.label);
+    const name = reviewMarkerName(m.kind, m.label, m.author, m.reply_to);
     const text = (m.text || "").trim();
     const body = text ? `${name}: ${text}` : name;
     // Диапазон — только осмысленный (>1с): дефолтные ±0.5 вокруг якоря
@@ -803,6 +940,10 @@ export interface EdlMarkerInput {
   end_sec: number;
   label: string;
   text: string;
+  /** tb_1791583578_64923_1: автор (идёт в note; EDL строго ASCII). */
+  author?: string;
+  /** tb_1791585558_31907_1: ответ — пометка ↳ в note. */
+  reply_to?: string;
 }
 
 // Цвета палитры DaVinci (порядок как в UI): Blue Cyan Green Yellow Red Pink
@@ -855,12 +996,22 @@ export function sanitizeEdlNote(value: string | null | undefined): string {
   return edlAscii(String(value ?? "").replace(/\|/g, "/").replace(/[\r\n\t]+/g, " "));
 }
 
-export function exportMarkersToEdl(markers: EdlMarkerInput[], fps: number, title?: string): string {
-  const safeFps = Number.isFinite(fps) && fps > 0 ? fps : 25;
-  const L: string[] = [`TITLE: ${edlAscii(title) || "Mark Player markers"}`, "FCM: NON-DROP FRAME", ""];
-  const sorted = [...markers].sort((a, b) => a.start_sec - b.start_sec);
-  // in/out-пары — одно событие диапазоном (как Cut-строки в .txt),
-  // остальное — точечные события; сирота-in — точка.
+export interface EdlExportOpts {
+  /** Reel-имя источника (дефолт AX — одиночный файл). */
+  reel?: string;
+  /** Сдвиг REC-таймлайна в секундах (плейлист: склейка подряд). SRC не трогает. */
+  recOffsetSec?: number;
+  /** Стартовый номер события (плейлист: сквозная нумерация). */
+  startNum?: number;
+  /** false — без TITLE/FCM-шапки (плейлист: шапка одна на документ). */
+  header?: boolean;
+}
+
+type EdlEvent = { start: number; end: number; kind: string; name: string };
+
+// in/out-пары — одно событие диапазоном (как Cut-строки в .txt),
+// остальное — точечные события; сирота-in — точка.
+function computeEdlEvents(sorted: EdlMarkerInput[]): EdlEvent[] {
   const singles: EdlMarkerInput[] = [];
   let pendingIn: EdlMarkerInput | null = null;
   const spans: { start: number; end: number }[] = [];
@@ -879,26 +1030,67 @@ export function exportMarkersToEdl(markers: EdlMarkerInput[], fps: number, title
     // сирота-in — точечный Cut (как в .txt: "Cut X → end", конца не знаем).
     spans.push({ start: pendingIn.start_sec, end: pendingIn.start_sec });
   }
-  type EdlEvent = { start: number; end: number; kind: string; name: string };
-  const events: EdlEvent[] = [
+  return [
     ...spans.map((s) => ({ start: s.start, end: s.end, kind: "in", name: "Cut" })),
     ...singles.map((m) => {
-      const name = reviewMarkerName(m.kind, m.label);
+      // EDL строго ASCII: ↳ не переживёт edlAscii — пометка ответа ">> ".
+      const name = reviewMarkerName(m.kind, m.label, m.author, m.reply_to).replace(/^↳ /, ">> ");
       const text = (m.text || "").trim();
       return { start: m.start_sec, end: m.end_sec, kind: m.kind, name: text ? `${name}: ${text}` : name };
     }),
   ].sort((a, b) => a.start - b.start);
+}
+
+export interface EdlPlaylistFile {
+  reel: string;
+  markers: EdlMarkerInput[];
+  fps: number;
+  recOffsetSec: number;
+}
+
+// Плейлист одним EDL: шапка одна, нумерация сквозная, SRC — родные
+// таймкоды файла, REC — сквозная лента со сдвигом, reel — файл.
+export function exportPlaylistToEdl(files: EdlPlaylistFile[], title?: string): string {
+  const L: string[] = [`TITLE: ${edlAscii(title) || "Mark Player playlist"}`, "FCM: NON-DROP FRAME", ""];
+  let num = 1;
+  for (const f of files) {
+    const body = exportMarkersToEdl(f.markers, f.fps, undefined, {
+      reel: f.reel,
+      recOffsetSec: f.recOffsetSec,
+      startNum: num,
+      header: false,
+    });
+    if (body) L.push(body);
+    num += computeEdlEvents([...f.markers].sort((a, b) => a.start_sec - b.start_sec)).length;
+  }
+  return L.join("\n");
+}
+
+export function exportMarkersToEdl(markers: EdlMarkerInput[], fps: number, title?: string, opts?: EdlExportOpts): string {
+  const safeFps = Number.isFinite(fps) && fps > 0 ? fps : 25;
+  // Поле reel — 9 знаков (как AX + 7 пробелов у одиночного): дефолтный
+  // вывод байт-в-байт совпадает со старым.
+  const reel = (opts?.reel || "AX").slice(0, 9).padEnd(9);
+  const recOffset = Number.isFinite(opts?.recOffsetSec) ? (opts?.recOffsetSec as number) : 0;
+  const startNum = Number.isFinite(opts?.startNum) ? Math.max(1, Math.floor(opts?.startNum as number)) : 1;
+  const L: string[] = opts?.header === false
+    ? []
+    : [`TITLE: ${edlAscii(title) || "Mark Player markers"}`, "FCM: NON-DROP FRAME", ""];
+  const sorted = [...markers].sort((a, b) => a.start_sec - b.start_sec);
+  const events = computeEdlEvents(sorted);
   events.forEach((e, i) => {
-    const num = String(i + 1).padStart(3, "0");
+    const num = String(startNum + i).padStart(3, "0");
     const startSec = Math.max(0, e.start);
     const durFrames = Math.max(1, Math.round(Math.max(0, e.end - e.start) * safeFps));
     // 0.24.1: out строго > in (нулевую длительность парсеры дропают молча).
     const tcIn = formatTimecode(startSec, safeFps);
     const tcOut = formatTimecode(startSec + durFrames / safeFps, safeFps);
+    const recIn = formatTimecode(Math.max(0, startSec + recOffset), safeFps);
+    const recOut = formatTimecode(Math.max(0, startSec + recOffset + durFrames / safeFps), safeFps);
     // Коммент — формой как нативный экспорт маркеров Resolve:
     // текст, затем пайпы. Один note и в тексте, и в |M:|.
     const note = (sanitizeEdlNote(e.name) || e.kind).slice(0, 255);
-    L.push(`${num}  AX       V     C        ${tcIn} ${tcOut} ${tcIn} ${tcOut}`);
+    L.push(`${num}  ${reel}V     C        ${tcIn} ${tcOut} ${recIn} ${recOut}`);
     L.push(`* ${note} |C:ResolveColor${resolveMarkerColor(e.kind)} |M:${note} |D:${durFrames}`);
   });
   return L.join("\n");

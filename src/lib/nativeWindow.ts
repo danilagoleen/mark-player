@@ -291,8 +291,30 @@ export async function probeFile(filePath: string, apiBase?: string): Promise<Pro
   }
 }
 
-export async function openPanelWindow(label: string, route: string, title: string, width: number, height: number, query?: string): Promise<boolean> {
-  if (!isTauriRuntimeSync()) return false;
+// tb_1791172090_2308_6 п.6: Bring All to Front — поднять все окна
+// приложения (main + панели). Вне Tauri окон одно — false.
+export async function bringAllWindowsToFront(): Promise<boolean> {
+  if (!(await isTauriRuntime())) return false;
+  try {
+    const { getAllWindows } = await import("@tauri-apps/api/window");
+    const wins = await getAllWindows();
+    let raised = 0;
+    for (const w of wins) {
+      try {
+        await w.setFocus();
+        raised += 1;
+      } catch {
+        // окно могло закрыться между getAll и focus — пропускаем
+      }
+    }
+    return raised > 0;
+  } catch (error) {
+    console.warn("[Mark Player] bring all to front failed:", error);
+    return false;
+  }
+}
+
+export async function openPanelWindow(label: string, route: string, title: string, width: number, height: number, query?: string): Promise<boolean> {  if (!isTauriRuntimeSync()) return false;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     const baseUrl = window.location.origin;

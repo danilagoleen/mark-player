@@ -6,6 +6,53 @@ export interface ExternalMarker {
   [key: string]: unknown;
 }
 
+// tb_1791654032_27281_1: storage-события между вебвью Tauri не ходят —
+// панель будит главное окно событием (паттерн playlist:reload): главная
+// сторона перечитывает маркеры из хранилища. Иначе правка панели
+// (в т.ч. удаление) тихо затирается следующим персистом главного окна.
+export const MARKERS_RELOAD_EVENT = "markers:reload";
+
+// tb_1791663832_27409_5: главное окно переключило видео — открытое окно
+// Markers должно перецелиться, иначе залипает на прошлом (оператор отвечал
+// не на те вопросы). Rust open_panel_window умеет location.replace, но со
+// steal focus — для автослежения не годится. Шлём событие без фокуса,
+// окно само обновляет state.
+export const MEDIA_CHANGED_EVENT = "player:media-changed";
+
+export interface MediaChangedPayload {
+  mediaKey: string | null;
+  contentHash: string | null;
+}
+
+/** Главная сторона: сказать окну Markers «теперь это видео» (окна может не быть — best-effort). */
+export function notifyMediaChanged(payload: MediaChangedPayload): void {
+  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+    import("@tauri-apps/api/event").then(({ emitTo }) => {
+      emitTo("panel-comments", MEDIA_CHANGED_EVENT, payload).catch(() => {});
+    }).catch(() => {});
+  }
+}
+
+/** Оконная сторона: identity из события новее ?media= (окно открыли раньше, видео переключили позже). */
+export function resolveEffectiveMedia(
+  queryMedia: string | null,
+  queryHash: string | null,
+  override: MediaChangedPayload | null,
+): MediaIdentity {
+  if (override) return { mediaKey: override.mediaKey, contentHash: override.contentHash };
+  return { mediaKey: queryMedia, contentHash: queryHash };
+}
+
+/** Панельная сторона: сказать главному окну «перечитай маркеры». */
+export function notifyMarkersReloaded(): void {
+  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+    import("@tauri-apps/api/event").then(({ emit }) => {
+      emit(MARKERS_RELOAD_EVENT, {}).catch(() => {});
+    }).catch(() => {});
+  }
+  // web: setItem уже стрельнул storage в чужом документе — делать нечего.
+}
+
 export function resolveExternalMarkers(raw: string | null | undefined): ExternalMarker[] | null {
   if (!raw) return null;
   let parsed: unknown;

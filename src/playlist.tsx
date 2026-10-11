@@ -2,6 +2,8 @@ import { StrictMode, useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { PlaylistPanel } from "./components/playlist/PlaylistPanel";
 import { addEntry, createEmptyPlaylist, loadPlaylist, savePlaylist } from "./lib/playlist";
+import type { QuestionPlaylistEntry } from "./lib/playlist";
+import { requestPlaylistPlay } from "./lib/playlistPlay";
 import { useDragDrop } from "./lib/useDragDrop";
 import "./index.css";
 
@@ -19,12 +21,10 @@ function readQueryPath(): string | null {
   }
 }
 
-function requestPlay(path: string) {
-  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
-    import("@tauri-apps/api/event").then(({ emit }) => {
-      emit("playlist:play", { path }).catch(() => {});
-    }).catch(() => {});
-  }
+function requestPlay(path: string, questionId?: string) {
+  // tb_1791233039_7043_3: два транспорта (Tauri-событие / LS-мост) — в lib,
+  // сам play() делает главное окно по флагу autoplay в onLoadedData.
+  requestPlaylistPlay(path, questionId);
 }
 
 function PlaylistStandalone() {
@@ -63,7 +63,7 @@ function PlaylistStandalone() {
   return (
     <PlaylistPanel
       currentPath={currentPath}
-      onPlay={(entry) => requestPlay(entry.path)}
+      onPlay={(entry) => requestPlay(entry.path, (entry as QuestionPlaylistEntry).question_id)}
       onClose={() => { if (typeof window !== "undefined") window.close(); }}
       standalone
     />

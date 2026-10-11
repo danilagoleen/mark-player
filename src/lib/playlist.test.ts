@@ -10,8 +10,11 @@ import {
   loadPlaybackMode,
   savePlaybackMode,
   DEFAULT_PLAYBACK_MODE,
+  trackOpenedFile,
   serializePlaylist,
   deserializePlaylist,
+  renamePlaylist,
+  sanitizePlaylistFilename,
 } from "./playlist";
 
 describe("createEmptyPlaylist", () => {
@@ -209,5 +212,66 @@ describe("playback mode: shuffle / loop (tb_1790284149_1559_11)", () => {
     localStorage.setItem("vetka_player_lab_playlist_mode_v1", "{bad");
     expect(loadPlaybackMode()).toEqual(DEFAULT_PLAYBACK_MODE);
     vi.unstubAllGlobals();
+  });
+});
+
+// tb_1791143015_70644_10: имя редактируется → идёт в имя файла экспорта.
+describe("renamePlaylist", () => {
+  it("trims and keeps the name", () => {
+    const pl = createEmptyPlaylist("Old");
+    expect(renamePlaylist(pl, "  Bell gate v2  ").name).toBe("Bell gate v2");
+  });
+
+  it("falls back to default on empty input", () => {
+    const pl = createEmptyPlaylist("Old");
+    expect(renamePlaylist(pl, "   ").name).toBe("New Playlist");
+    expect(renamePlaylist(pl, "").name).toBe("New Playlist");
+  });
+
+  it("does not mutate the original", () => {
+    const pl = createEmptyPlaylist("Old");
+    renamePlaylist(pl, "New");
+    expect(pl.name).toBe("Old");
+  });
+});
+
+describe("sanitizePlaylistFilename", () => {
+  it("keeps latin/digits, collapses junk to single underscores", () => {
+    expect(sanitizePlaylistFilename("Bell gate v2")).toBe("Bell_gate_v2");
+    expect(sanitizePlaylistFilename("Монтаж—финал!")).toBe("playlist");
+    expect(sanitizePlaylistFilename("a  b")).toBe("a_b");
+    expect(sanitizePlaylistFilename("  cut  ")).toBe("cut");
+  });
+
+  it("falls back to playlist on empty/garbage", () => {
+    expect(sanitizePlaylistFilename("")).toBe("playlist");
+    expect(sanitizePlaylistFilename("   ")).toBe("playlist");
+    expect(sanitizePlaylistFilename(null)).toBe("playlist");
+    expect(sanitizePlaylistFilename(undefined)).toBe("playlist");
+  });
+});
+
+describe("trackOpenedFile", () => {
+  it("создаёт плейлист с нуля и дописывает в обычный", () => {
+    const created = trackOpenedFile(null, { path: "/v/a.mp4", name: "a", duration: 0 });
+    expect(created.entries.map((e) => e.path)).toEqual(["/v/a.mp4"]);
+    const twice = trackOpenedFile(created, { path: "/v/a.mp4", name: "a", duration: 0 });
+    expect(twice.entries).toHaveLength(1);
+    const more = trackOpenedFile(created, { path: "/v/b.mp4", name: "b", duration: 0 });
+    expect(more.entries.map((e) => e.path)).toEqual(["/v/a.mp4", "/v/b.mp4"]);
+  });
+
+  it("не дописывает в плейлист-вопрос (ни по schema, ни по записям)", () => {
+    const bySchema = {
+      ...createEmptyPlaylist("q"),
+      schema: "vetka.cut.question_playlist/1",
+      entries: [{ path: "/v/a.mp4", name: "a", duration: 0, addedAt: "x" }],
+    };
+    expect(trackOpenedFile(bySchema, { path: "/v/b.mp4", name: "b", duration: 0 }).entries).toHaveLength(1);
+    const byEntry = {
+      ...createEmptyPlaylist("q"),
+      entries: [{ path: "/v/a.mp4", name: "a", duration: 0, addedAt: "x", question_id: "q1" }],
+    } as unknown as Parameters<typeof trackOpenedFile>[0];
+    expect(trackOpenedFile(byEntry, { path: "/v/b.mp4", name: "b", duration: 0 })?.entries).toHaveLength(1);
   });
 });

@@ -1,0 +1,52 @@
+{
+  "schema": "vetka.cut.question_playlist/1",
+  "source": {
+    "by": "agent",
+    "task": "tb_1791521998_11250_5",
+    "layer": "camera"
+  },
+  "id": "camera-calibration-demo",
+  "name": "Калибровка камеры (демо)",
+  "createdAt": "2026-10-09T05:00:00.000Z",
+  "entries": [
+    {
+      "path": "e2e/fixtures/subs_5s.mp4",
+      "name": "subs_5s.mp4",
+      "duration": 5,
+      "addedAt": "2026-10-09T05:00:00.000Z",
+      "question_id": "cam-q01",
+      "question": "План общий?",
+      "hypothesis": "FS, камера A",
+      "in_sec": 1,
+      "out_sec": 3,
+      "markers": [
+        { "kind": "comment", "t_sec": 2, "text": "граница плана" }
+      ],
+      "ref": { "layer": "camera", "id": "shot-demo-1" },
+      "choices": ["pan", "truck", "hold"]
+    },
+    {
+      "path": "e2e/fixtures/subs_5s.mp4",
+      "name": "subs_5s.mp4",
+      "duration": 5,
+      "addedAt": "2026-10-09T05:00:00.000Z",
+      "question_id": "cam-q02",
+      "question": "Тот же человек, что в q01?",
+      "hypothesis": "да, стилист у зеркала",
+      "in_sec": 0.5,
+      "out_sec": 2.5,
+      "ref": { "layer": "people", "id": "pair-demo-1" }
+    },
+    {
+      "path": "e2e/fixtures/subs_5s.mp4",
+      "name": "subs_5s.mp4",
+      "duration": 5,
+      "addedAt": "2026-10-09T05:00:00.000Z",
+      "question_id": "cam-q03",
+      "question": "Годится в рилс?",
+      "in_sec": 3,
+      "out_sec": 4.5,
+      "ref": { "layer": "reel", "id": "reel-demo-1" }
+    }
+  ]
+}

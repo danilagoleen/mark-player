@@ -115,4 +115,33 @@ describe("PlaylistPanel", () => {
     const stored = JSON.parse(localStorage.getItem("vetka_player_lab_playlist_v1") || "{}");
     expect(stored.entries.map((e: { name: string }) => e.name)).toEqual(["Video 1", "Video 2", "Video 0"]);
   });
+
+  // tb_1791143015_70644_10: переименование из шапки — e2e тракта на уровне панели.
+  it("renames playlist from the header input and persists it", () => {
+    setPlaylistEntries(1);
+    render(<PlaylistPanel currentPath={null} onPlay={vi.fn()} onClose={vi.fn()} />);
+    const input = screen.getByLabelText("Playlist name") as HTMLInputElement;
+    expect(input.value).toBe("Test Playlist");
+    fireEvent.change(input, { target: { value: "Bell gate v2" } });
+    const stored = JSON.parse(localStorage.getItem("vetka_player_lab_playlist_v1") || "{}");
+    expect(stored.name).toBe("Bell gate v2");
+  });
+
+  it("remove button is neutral, not red", () => {
+    setPlaylistEntries(1);
+    render(<PlaylistPanel currentPath={null} onPlay={vi.fn()} onClose={vi.fn()} />);
+    const btn = screen.getByTitle("Remove");
+    expect(btn.getAttribute("style") || "").not.toContain("#f87171");
+  });
+
+  // tb_1791143015_70644_7: тумблер In–Out Play (ножницы) рядом с loop/shuffle.
+  it("toggles In–Out Play and persists it", () => {
+    setPlaylistEntries(1);
+    render(<PlaylistPanel currentPath={null} onPlay={vi.fn()} onClose={vi.fn()} />);
+    const btn = screen.getByTestId("playlist-inout-play");
+    expect(btn.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(btn);
+    expect(btn.getAttribute("aria-pressed")).toBe("false");
+    expect(localStorage.getItem("vetka_player_lab_inout_play_v1")).toBe("false");
+  });
 });

@@ -8,9 +8,12 @@ export default defineConfig({
     headless: true,
   },
   webServer: {
+    // cwd НЕ задаём: команда выполняется из каталога этого конфига.
+    // Было захардкожено на мёртвый ворктри cut-player — e2e проверяли чужой код.
+    // [task:tb_1791169872_2308_5]
     command: "npm run dev -- --host 127.0.0.1",
     port: 1424,
-    reuseExistingServer: true,
-    cwd: "/Users/danilagulin/Documents/VETKA_Project/vetka_live_03/.claude/worktrees/cut-player/player_playground",
+    // В CI всегда свежий сервер; локально переиспользуем уже поднятый.
+    reuseExistingServer: !process.env.CI,
   },
 });

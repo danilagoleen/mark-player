@@ -101,6 +101,14 @@ describe("resolvePlayerHotkey", () => {
     expect(resolvePlayerHotkey(key("KeyQ"))).toBe("cycleQuality");
   });
 
+  // tb_1791143015_70644_7: S = тумблер In–Out Play (RU ы).
+  it("S = in-out play toggle", () => {
+    expect(resolvePlayerHotkey(key("KeyS"))).toBe("inOutPlayToggle");
+    expect(resolvePlayerHotkey(key("KeyS", { shiftKey: true }))).toBeNull();
+    expect(resolvePlayerHotkey({ code: "Unknown", key: "s", shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, repeat: false } as unknown as KeyboardEvent)).toBe("inOutPlayToggle");
+    expect(resolvePlayerHotkey({ code: "Unknown", key: "ы", shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, repeat: false } as unknown as KeyboardEvent)).toBe("inOutPlayToggle");
+  });
+
   it("Escape = exitFullscreen", () => {
     expect(resolvePlayerHotkey(key("Escape"))).toBe("exitFullscreen");
   });
