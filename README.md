@@ -8,7 +8,8 @@ Marker-first video review: open a file, mark the moments, land them in Premiere 
 [Intel Mac](https://github.com/danilagoleen/mark-player/releases/download/v0.25.51/Mark.Player_0.25.51_x64.dmg) ·
 [Windows](https://github.com/danilagoleen/mark-player/releases/download/v0.25.51/Mark.Player_0.25.51_x64-setup.exe)
 
-![Watch it in action (1 min) — mark the moments, land them in Premiere](https://github.com/user-attachments/assets/098c218f-5e4e-4c8f-ab3b-382bffc51d17)
+[![Watch it in action (1 min) — mark the moments, land them in Premiere](docs/promo/promo_poster.jpg)](https://github.com/user-attachments/assets/098c218f-5e4e-4c8f-ab3b-382bffc51d17)
+*Watch it in action (1 min) — click to play.*
 
 ## Screenshots
 
