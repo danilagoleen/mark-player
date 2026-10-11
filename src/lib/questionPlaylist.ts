@@ -48,6 +48,20 @@ export interface QuestionEntryFields {
   ref?: QuestionRef;
   /** варианты ответа (калибровка камеры); ответ несёт choice */
   choices?: string[];
+  // tb_1791754893_1275_4: регион-лицо в долях кадра (x,y — левый верхний
+  // угол, w,h — размер; всё 0..1, x+w<=1, y+h<=1). Плеер рисует рамку,
+  // пока активен вопрос; Premiere видит регион текстом (§5.1 манифеста).
+  bbox?: QuestionBox;
+  /** рамка на out_sec: плеер линейно едет bbox→bbox_end за in..out. */
+  bbox_end?: QuestionBox;
+}
+
+/** Рамка региона в долях кадра. */
+export interface QuestionBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 }
 
 export type QuestionEntry = PlaylistEntry & QuestionEntryFields;
@@ -108,6 +122,48 @@ function stringArrayOrUndefined(v: unknown): string[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
+// tb_1791754893_1275_4: рамка в долях кадра. Мусор (не числа, вне 0..1,
+// нулевой размер, вылезание за кадр) — отбрасывается целиком: лучше без
+// рамки, чем рамка мимо лица.
+function fractionOrUndefined(v: unknown): number | undefined {
+  if (v === null || v === undefined || v === "") return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 && n <= 1 ? n : undefined;
+}
+
+export function normalizeQuestionBox(raw: unknown): QuestionBox | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const m = raw as Record<string, unknown>;
+  const x = fractionOrUndefined(m.x);
+  const y = fractionOrUndefined(m.y);
+  const w = fractionOrUndefined(m.w);
+  const h = fractionOrUndefined(m.h);
+  if (x === undefined || y === undefined || w === undefined || h === undefined) return undefined;
+  if (w <= 0 || h <= 0) return undefined;
+  if (x + w > 1 || y + h > 1) return undefined;
+  return { x, y, w, h };
+}
+
+/** Линейная езда рамки a→b за долю k (0..1, кламп) — «трекинг для бедных». */
+export function lerpQuestionBox(a: QuestionBox, b: QuestionBox, k: number): QuestionBox {
+  const t = Number.isFinite(k) ? Math.min(1, Math.max(0, k)) : 0;
+  const mix = (p: number, q: number) => p + (q - p) * t;
+  return { x: mix(a.x, b.x), y: mix(a.y, b.y), w: mix(a.w, b.w), h: mix(a.h, b.h) };
+}
+
+// tb_1791754893_1275_4: текст reply-маркера, который карточка пишет в
+// Comments (§6.2: choice + comment + verdict). Читается и человеком, и
+// парсится глазами агента: `[answer] same: сошлось (favorite)`.
+export function formatAnswerReplyText(input: { verdict: AnswerVerdict; choice?: string; comment?: string }): string {
+  const parts: string[] = [];
+  const choice = typeof input.choice === "string" ? input.choice.trim() : "";
+  const comment = typeof input.comment === "string" ? input.comment.trim() : "";
+  if (choice) parts.push(choice);
+  if (comment) parts.push(comment);
+  const head = parts.length > 0 ? parts.join(": ") : "";
+  return head ? `[answer] ${head} (${input.verdict})` : `[answer] (${input.verdict})`;
+}
+
 /** Мягкая нормализация одной записи: чужое отбрасывается, своё чистится. */
 export function normalizeQuestionEntry(raw: unknown): QuestionEntryFields {
   if (!raw || typeof raw !== "object") return {};
@@ -149,6 +205,10 @@ export function normalizeQuestionEntry(raw: unknown): QuestionEntryFields {
   }
   const choices = stringArrayOrUndefined(m.choices);
   if (choices !== undefined) out.choices = choices;
+  const bbox = normalizeQuestionBox(m.bbox);
+  if (bbox !== undefined) out.bbox = bbox;
+  const bboxEnd = normalizeQuestionBox(m.bbox_end);
+  if (bboxEnd !== undefined) out.bbox_end = bboxEnd;
   return out;
 }
 

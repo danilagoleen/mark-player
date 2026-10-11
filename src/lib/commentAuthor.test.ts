@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  applyAuthorPromptResult,
   formatReplyText,
   isAgentAuthor,
   loadCommentAuthorName,
@@ -8,6 +9,7 @@ import {
   normalizeReplyTo,
   parseReplyText,
   resolveCommentAuthor,
+  resolveReplyAuthor,
   saveCommentAuthorName,
 } from "./commentAuthor";
 
@@ -76,5 +78,25 @@ describe("commentAuthor", () => {
 
   it("formatReplyText round-trip", () => {
     expect(parseReplyText(formatReplyText("q03-c1", "принято")).replyTo).toBe("q03-c1");
+  });
+
+  // tb_1791754893_1275_4: пустое/отмена — не сохраняем, asked не ставим.
+  it("applyAuthorPromptResult: пустое и отмена не трогают хранилище-флаг", () => {
+    expect(applyAuthorPromptResult("Danila", "  ")).toEqual({ name: "Danila", save: false, markAsked: false });
+    expect(applyAuthorPromptResult("Danila", null)).toEqual({ name: "Danila", save: false, markAsked: false });
+    expect(applyAuthorPromptResult("", null)).toEqual({ name: "", save: false, markAsked: false });
+  });
+
+  it("applyAuthorPromptResult: непустое — сохранить и отметить", () => {
+    expect(applyAuthorPromptResult("", "  Beta  ")).toEqual({ name: "Beta", save: true, markAsked: true });
+    expect(applyAuthorPromptResult("Old", "New")).toEqual({ name: "New", save: true, markAsked: true });
+  });
+
+  it("resolveReplyAuthor: свой побеждает, пустой — fallback на родителя", () => {
+    expect(resolveReplyAuthor("Danila", "agent:Beta")).toBe("Danila");
+    expect(resolveReplyAuthor("", "agent:Beta")).toBe("agent:Beta");
+    expect(resolveReplyAuthor("  ", "agent:Beta")).toBe("agent:Beta");
+    expect(resolveReplyAuthor("", "")).toBe("");
+    expect(resolveReplyAuthor(null, undefined)).toBe("");
   });
 });

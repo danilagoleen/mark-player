@@ -81,6 +81,34 @@ export function markCommentAuthorAsked(): void {
   }
 }
 
+// tb_1791754893_1275_4: чистая разборка ответа prompt (тестируем): пустое /
+// отмена — НЕ сохраняем и asked НЕ ставим (переспросит в следующий раз,
+// иначе Esc = вечный безымянный автор). Не-пустое — сохранить + asked.
+export interface AuthorPromptOutcome {
+  /** чем подписать этот маркер */
+  name: string;
+  /** класть ли в LS */
+  save: boolean;
+  /** ставить ли asked-флаг */
+  markAsked: boolean;
+}
+
+export function applyAuthorPromptResult(current: string, answer: string | null): AuthorPromptOutcome {
+  if (answer === null) return { name: current, save: false, markAsked: false };
+  const clean = answer.trim().slice(0, 64);
+  if (!clean) return { name: current, save: false, markAsked: false };
+  return { name: clean, save: true, markAsked: true };
+}
+
+// tb_1791754893_1275_4: подпись ответа: свой автор побеждает; пустой —
+// fallback на автора родителя (ответ без подписи не уходит никому).
+export function resolveReplyAuthor(own: string | null | undefined, parent: string | null | undefined): string {
+  const mine = typeof own === "string" ? own.trim() : "";
+  if (mine) return mine;
+  const theirs = typeof parent === "string" ? parent.trim() : "";
+  return theirs;
+}
+
 // tb_1791585558_31907_1: reply-средний. Ответ — отдельный комментарий,
 // ссылка на родителя — marker_id. В SRT ссылка едет префиксом текста
 // `↳ <marker_id>: <текст>` (старый плеер читает как обычный коммент).

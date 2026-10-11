@@ -38,7 +38,7 @@ import { buildUIManifest, type UIManifest } from "./lib/uiManifest";
 import { DOOR_IDS, checkModuleDoor, doorClickTransition, doorEndpoint, doorLabel, type DoorId, type ModuleDoor } from "./lib/moduleDoors";
 import type { ProbeResult } from "./lib/nativeWindow";
 import { createEmptyPlaylist, savePlaylist, loadPlaylist, addEntry, getNextEntry, loadPlaybackMode, sanitizePlaylistFilename, trackOpenedFile, type QuestionPlaylistEntry } from "./lib/playlist";
-import { appendAnswersOutbox, appendAnswerRecord, findQuestionEntry, normalizeQuestionEntry, parseAnswersFile, readQuestionPlaylistPath, rememberQuestionPlaylistPath, serializeAnswersFile, DEFAULT_CONFIRMED_BY, isQuestionPlaylist, type AnswerRecord, type AnswerVerdict, type QuestionEntry } from "./lib/questionPlaylist";
+import { appendAnswersOutbox, appendAnswerRecord, findQuestionEntry, formatAnswerReplyText, lerpQuestionBox, normalizeQuestionEntry, parseAnswersFile, readQuestionPlaylistPath, rememberQuestionPlaylistPath, serializeAnswersFile, DEFAULT_CONFIRMED_BY, isQuestionPlaylist, type AnswerRecord, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
 import { isSameMediaPath, resolveMediaContentHash } from "./lib/mediaOpen";
 import { mediaPlayability, mediaRefusalReason } from "./lib/mediaPlayability";
 import { markerBelongsToMedia, notifyMediaChanged, resolveExternalMarkers, MARKERS_RELOAD_EVENT, type MediaIdentity } from "./lib/markersSync";
@@ -59,7 +59,9 @@ import { normalizeImportedMarker } from "./lib/markersJson";
 import {
   loadCommentAuthorName,
   parseReplyText,
+  resolveReplyAuthor,
 } from "./lib/commentAuthor";
+import { materializedMarkerId, materializedMarkerPrefix } from "./lib/questionMaterialize";
 import {
   VOLUME_STEP,
   createFrameCalibrator,
@@ -847,8 +849,9 @@ function App() {
   async function answerQuestion(verdict: AnswerVerdict): Promise<void> {
     const q = activeQuestion;
     if (!q || !q.question_id) return;
+    const qid = q.question_id;
     const record: AnswerRecord = {
-      question_id: q.question_id,
+      question_id: qid,
       verdict,
       confirmed_by: DEFAULT_CONFIRMED_BY,
       answered_at: new Date().toISOString(),
@@ -869,6 +872,49 @@ function App() {
       record.in_sec = myIn;
       record.out_sec = myOut;
     }
+    // tb_1791754893_1275_4: ответ виден человеку — дубль reply-маркером
+    // в Comments (§6.2: choice + comment + verdict), родитель — in-маркер
+    // вопроса (qmat), иначе первый маркер вопроса, иначе точка ответа.
+    const replyParent =
+      mediaMarkers.find((m) => m.marker_id === materializedMarkerId(qid, "in")) ??
+      mediaMarkers.find((m) => m.marker_id.startsWith(materializedMarkerPrefix(qid))) ??
+      null;
+    const replyAt = replyParent
+      ? Number(replyParent.anchor_sec ?? replyParent.start_sec ?? 0)
+      : Math.max(0, Number(videoRef.current?.currentTime ?? currentTime ?? 0));
+    const replyAnchor = Number.isFinite(replyAt) && replyAt >= 0 ? replyAt : 0;
+    const replyText = formatAnswerReplyText({ verdict, choice: questionChoice ?? undefined, comment: comment || undefined });
+    const replyAuthor = resolveReplyAuthor(commentAuthorRef.current, replyParent?.author);
+    const writeReplyMarker = (): void => {
+      if (!currentMediaKey) return;
+      const now = new Date().toISOString();
+      const reply: PlayerTimeMarker = {
+        marker_id: createMarkerId(),
+        schema_version: "cut_time_marker_v1",
+        project_id: "cut_demo",
+        timeline_id: "main",
+        media_path: currentMediaKey,
+        content_hash: contentHashRef.current ?? null,
+        kind: "comment",
+        start_sec: replyParent ? Number(replyParent.start_sec ?? replyAnchor) : replyAnchor,
+        end_sec: replyParent ? Number(replyParent.end_sec ?? replyParent.start_sec ?? replyAnchor) : replyAnchor,
+        anchor_sec: replyAnchor,
+        score: 0.6,
+        label: `[answer] ${qid}`.slice(0, 80),
+        text: replyText,
+        author: replyAuthor,
+        context_slice: null,
+        cam_payload: null,
+        chat_thread_id: null,
+        comment_thread_id: null,
+        source_engine: "player_lab",
+        reply_to: replyParent ? replyParent.marker_id : undefined,
+        created_at: now,
+        updated_at: now,
+      };
+      pushMarkerHistory();
+      setMarkers((prev) => [...prev, reply]);
+    };
     if (isTauriRuntimeSync()) {
       const playlistPath = readQuestionPlaylistPath();
       if (playlistPath) {
@@ -882,7 +928,8 @@ function App() {
             // файла ещё нет — начнём с пустого, только дописываем
           }
           await fs.writeTextFile(answersPath, serializeAnswersFile(appendAnswerRecord(existing, record)));
-          setContextToast(`Answer ${verdict} → ${answersPath}.`);
+          writeReplyMarker();
+          setContextToast(`Answer ${verdict} → ${answersPath} + reply in Comments.`);
           setQuestionComment("");
           return;
         } catch {
@@ -892,11 +939,12 @@ function App() {
       }
     }
     appendAnswersOutbox(record);
+    writeReplyMarker();
     setQuestionComment("");
     setContextToast(
       isTauriRuntimeSync()
-        ? "Answer saved locally (open the question playlist from file for answers.json)."
-        : "Answer saved locally (web outbox).",
+        ? "Answer saved locally (open the question playlist from file for answers.json) + reply in Comments."
+        : "Answer saved locally (web outbox) + reply in Comments.",
     );
   }
   function activateQuestionFor(path: string, questionId?: string | null): void {
@@ -1207,6 +1255,24 @@ function App() {
       // ignore storage errors
     }
   }, [snapshot]);
+
+  // tb_1791754893_1275_4: рамка-лицо прямо сейчас: lerp bbox→bbox_end за
+  // in..out («трекинг для бедных»); без скобок/конца — статичный bbox.
+  const questionBoxNow: QuestionBox | null = useMemo(() => {
+    const entry = activeQuestion;
+    const box = entry?.bbox;
+    if (!box || questionPathRef.current !== currentFilePath) return null;
+    const end = entry?.bbox_end ?? box;
+    const inSec = entry?.in_sec;
+    const outSec = entry?.out_sec;
+    if (
+      typeof inSec === "number" && typeof outSec === "number" &&
+      Number.isFinite(inSec) && Number.isFinite(outSec) && outSec > inSec
+    ) {
+      return lerpQuestionBox(box, end, (currentTime - inSec) / (outSec - inSec));
+    }
+    return box;
+  }, [activeQuestion, currentFilePath, currentTime]);
 
   useEffect(() => {
     try {
@@ -4834,6 +4900,23 @@ function App() {
                       {subtitlesVisible ? (
                         <SubtitleOverlay cues={activeSubtitleCues} frameHeight={snapshot.displayedHeight || 0} liftPx={subtitleLift} />
                       ) : null}
+                      {/* tb_1791754893_1275_4: рамка региона-лица поверх кадра.
+                          Обычный режим: raster ровно размер кадра → доли
+                          напрямую. Фулскрин: raster = весь вьювер, видео
+                          contain — добавляем letterbox-офсеты из snapshot. */}
+                      {mediaKind === "video" && questionBoxNow && snapshot.displayedWidth > 0 && snapshot.displayedHeight > 0 ? (
+                        <div
+                          data-testid="question-bbox"
+                          className="question-bbox"
+                          title={`Region ${(questionBoxNow.x * 100).toFixed(1)}%,${(questionBoxNow.y * 100).toFixed(1)}% ${activeQuestion?.question_id ?? ""}`}
+                          style={{
+                            left: (isFullscreen ? snapshot.horizontalLetterboxPx : 0) + questionBoxNow.x * snapshot.displayedWidth,
+                            top: (isFullscreen ? snapshot.verticalLetterboxPx : 0) + questionBoxNow.y * snapshot.displayedHeight,
+                            width: Math.max(2, questionBoxNow.w * snapshot.displayedWidth),
+                            height: Math.max(2, questionBoxNow.h * snapshot.displayedHeight),
+                          }}
+                        />
+                      ) : null}
                     </div>
                   </div>
                   <div className={`topbar-dock ${showTransport ? "viewer-toolbar-visible" : "viewer-toolbar-hidden"}`}>
@@ -4862,27 +4945,99 @@ function App() {
                           окно открывает лого Марка (context-action выше). */}
                     </div>
                     <div className="topbar-zone topbar-center">
-                      <div className="marker-dock">
-                        <button className="transport-button" type="button" onClick={() => { addMomentMarker("favorite"); setContextToast("Favorite marked."); }} data-testid="marker-favorite" aria-label={tooltipFor("marker-favorite")} title={tooltipFor("marker-favorite")}>
-                          <IconMarkerFavorite />
-                        </button>
-                        <button className="transport-button" type="button" onClick={() => { addMomentMarker("negative"); setContextToast("Negative marked."); }} data-testid="marker-negative" aria-label={tooltipFor("marker-negative")} title={tooltipFor("marker-negative")}>
-                          <IconMarkerNegative />
-                        </button>
-                        <button className="transport-button" type="button" onClick={() => { addMomentMarker("in"); setContextToast("In point marked."); }} data-testid="marker-in" aria-label={tooltipFor("marker-in")} title={tooltipFor("marker-in")}>
-                          <IconMarkerIn />
-                        </button>
-                        <button className="transport-button" type="button" onClick={() => { addMomentMarker("out"); setContextToast("Out point marked."); }} data-testid="marker-out" aria-label={tooltipFor("marker-out")} title={tooltipFor("marker-out")}>
-                          <IconMarkerOut />
-                        </button>
-                        <button className="transport-button" type="button" onClick={() => { openCommentsPanel("comment"); }} data-testid="marker-comment" aria-label={tooltipFor("marker-comment")} title={tooltipFor("marker-comment")}>
-                          <IconMarkerComment />
-                          {commentMomentCount > 0 ? <span className="transport-count-badge">{commentMomentCount}</span> : null}
-                        </button>
-                        {/* Bell №2: agent-chat button removed — chat is a separate
-                            module, not in the default bundle. Marker pill:
-                            ★ ✗ [ ] 💬(comment). */}
-                      </div>
+                      {/* tb_1791754893_1275_4: в момент вопроса пилюля
+                          СТАНОВИТСЯ карточкой (вопрос-режим) — кнопки
+                          создания маркеров прячутся, дублей ★✕💬 больше
+                          нет, вердикты — словами. */}
+                      {mediaKind === "video" && activeQuestion && questionPathRef.current === currentFilePath ? (
+                        <div
+                          className="marker-dock marker-dock-question"
+                          data-testid="question-card"
+                          title={activeQuestion.hypothesis || activeQuestion.question || activeQuestion.question_id}
+                        >
+                          <span className="question-pill-text" data-testid="question-text">
+                            {activeQuestion.question || activeQuestion.question_id}
+                          </span>
+                          {(activeQuestion.choices ?? []).map((choice) => (
+                            <button
+                              key={choice}
+                              type="button"
+                              className="question-pill-choice"
+                              data-testid="question-choice"
+                              aria-pressed={questionChoice === choice}
+                              onClick={() => setQuestionChoice((prev) => (prev === choice ? null : choice))}
+                            >
+                              {choice}
+                            </button>
+                          ))}
+                          <input
+                            className="question-pill-input"
+                            data-testid="question-comment"
+                            value={questionComment}
+                            onChange={(e) => setQuestionComment(e.target.value)}
+                            placeholder="Comment…"
+                            aria-label="Answer comment"
+                          />
+                          <button
+                            type="button"
+                            className="question-pill-verdict"
+                            data-testid="question-answer-favorite"
+                            onClick={() => void answerQuestion("favorite")}
+                            title="Confirm"
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            type="button"
+                            className="question-pill-verdict"
+                            data-testid="question-answer-negative"
+                            onClick={() => void answerQuestion("negative")}
+                            title="Reject"
+                          >
+                            Reject
+                          </button>
+                          <button
+                            type="button"
+                            className="question-pill-verdict"
+                            data-testid="question-answer-comment"
+                            onClick={() => void answerQuestion("comment")}
+                            title="Disputed (comment)"
+                          >
+                            Dispute
+                          </button>
+                          <button
+                            type="button"
+                            className="question-pill-close"
+                            data-testid="question-close"
+                            onClick={clearActiveQuestion}
+                            title="Dismiss question"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="marker-dock">
+                          <button className="transport-button" type="button" onClick={() => { addMomentMarker("favorite"); setContextToast("Favorite marked."); }} data-testid="marker-favorite" aria-label={tooltipFor("marker-favorite")} title={tooltipFor("marker-favorite")}>
+                            <IconMarkerFavorite />
+                          </button>
+                          <button className="transport-button" type="button" onClick={() => { addMomentMarker("negative"); setContextToast("Negative marked."); }} data-testid="marker-negative" aria-label={tooltipFor("marker-negative")} title={tooltipFor("marker-negative")}>
+                            <IconMarkerNegative />
+                          </button>
+                          <button className="transport-button" type="button" onClick={() => { addMomentMarker("in"); setContextToast("In point marked."); }} data-testid="marker-in" aria-label={tooltipFor("marker-in")} title={tooltipFor("marker-in")}>
+                            <IconMarkerIn />
+                          </button>
+                          <button className="transport-button" type="button" onClick={() => { addMomentMarker("out"); setContextToast("Out point marked."); }} data-testid="marker-out" aria-label={tooltipFor("marker-out")} title={tooltipFor("marker-out")}>
+                            <IconMarkerOut />
+                          </button>
+                          <button className="transport-button" type="button" onClick={() => { openCommentsPanel("comment"); }} data-testid="marker-comment" aria-label={tooltipFor("marker-comment")} title={tooltipFor("marker-comment")}>
+                            <IconMarkerComment />
+                            {commentMomentCount > 0 ? <span className="transport-count-badge">{commentMomentCount}</span> : null}
+                          </button>
+                          {/* Bell №2: agent-chat button removed — chat is a separate
+                              module, not in the default bundle. Marker pill:
+                              ★ ✗ [ ] 💬(comment). */}
+                        </div>
+                      )}
                     </div>
                     <div className="topbar-zone topbar-right" />
                   </div>
@@ -5089,116 +5244,6 @@ function App() {
                           ) : null}
                         </div>
                       </div>
-                      {/* tb_1791521998_11250_5: карточка вопроса — отдельным рядом
-                          под пилюлей (внутри тесно и бьёт хит-тест). */}
-                      {mediaKind === "video" && activeQuestion && questionPathRef.current === currentFilePath ? (
-                        <div
-                          data-testid="question-card"
-                          style={{
-                            // tb_1791681499_1275_4: карточка под панелью
-                            // маркеров (topbar сверху, z 2) — вне зоны
-                            // транспорта: наслоение внизу убрано, seek-зоны
-                            // (z 0) карточку не перехватывают.
-                            position: "absolute",
-                            top: 64,
-                            left: 14,
-                            right: 14,
-                            zIndex: 4,
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            flexWrap: "wrap",
-                            margin: 0,
-                            padding: "6px 12px",
-                            border: "1px solid rgba(255,255,255,0.12)",
-                            borderRadius: 12,
-                            background: "rgba(18,20,22,0.9)",
-                            fontSize: 13,
-                          }}
-                          title={activeQuestion.hypothesis || activeQuestion.question || activeQuestion.question_id}
-                        >
-                          <span data-testid="question-text" style={{ fontWeight: 600 }}>
-                            {activeQuestion.question || activeQuestion.question_id}
-                          </span>
-                          {activeQuestion.hypothesis ? (
-                            <span data-testid="question-hypothesis" style={{ opacity: 0.75 }}>
-                              {activeQuestion.hypothesis}
-                            </span>
-                          ) : null}
-                          {(activeQuestion.choices ?? []).map((choice) => (
-                            <button
-                              key={choice}
-                              type="button"
-                              data-testid="question-choice"
-                              aria-pressed={questionChoice === choice}
-                              onClick={() => setQuestionChoice((prev) => (prev === choice ? null : choice))}
-                              style={{
-                                background: questionChoice === choice ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.08)",
-                                border: "1px solid rgba(255,255,255,0.2)",
-                                borderRadius: 6,
-                                color: "inherit",
-                                cursor: "pointer",
-                                padding: "2px 8px",
-                                fontSize: 12,
-                              }}
-                            >
-                              {choice}
-                            </button>
-                          ))}
-                          <input
-                            data-testid="question-comment"
-                            value={questionComment}
-                            onChange={(e) => setQuestionComment(e.target.value)}
-                            placeholder="Comment…"
-                            aria-label="Answer comment"
-                            style={{
-                              background: "rgba(255,255,255,0.08)",
-                              border: "1px solid rgba(255,255,255,0.2)",
-                              borderRadius: 6,
-                              color: "inherit",
-                              padding: "2px 8px",
-                              fontSize: 12,
-                              width: 130,
-                            }}
-                          />
-                          <button
-                            type="button"
-                            data-testid="question-answer-favorite"
-                            onClick={() => void answerQuestion("favorite")}
-                            title="Confirm"
-                            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15 }}
-                          >
-                            ★
-                          </button>
-                          <button
-                            type="button"
-                            data-testid="question-answer-negative"
-                            onClick={() => void answerQuestion("negative")}
-                            title="Reject"
-                            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15 }}
-                          >
-                            ✕
-                          </button>
-                          <button
-                            type="button"
-                            data-testid="question-answer-comment"
-                            onClick={() => void answerQuestion("comment")}
-                            title="Disputed (comment)"
-                            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15 }}
-                          >
-                            💬
-                          </button>
-                          <button
-                            type="button"
-                            data-testid="question-close"
-                            onClick={clearActiveQuestion}
-                            title="Dismiss question"
-                            style={{ background: "none", border: "none", cursor: "pointer", opacity: 0.6, fontSize: 13 }}
-                          >
-                            ✕
-                          </button>
-                        </div>
-                      ) : null}
                       <button
                         className="seek-zone seek-zone-left"
                         type="button"

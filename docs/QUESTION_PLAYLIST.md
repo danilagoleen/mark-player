@@ -26,6 +26,8 @@
       "hypothesis": "FS, камера A",
       "in_sec": 12.5,
       "out_sec": 18.0,
+      "bbox": { "x": 0.31, "y": 0.22, "w": 0.18, "h": 0.24 },
+      "bbox_end": { "x": 0.33, "y": 0.23, "w": 0.18, "h": 0.24 },
       "markers": [{ "kind": "comment", "t_sec": 14.0, "text": "граница плана" }],
       "ref": { "layer": "camera", "id": "shot-7" },
       "choices": ["pan", "truck", "dolly", "zoom", "hold"]
@@ -33,6 +35,10 @@
   ]
 }
 ```
+
+`bbox` — регион-лицо в долях кадра (плеер рисует рамку, пока активен
+вопрос; `bbox_end` — рамка на `out_sec`, плеер едет между ними за
+`in..out`). `label` (имя маркера) держать ≤ 80 символов.
 
 Ответ (`<playlist>.answers.json`, объект `{ "answers": [...] }`):
 

@@ -12,8 +12,10 @@ import {
 import { resolvePlayerHotkey } from "./lib/playerHotkeys";
 import { markerBelongsToMedia, notifyMarkersReloaded, MEDIA_CHANGED_EVENT, resolveEffectiveMedia, type MediaChangedPayload } from "./lib/markersSync";
 import {
+  applyAuthorPromptResult,
   loadCommentAuthorName,
   markCommentAuthorAsked,
+  resolveReplyAuthor,
   saveCommentAuthorName,
   wasCommentAuthorAsked,
 } from "./lib/commentAuthor";
@@ -301,16 +303,16 @@ function CommentsStandalone() {
 
   // tb_1791654032_27281_1: автор пассивно, как у корневого: запомненное имя
   // (дефолт — имя macOS из ref), при первом создании один раз prompt.
+  // tb_1791754893_1275_4: пустое/отмена — не сохраняем, asked не ставим
+  // (переспросит; раньше Esc давал вечного безымянного автора).
   const ensureAuthor = useCallback((): string => {
     let author = loadCommentAuthorName() || authorRef.current;
     if (!wasCommentAuthorAsked()) {
-      markCommentAuthorAsked();
       if (typeof window !== "undefined" && typeof window.prompt === "function") {
-        const answer = window.prompt("Sign comments as:", author);
-        if (answer !== null) {
-          author = answer.trim().slice(0, 64);
-          saveCommentAuthorName(author);
-        }
+        const outcome = applyAuthorPromptResult(author, window.prompt("Sign comments as:", author));
+        author = outcome.name;
+        if (outcome.save) saveCommentAuthorName(author);
+        if (outcome.markAsked) markCommentAuthorAsked();
       }
     }
     return author;
@@ -337,13 +339,14 @@ function CommentsStandalone() {
 
   // tb_1791586270_32802_2: ответ человека — новый коммент в той же точке,
   // reply_to = родитель. Автор — тот же пассивный ensureAuthor.
+  // tb_1791754893_1275_4: пустой свой — fallback на автора родителя.
   const handleReply = useCallback((parentId: string, text: string) => {
     const clean = text.trim();
     if (!clean) return;
     const prev = markersRef.current;
     const parent = prev.find((m) => m.marker_id === parentId);
     if (!parent) return;
-    const reply = buildReplyMarker(parent, clean, ensureAuthor());
+    const reply = buildReplyMarker(parent, clean, resolveReplyAuthor(ensureAuthor(), parent.author));
     if (!reply) return;
     historyRef.current = historyPush(historyRef.current, prev);
     const updated = [...prev, reply];

@@ -339,6 +339,63 @@ select {
   border: 1px solid rgba(255, 255, 255, 0.1);
   backdrop-filter: blur(20px);
 }
+/* tb_1791754893_1275_4: вопрос-режим пилюли — та же пилюля становится
+ * карточкой вопроса (никаких дублей ★✕💬 и плавающих полос). Текст
+ * сжимается ellipsis, полный вопрос — в title. */
+.marker-dock-question {
+  border-radius: 14px;
+  max-width: min(72vw, 860px);
+}
+.question-pill-text {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 340px;
+}
+.question-pill-choice,
+.question-pill-verdict {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.question-pill-choice[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.22);
+}
+.question-pill-input {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  color: inherit;
+  padding: 2px 8px;
+  font-size: 12px;
+  width: 110px;
+}
+.question-pill-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  opacity: 0.6;
+  font-size: 13px;
+  color: inherit;
+}
+/* tb_1791754893_1275_4: рамка региона-лица поверх кадра. Живёт внутри
+ * .video-raster (ровно размер отображаемого кадра + letterbox-офсеты
+ * из snapshot), клики пропускает. */
+.question-bbox {
+  position: absolute;
+  border: 2px solid rgba(120, 200, 255, 0.9);
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  z-index: 2;
+}
 /* Углы Soia: иконки модулей без фона. Двойной класс — бьёт .icon-button
  * независимо от порядка в файле. */
 .icon-button.icon-button-ghost {

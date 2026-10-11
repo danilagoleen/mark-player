@@ -3,8 +3,11 @@ import {
   agentAuthorFor,
   countMaterializable,
   filterNewMarkers,
+  formatRegionSuffix,
   materializeQuestionEntry,
   materializedMarkerId,
+  materializedMarkerPrefix,
+  MATERIALIZED_LABEL_MAX,
 } from "./questionMaterialize";
 
 const CTX = { mediaPath: "asset://video.mov", author: "agent:Beta", now: "2026-10-10T00:00:00.000Z" };
@@ -82,5 +85,39 @@ describe("questionMaterialize (tb_1791586270_32802_2)", () => {
 
   it("materializedMarkerId чистит мусор из question_id", () => {
     expect(materializedMarkerId("cam q/03!", "in")).toBe("qmat_cam-q-03_in");
+  });
+
+  it("materializedMarkerPrefix — префикс поиска родителя ответа", () => {
+    expect(materializedMarkerPrefix("cam q/03!")).toBe("qmat_cam-q-03_");
+    expect(materializedMarkerId("q1", "in").startsWith(materializedMarkerPrefix("q1"))).toBe(true);
+  });
+});
+
+describe("questionMaterialize bbox (tb_1791754893_1275_4)", () => {
+  const BOX = { x: 0.31, y: 0.22, w: 0.18, h: 0.24 };
+  const BOX_END = { x: 0.33, y: 0.23, w: 0.18, h: 0.24 };
+  it("formatRegionSuffix: статика и трек", () => {
+    expect(formatRegionSuffix(undefined)).toBe("");
+    expect(formatRegionSuffix(BOX)).toBe(" [region 0.310,0.220,0.180,0.240]");
+    expect(formatRegionSuffix(BOX, BOX_END)).toBe(" [region 0.310,0.220,0.180,0.240 → 0.330,0.230,0.180,0.240]");
+  });
+  it("регион едет текстом в in/out (экспорт видит, Premiere читает)", () => {
+    const markers = materializeQuestionEntry(
+      { question_id: "pq1", question: "Кто это?", in_sec: 5, out_sec: 9, bbox: BOX, bbox_end: BOX_END },
+      CTX,
+    );
+    expect(markers.map((m) => m.kind)).toEqual(["in", "out"]);
+    expect(markers[0].text).toBe("Кто это? [region 0.310,0.220,0.180,0.240 → 0.330,0.230,0.180,0.240]");
+    expect(markers[1].text).toContain("[region");
+  });
+  it("без bbox — суффикса нет, текст чистый", () => {
+    const markers = materializeQuestionEntry({ question_id: "pq2", question: "Кто?", in_sec: 1, out_sec: 2 }, CTX);
+    expect(markers[0].text).toBe("Кто?");
+  });
+  it(`label режется на ${MATERIALIZED_LABEL_MAX} (манифест §5.1)`, () => {
+    expect(MATERIALIZED_LABEL_MAX).toBe(80);
+    const long = "x".repeat(200);
+    const markers = materializeQuestionEntry({ question_id: long, question: long, in_sec: 1, out_sec: 2 }, CTX);
+    for (const m of markers) expect(m.label.length).toBeLessThanOrEqual(80);
   });
 });

@@ -2,8 +2,16 @@
 // tb_1791654032_27281_1: кнопки больше нет — импорт вопрос-плейлиста сразу
 // пишет штатные маркеры (in/out-пары режут клипы в XML, комменты едут
 // с автором agent:<роль>). Чистый модуль без DOM/LS-зависимостей.
-import type { QuestionEntryFields, QuestionMarker } from "./questionPlaylist";
+import type { QuestionBox, QuestionEntryFields, QuestionMarker } from "./questionPlaylist";
 import { AGENT_AUTHOR_PREFIX } from "./commentAuthor";
+
+// tb_1791754893_1275_4: label короткий (манифест §5.1: ≤80 — иначе имя
+// маркера в Premiere обрезается на полуслове).
+export const MATERIALIZED_LABEL_MAX = 80;
+
+function clampLabel(raw: string): string {
+  return raw.slice(0, MATERIALIZED_LABEL_MAX);
+}
 
 // Полная форма штатного маркера (зеркало PlayerTimeMarker из App.tsx /
 // BareMarker из панелей: лишнего не требуем, недостающего не пишем).
@@ -49,7 +57,30 @@ function sanitizeIdPart(raw: string): string {
 }
 
 export function materializedMarkerId(questionId: string, suffix: string): string {
-  return `qmat_${sanitizeIdPart(questionId)}_${suffix}`;
+  return `${materializedMarkerPrefix(questionId)}${suffix}`;
+}
+
+/** Префикс id маркеров вопроса — им же ищем родителя ответа. */
+export function materializedMarkerPrefix(questionId: string): string {
+  return `qmat_${sanitizeIdPart(questionId)}_`;
+}
+
+function frac3(n: number): string {
+  return n.toFixed(3);
+}
+
+// tb_1791754893_1275_4: регион текстом в маркер — XMEML/EDL/SRT везут только
+// текст (полей под геометрию нет, честно): ` [region 0.310,0.220,0.180,0.240]`
+// или с концом ` [region … → …]`. Плеер рамку рисует из записи плейлиста,
+// не отсюда — суффикс только для экспорта/человека.
+export function formatRegionSuffix(bbox: QuestionBox | undefined, bboxEnd?: QuestionBox | undefined): string {
+  if (!bbox) return "";
+  const head = `${frac3(bbox.x)},${frac3(bbox.y)},${frac3(bbox.w)},${frac3(bbox.h)}`;
+  if (bboxEnd) {
+    const tail = `${frac3(bboxEnd.x)},${frac3(bboxEnd.y)},${frac3(bboxEnd.w)},${frac3(bboxEnd.h)}`;
+    return ` [region ${head} → ${tail}]`;
+  }
+  return ` [region ${head}]`;
 }
 
 /** Подпись материализованных маркеров: "agent:<кто>" (by из source плейлиста). */
@@ -118,8 +149,8 @@ export function materializeQuestionEntry(
       start_sec: inSec,
       end_sec: inSec,
       anchor_sec: inSec,
-      label: qid.slice(0, 120),
-      text: question,
+      label: clampLabel(qid),
+      text: question + formatRegionSuffix(entry.bbox, entry.bbox_end),
     });
   }
   if (outSec !== undefined && inSec !== undefined && outSec > inSec) {
@@ -129,8 +160,8 @@ export function materializeQuestionEntry(
       start_sec: outSec,
       end_sec: outSec,
       anchor_sec: outSec,
-      label: qid.slice(0, 120),
-      text: question,
+      label: clampLabel(qid),
+      text: question + formatRegionSuffix(entry.bbox, entry.bbox_end),
     });
   }
   const markers: QuestionMarker[] = Array.isArray(entry.markers) ? entry.markers : [];
@@ -146,7 +177,7 @@ export function materializeQuestionEntry(
       start_sec: t,
       end_sec: t,
       anchor_sec: t,
-      label: (question || qid).slice(0, 120),
+      label: clampLabel(question || qid),
       text: hypothesis ? (mText ? `${hypothesis} — ${mText}` : hypothesis) : mText,
     });
   });

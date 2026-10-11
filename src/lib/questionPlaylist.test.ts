@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   appendAnswerRecord,
   findQuestionEntry,
+  formatAnswerReplyText,
   isQuestionPlaylist,
+  lerpQuestionBox,
+  normalizeQuestionBox,
   normalizeQuestionEntry,
   parseAnswersFile,
   resolveAnswers,
@@ -69,6 +72,55 @@ describe("normalizeQuestionEntry", () => {
   });
 });
 
+describe("normalizeQuestionBox (tb_1791754893_1275_4)", () => {
+  it("валидная рамка чистится", () => {
+    expect(normalizeQuestionBox({ x: "0.31", y: 0.22, w: 0.18, h: 0.24 })).toEqual({ x: 0.31, y: 0.22, w: 0.18, h: 0.24 });
+  });
+  it("мусор отбрасывается целиком", () => {
+    expect(normalizeQuestionBox({ x: 0.3, y: 0.2, w: 0, h: 0.2 })).toBeUndefined();
+    expect(normalizeQuestionBox({ x: 0.9, y: 0.2, w: 0.2, h: 0.2 })).toBeUndefined();
+    expect(normalizeQuestionBox({ x: -0.1, y: 0, w: 0.2, h: 0.2 })).toBeUndefined();
+    expect(normalizeQuestionBox({ x: 0, y: 0, w: 1.5, h: 0.2 })).toBeUndefined();
+    expect(normalizeQuestionBox(null)).toBeUndefined();
+    expect(normalizeQuestionBox("0.1,0.2,0.3,0.4")).toBeUndefined();
+  });
+  it("bbox/bbox_end едут через normalizeQuestionEntry", () => {
+    const out = normalizeQuestionEntry({
+      question_id: "pq1",
+      bbox: { x: 0.3, y: 0.2, w: 0.2, h: 0.3 },
+      bbox_end: { x: 0.32, y: 0.21, w: 0.2, h: 0.3 },
+    });
+    expect(out.bbox).toEqual({ x: 0.3, y: 0.2, w: 0.2, h: 0.3 });
+    expect(out.bbox_end).toEqual({ x: 0.32, y: 0.21, w: 0.2, h: 0.3 });
+    expect(normalizeQuestionEntry({ question_id: "pq2", bbox: { x: 2, y: 0, w: 1, h: 1 } })).not.toHaveProperty("bbox");
+  });
+});
+
+describe("lerpQuestionBox (tb_1791754893_1275_4)", () => {
+  const a = { x: 0.3, y: 0.2, w: 0.2, h: 0.3 };
+  const b = { x: 0.4, y: 0.3, w: 0.2, h: 0.3 };
+  it("края и середина", () => {
+    expect(lerpQuestionBox(a, b, 0)).toEqual(a);
+    expect(lerpQuestionBox(a, b, 1)).toEqual(b);
+    expect(lerpQuestionBox(a, b, 0.5)).toEqual({ x: 0.35, y: 0.25, w: 0.2, h: 0.3 });
+  });
+  it("k клампится", () => {
+    expect(lerpQuestionBox(a, b, -2)).toEqual(a);
+    expect(lerpQuestionBox(a, b, 99)).toEqual(b);
+  });
+});
+
+describe("formatAnswerReplyText (tb_1791754893_1275_4)", () => {
+  it("choice + comment + verdict", () => {
+    expect(formatAnswerReplyText({ verdict: "favorite", choice: "same", comment: "сошлось" })).toBe("[answer] same: сошлось (favorite)");
+  });
+  it("только verdict", () => {
+    expect(formatAnswerReplyText({ verdict: "negative" })).toBe("[answer] (negative)");
+  });
+  it("пустые строки не едут", () => {
+    expect(formatAnswerReplyText({ verdict: "comment", choice: "  ", comment: "" })).toBe("[answer] (comment)");
+  });
+});
 describe("findQuestionEntry", () => {
   const pl = {
     ...OLD_PLAYLIST,
