@@ -145,6 +145,18 @@ Native bundles land in
 - **Gate:** only honest failures open a refusal — heavy containers
   (mkv/avi/…) get an EN Pro-engine offer toast, current video keeps playing.
   The Open dialog lists native formats only, by design.
+- **Playlist review:** panel `⌘L` — files back-to-back with auto-advance,
+  New button for the next pick; the whole playlist exports as one package
+  (XML + SRT + JSON + Review Notes + frames). File → Open Playlist also eats
+  Beta bundles (`camera_calibration.json`, `scene_proposals.json`) — anything
+  else gets an honest `Cannot open` toast.
+- **Agent question-playlists:** an agent hands one JSON of question-brackets
+  (`vetka.cut.question_playlist/1`); import writes them as native markers
+  right away, no buttons to press. Answers come back as replies in the
+  Comments window (see `player_playground/docs/AGENT_DATA_MANIFEST.md`).
+- **Comments & Markers windows:** every marker with its author (`M` opens
+  with the comments-only filter); In–Out Play scissors with no watched-gate;
+  selection sum `[timecode]` under the playhead.
 
 ## Shortcuts
 
