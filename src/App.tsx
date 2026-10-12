@@ -920,6 +920,9 @@ function App() {
         author: replyAuthor,
         label: `[answer] ${qid}`.slice(0, 80),
         now,
+        // tb_1791837678_26192_1: вердикт = тип маркера (Confirm→★,
+        // Reject→✕) — мимо кнопки видно на таймлайне и в Comments.
+        kind: verdict,
         playheadSec: playhead,
       })
       : null;
@@ -1917,7 +1920,8 @@ function App() {
 
   useEffect(() => {
     if (!contextToast) return;
-    const timer = window.setTimeout(() => setContextToast(""), 2200);
+    // tb_1791837678_26192_1: 6.5с — 2.2с не прочитать (оператор).
+    const timer = window.setTimeout(() => setContextToast(""), 6500);
     return () => window.clearTimeout(timer);
   }, [contextToast]);
 

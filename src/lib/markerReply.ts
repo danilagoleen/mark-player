@@ -1,6 +1,14 @@
 // tb_1791809796_24701_1: один конструктор reply-маркера на оба окна.
 // Канон «одна правда — маркеры»: карточка вопроса (главное окно) и кнопка ↳
 // (окно Markers) зовут его; персист — у звонящих. Чистый модуль, без Tauri/LS.
+// tb_1791837678_26192_1: вердикт = тип маркера. Карточка вопроса пишет reply
+// видом вердикта (Confirm→favorite ★, Reject→negative ✕, Not sure→comment) —
+// мимо кнопки видно глазом на таймлайне и в Comments. Окно Markers (кнопка ↳)
+// вердикта не знает — там kind по умолчанию comment. Выжимка answersFromMarkers
+// текст-driven и от kind не зависит; Premiere-цвета видов штатные (0.10.27 E2E).
+
+/** Вид reply-маркера: вердикт карточки или comment из окна. */
+export type ReplyMarkerKind = "comment" | "favorite" | "negative";
 
 // Легаси-префикс id маркеров вопроса (до поля question_id).
 export const QUESTION_MARKER_ID_PREFIX = "qmat_";
@@ -55,7 +63,7 @@ export interface BuiltReplyMarker {
   timeline_id: string;
   media_path: string;
   content_hash: string | null;
-  kind: "comment";
+  kind: ReplyMarkerKind;
   start_sec: number;
   end_sec: number;
   anchor_sec: number;
@@ -79,6 +87,11 @@ export interface BuildReplyInput {
   author: string;
   label: string;
   now: string;
+  /**
+   * Вид маркера: карточка передаёт вердикт (favorite/negative/comment),
+   * окно Markers не передаёт — comment. Новых сущностей нет, виды штатные.
+   */
+  kind?: ReplyMarkerKind;
   /**
    * Секунда playhead в момент ответа (t_sec выжимки). Знает только карточка
    * главного окна; окно Markers не знает — там anchor родителя.
@@ -106,7 +119,7 @@ export function buildReplyMarkerFull(input: BuildReplyInput): BuiltReplyMarker |
     timeline_id: "main",
     media_path: typeof parent.media_path === "string" ? parent.media_path : "",
     content_hash: typeof parent.content_hash === "string" ? parent.content_hash : null,
-    kind: "comment",
+    kind: input.kind ?? "comment",
     start_sec: start,
     end_sec: end,
     anchor_sec: anchor,

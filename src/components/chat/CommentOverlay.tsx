@@ -156,10 +156,27 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
   // правка текстов — только у comment (не ломаем Edit/Delete текстовых).
   // Клик по строке — прыжок плейхеда (мост markerSeek, как в окне маркеров).
   // У спаренных in/out — хрон сегмента.
+  // tb_1791837678_26192_1: нитки не режутся фильтром — ответы (reply_to) видны
+  // под ЛЮБЫМ kind-фильтром, родители видимых строк подтягиваются из полного
+  // списка (иначе 💬-фильтр прячет ответы-вердикты ★/✕, а ★-фильтр — их
+  // qmat-родителей и ответы становятся сиротами).
   const allRows = useMemo(
-    () => [...markers]
-      .sort((a, b) => Number(a.start_sec || 0) - Number(b.start_sec || 0))
-      .filter((m) => kindMatchesFilter(m.kind, kindFilter)),
+    () => {
+      const byId = new Map(markers.map((m) => [m.marker_id, m]));
+      const included = new Map<string, PlayerTimeMarker>();
+      for (const m of markers) {
+        if (kindMatchesFilter(m.kind, kindFilter) || m.reply_to) included.set(m.marker_id, m);
+      }
+      let grown = true;
+      while (grown) {
+        grown = false;
+        for (const m of [...included.values()]) {
+          const p = m.reply_to ? byId.get(m.reply_to) : undefined;
+          if (p && !included.has(p.marker_id)) { included.set(p.marker_id, p); grown = true; }
+        }
+      }
+      return [...included.values()].sort((a, b) => Number(a.start_sec || 0) - Number(b.start_sec || 0));
+    },
     [markers, kindFilter],
   );
 
@@ -316,6 +333,9 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
               {(repliesByParent.get(row.marker_id) ?? []).map((rep) => {
                 const repAuthor = (rep.author ?? "").trim();
                 const repText = (rep.text ?? "").trim() || (rep.label ?? "").trim() || "reply";
+                // tb_1791837678_26192_1: вердикт видно в нитке — глиф вида
+                // у не-комментов (★/✕ ответов), комменты без шума.
+                const repGlyph = rep.kind !== "comment" ? `${KIND_GLYPH[rep.kind] ?? "•"} ` : "";
                 return (
                   <div
                     key={rep.marker_id}
@@ -325,7 +345,7 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
                     title={`Jump to ${formatTimecode(Number(rep.anchor_sec ?? rep.start_sec ?? 0), fps)}`}
                   >
                     <p style={S.replyText}>
-                      ↳ {repAuthor ? `${repAuthor}: ` : ""}{repText}
+                      ↳ {repGlyph}{repAuthor ? `${repAuthor}: ` : ""}{repText}
                       {repAuthor.startsWith("agent:") && repAuthor.length > 6 ? <span style={S.authorAi}>AI</span> : null}
                     </p>
                   </div>

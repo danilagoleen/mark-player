@@ -359,8 +359,7 @@ describe("CommentOverlay markers window", () => {
   });
 });
 
-describe("CommentOverlay initialKindFilter (tb_1791690899_1275_3: фильтр с иконки)", () => {
-  const MIXED = [
+describe("CommentOverlay initialKindFilter (tb_1791690899_1275_3: фильтр с иконки)", () => {  const MIXED = [
     { marker_id: "c1", kind: "comment", start_sec: 1, text: "t" },
     { marker_id: "f1", kind: "favorite", start_sec: 2, text: "f" },
     { marker_id: "i1", kind: "in", start_sec: 3 },
@@ -384,5 +383,44 @@ describe("CommentOverlay initialKindFilter (tb_1791690899_1275_3: фильтр �
   });
   it("initialKindFilter=comment — только комменты", () => {
     expect(rowsWith("comment")).toBe(1);
+  });
+});
+
+// tb_1791837678_26192_1: нитки не режутся фильтром — ответы-вердикты (★/✕)
+// видны под 💬-фильтром, qmat-родитель виден под ★-фильтром.
+describe("CommentOverlay threads survive kind filter", () => {
+  const THREAD = [
+    { marker_id: "qmat_mrg-01_in", kind: "comment", start_sec: 7, text: "вопрос?", question_id: "mrg-01" },
+    { marker_id: "reply_fav", kind: "favorite", start_sec: 8, text: "[answer] (favorite)", reply_to: "qmat_mrg-01_in" },
+    { marker_id: "reply_neg", kind: "negative", start_sec: 9, text: "[answer] (negative)", reply_to: "qmat_mrg-01_in" },
+    { marker_id: "plain", kind: "comment", start_sec: 1, text: "мимо" },
+  ];
+  function renderThread(filter?: "all" | "comment" | "favorite") {
+    const { container } = render(
+      <CommentOverlay
+        marker={null}
+        markers={THREAD}
+        onClose={() => {}}
+        onUpdateText={() => {}}
+        onDeleteMarker={() => {}}
+        standalone
+        initialKindFilter={filter}
+      />,
+    );
+    return container;
+  }
+  it("💬-фильтр: ответы ★/✕ на месте (нитка цела)", () => {
+    const container = renderThread("comment");
+    const replies = container.querySelectorAll('[data-testid="comment-reply"]');
+    expect(replies).toHaveLength(2);
+    expect(container.textContent).toContain("★");
+    expect(container.textContent).toContain("✗");
+  });
+  it("★-фильтр: родитель вопроса подтянут, ответы — под ним, а не сироты", () => {
+    const container = renderThread("favorite");
+    // родитель + ответ-favorite (нитка), negative-ответ тоже виден (reply_to)
+    expect(container.querySelectorAll('[data-testid="comment-row"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[data-testid="comment-reply"]')).toHaveLength(2);
+    expect(container.textContent).toContain("вопрос?");
   });
 });

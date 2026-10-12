@@ -57,4 +57,16 @@ describe("buildReplyMarkerFull", () => {
   it("нет родителя — null", () => {
     expect(buildReplyMarkerFull({ parent: null, text: "x", author: "", label: "l", now: "n" })).toBeNull();
   });
+  // tb_1791837678_26192_1: вердикт = тип маркера (карточка), окно — comment.
+  it("kind по умолчанию comment (окно ↳)", () => {
+    const r = buildReplyMarkerFull({ parent, text: "ok", author: "", label: "l", now: "n" });
+    expect(r?.kind).toBe("comment");
+  });
+  it("kind=verdict из карточки: favorite/negative", () => {
+    const fav = buildReplyMarkerFull({ parent, text: "[answer] (favorite)", author: "", label: "l", now: "n", kind: "favorite" });
+    expect(fav?.kind).toBe("favorite");
+    expect(fav?.reply_to).toBe("qmat_mrg-01_in");
+    const neg = buildReplyMarkerFull({ parent, text: "[answer] (negative)", author: "", label: "l", now: "n", kind: "negative" });
+    expect(neg?.kind).toBe("negative");
+  });
 });
