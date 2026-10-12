@@ -284,6 +284,70 @@ export function answersFromMarkers(
   return out;
 }
 
+/**
+ * tb_1791819024_26192_2: карточка следует за playhead внутри файла — запись
+ * текущего файла, чьи скобки содержат t. Без скобок — null (не вопрос follow).
+ * Чистая, тестируем.
+ */
+export function findQuestionEntryAtTime(
+  entries: unknown,
+  path: string | null | undefined,
+  t: number | null | undefined,
+): QuestionEntry | null {
+  if (!Array.isArray(entries) || typeof path !== "string" || typeof t !== "number" || !Number.isFinite(t)) return null;
+  for (const raw of entries) {
+    if (!raw || typeof raw !== "object") continue;
+    const e = raw as QuestionEntry;
+    if (e.path !== path || typeof e.question_id !== "string" || !e.question_id) continue;
+    const a = typeof e.in_sec === "number" ? e.in_sec : NaN;
+    const b = typeof e.out_sec === "number" ? e.out_sec : NaN;
+    if (Number.isFinite(a) && Number.isFinite(b) && b > a && t >= a && t <= b) return e;
+  }
+  return null;
+}
+
+function answerRecordKey(r: AnswerRecord): string {
+  return [
+    r.question_id,
+    r.answered_at,
+    r.verdict,
+    r.choice ?? "",
+    r.comment ?? "",
+    r.t_sec ?? "",
+    r.in_sec ?? "",
+    r.out_sec ?? "",
+  ].join("|");
+}
+
+/**
+ * tb_1791819024_26192_2: файл = старое + выжимка (дедуп по содержимому).
+ * «Плеер ответы не стирает»: легаси 0.25.54 цело, повторы не плодятся.
+ */
+export function mergeAnswerRecords(existing: AnswerRecord[], fresh: AnswerRecord[]): AnswerRecord[] {
+  const out = Array.isArray(existing) ? [...existing] : [];
+  const seen = new Set(out.map(answerRecordKey));
+  if (Array.isArray(fresh)) {
+    for (const r of fresh) {
+      if (!r || typeof r !== "object") continue;
+      const k = answerRecordKey(r as AnswerRecord);
+      if (!seen.has(k)) {
+        seen.add(k);
+        out.push(r as AnswerRecord);
+      }
+    }
+  }
+  return out;
+}
+
+/** Аутбокс — снимок слияния (та же семантика, что файл). */
+export function writeAnswersOutbox(records: AnswerRecord[]): void {
+  try {
+    localStorage.setItem(QUESTION_ANSWERS_OUTBOX_KEY, JSON.stringify(records));
+  } catch {
+    // ignore — ответ потерян только в web без LS
+  }
+}
+
 /** Мягкая нормализация одной записи: чужое отбрасывается, своё чистится. */
 export function normalizeQuestionEntry(raw: unknown): QuestionEntryFields {
   if (!raw || typeof raw !== "object") return {};

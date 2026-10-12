@@ -12,6 +12,7 @@ import {
 } from "../../lib/questionMaterialize";
 import { toAssetUrl } from "../../lib/nativeWindow";
 import { notifyMarkersChanged } from "../../lib/markersSync";
+import { notifyPlaylistReloaded } from "../../lib/playlistPlay";
 import { importBetaBundleText } from "../../lib/betaBundles";
 import { readInOutPlayEnabled, writeInOutPlayEnabled, INOUT_PLAY_STORAGE_KEY } from "../../lib/inOutPlayback";
 import { Download, Repeat, Repeat1, Scissors, Shuffle, Upload } from "lucide-react";
@@ -33,6 +34,9 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
   // Владелец состояния — главное окно (App); панель пишет LS-ключ, главное
   // подхватывает через storage; обратно — тем же путём через refresh.
   const [inOutPlay, setInOutPlay] = useState<boolean>(() => readInOutPlayEnabled());
+  // tb_1791819024_26192_2: ревизия списка — перемонтирование после Clear/
+  // импорта (страховка от призраков WebView: строки + «Empty» сразу).
+  const [listRev, setListRev] = useState(0);
   const toggleInOutPlay = useCallback(() => {
     setInOutPlay((prev) => {
       const next = !prev;
@@ -85,6 +89,9 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
       } catch { /* ignore */ }
       return updated;
     });
+    // tb_1791819024_26192_2: свои мутации шлём наружу — второй экземпляр
+    // и главное окно в Tauri storage не слышат.
+    notifyPlaylistReloaded();
   }, []);
 
   const handleMoveUp = useCallback((e: React.MouseEvent, index: number) => {
@@ -98,6 +105,7 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
       } catch { /* ignore */ }
       return updated;
     });
+    notifyPlaylistReloaded();
   }, []);
 
   const handleMoveDown = useCallback((e: React.MouseEvent, index: number) => {
@@ -111,6 +119,7 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
       } catch { /* ignore */ }
       return updated;
     });
+    notifyPlaylistReloaded();
   }, []);
 
   const dragIndexRef = useRef<number | null>(null);
@@ -141,6 +150,7 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
       } catch { /* ignore */ }
       return updated;
     });
+    notifyPlaylistReloaded();
   }, []);
 
   const handleDragEnd = useCallback(() => {
@@ -155,6 +165,7 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
       savePlaylist(updated);
       return updated;
     });
+    notifyPlaylistReloaded();
   }, []);
 
   const handleExport = useCallback(async () => {
@@ -210,6 +221,8 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
               localStorage.setItem("vetka_player_lab_playlist_v1", JSON.stringify(converted));
             } catch { /* ignore */ }
             setPlaylist(converted);
+            setListRev((r) => r + 1);
+            notifyPlaylistReloaded();
             setLoadedLine(await describeLoadedPlaylist(converted, fileLabel));
             return;
           }
@@ -225,6 +238,8 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
           localStorage.setItem("vetka_player_lab_playlist_v1", JSON.stringify(parsed));
         } catch { /* ignore */ }
         setPlaylist(parsed);
+        setListRev((r) => r + 1);
+        notifyPlaylistReloaded();
         // tb_1791654032_27281_1: вопрос-плейлист при открытии СРАЗУ кладёт
         // штатные маркеры (in/out + комменты agent:<роль>) — кнопок нет,
         // файл агента и есть подтверждение. Повтор — без дублей.
@@ -251,6 +266,8 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
               localStorage.setItem("vetka_player_lab_playlist_v1", JSON.stringify(converted));
             } catch { /* ignore */ }
             setPlaylist(converted);
+            setListRev((r) => r + 1);
+            notifyPlaylistReloaded();
             setLoadedLine(await describeLoadedPlaylist(converted, file.name));
             return;
           }
@@ -261,6 +278,8 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
           localStorage.setItem("vetka_player_lab_playlist_v1", JSON.stringify(parsed));
         } catch { /* ignore */ }
         setPlaylist(parsed);
+        setListRev((r) => r + 1);
+        notifyPlaylistReloaded();
         setLoadedLine(await describeLoadedPlaylist(parsed, file.name));
       } catch { /* ignore */ }
     };
@@ -330,6 +349,8 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
       savePlaylist(createEmptyPlaylist());
     } catch { /* ignore */ }
     setLoadedLine(null);
+    setListRev((r) => r + 1);
+    notifyPlaylistReloaded();
     refresh();
   }, [refresh]);
 
@@ -345,6 +366,8 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
       return updated;
     });
     setLoadedLine(null);
+    setListRev((r) => r + 1);
+    notifyPlaylistReloaded();
   }, []);
 
   return (
@@ -393,10 +416,12 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
           Empty playlist.<br />Add files from the player.
         </div>
       ) : (
-        <div style={{ flex: 1, overflowY: "auto" }}>
+        <div key={listRev} style={{ flex: 1, overflowY: "auto" }}>
           {entries.map((entry, index) => (
             <div
-              key={entry.path}
+              // tb_1791819024_26192_2: ключ по вопросу (у капчи 28 записей на
+              // один path — дубли ключей глючили строки).
+              key={(entry as QuestionPlaylistEntry).question_id ?? entry.path}
               draggable
               onDragStart={(e) => handleDragStart(e, index)}
               onDragOver={(e) => handleDragOver(e, index)}

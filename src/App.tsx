@@ -33,12 +33,12 @@ import {
 import { pushTransportTrace, shouldHideTransport, type TransportTraceEntry } from "./lib/transportVisibility";
 import { PLAYER_SEEK_REQUEST_KEY, parseSeekRequest } from "./lib/markerSeek";
 import { parseCutsheet, resolveCutsheetForMedia, type CutsheetSegment } from "./lib/cutsheet";
-import { PLAYER_PLAY_REQUEST_KEY, notifyPlaylistReloaded, parsePlayRequest } from "./lib/playlistPlay";
+import { PLAYER_PLAY_REQUEST_KEY, PLAYLIST_RELOAD_EVENT, notifyPlaylistReloaded, parsePlayRequest } from "./lib/playlistPlay";
 import { buildUIManifest, type UIManifest } from "./lib/uiManifest";
 import { DOOR_IDS, checkModuleDoor, doorClickTransition, doorEndpoint, doorLabel, type DoorId, type ModuleDoor } from "./lib/moduleDoors";
 import type { ProbeResult } from "./lib/nativeWindow";
 import { createEmptyPlaylist, savePlaylist, loadPlaylist, addEntry, getNextEntry, loadPlaybackMode, sanitizePlaylistFilename, trackOpenedFile, type QuestionPlaylistEntry } from "./lib/playlist";
-import { answersFromMarkers, findQuestionEntry, formatAnswerReplyText, lerpQuestionBox, normalizeQuestionEntry, readQuestionPlaylistPath, rememberQuestionPlaylistPath, serializeAnswersFile, isQuestionPlaylist, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
+import { answersFromMarkers, findQuestionEntry, findQuestionEntryAtTime, formatAnswerReplyText, lerpQuestionBox, mergeAnswerRecords, normalizeQuestionEntry, readAnswersOutbox, readQuestionPlaylistPath, rememberQuestionPlaylistPath, serializeAnswersFile, writeAnswersOutbox, isQuestionPlaylist, type AnswerRecord, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
 import { isSameMediaPath, resolveMediaContentHash } from "./lib/mediaOpen";
 import { mediaPlayability, mediaRefusalReason } from "./lib/mediaPlayability";
 import { markerBelongsToMedia, notifyMediaChanged, resolveExternalMarkers, MARKERS_CHANGED_EVENT, MARKERS_RELOAD_EVENT, type MediaIdentity } from "./lib/markersSync";
@@ -840,6 +840,13 @@ function App() {
   // «вот N мест для проверки»). Скобки вопроса подменяют источник сегментов
   // движка (как cutsheet), маркеры вопроса — транзитная overlay-метка на шкале.
   const [activeQuestion, setActiveQuestion] = useState<QuestionEntry | null>(null);
+  const activeQuestionRef = useRef<QuestionEntry | null>(null);
+  activeQuestionRef.current = activeQuestion;
+  // tb_1791819024_26192_2: follow уже тостил про этот вопрос (не спамим).
+  const followBlockedRef = useRef<string | null>(null);
+  // tb_1791819024_26192_2: дабл-клик по вердикту — один ответ (scn-03 ×2).
+  const answerBusyRef = useRef(false);
+  const lastAnswerRef = useRef<{ qid: string; verdict: AnswerVerdict; at: number }>({ qid: "", verdict: "comment", at: 0 });
   const questionRangeRef = useRef<{ start: number; end: number } | null>(null);
   const questionPathRef = useRef<string | null>(null);
   const [questionChoice, setQuestionChoice] = useState<string | null>(null);
@@ -847,19 +854,46 @@ function App() {
   function clearActiveQuestion(): void {
     questionRangeRef.current = null;
     questionPathRef.current = null;
+    followBlockedRef.current = null;
     setActiveQuestion(null);
     setQuestionChoice(null);
     setQuestionComment("");
+  }
+  // tb_1791819024_26192_2: плейлист пересобрали (Clear/импорт в панели) —
+  // карточки мёртвой записи не держим. Зовут слушатели reload (refs свежие).
+  function revalidateActiveQuestion(): void {
+    const q = activeQuestionRef.current;
+    if (!q?.question_id) return;
+    try {
+      const pl = loadPlaylist();
+      const alive = Array.isArray(pl?.entries) &&
+        (pl.entries as QuestionEntry[]).some((e) => e.question_id === q.question_id);
+      if (!alive) clearActiveQuestion();
+    } catch {
+      // ignore — карточка остаётся
+    }
   }
   // tb_1791809796_24701_1: канон «одна правда — маркеры». Ответ = reply-маркер
   // на qmat (общий конструктор lib/markerReply, anchor = playhead); answers.json
   // — чистая выжимка answersFromMarkers из всех маркеров, второго пути записи
   // в файл больше нет. Без родителя-qmat — только reply в Comments + тост
   // (в выжимку непривязанный ответ не идёт, честно).
+  // tb_1791819024_26192_2: подписи кнопок для тоста сохранения (оператор
+  // должен видеть, что записалось: мимо кнопки видно сразу).
+  const ANSWER_BUTTON_LABEL: Record<AnswerVerdict, string> = { favorite: "Confirm", negative: "Reject", comment: "Not sure" };
   async function answerQuestion(verdict: AnswerVerdict): Promise<void> {
     const q = activeQuestion;
     if (!q || !q.question_id) return;
     const qid = q.question_id;
+    // Дабл-клик — один ответ (scn-03 ×2 с разрывом 0.09с).
+    if (answerBusyRef.current) return;
+    const last = lastAnswerRef.current;
+    if (last.qid === qid && last.verdict === verdict && Date.now() - last.at < 1500) return;
+    answerBusyRef.current = true;
+    const recordAnswer = () => {
+      answerBusyRef.current = false;
+      lastAnswerRef.current = { qid, verdict, at: Date.now() };
+    };
     const comment = questionComment.trim();
     const t = videoRef.current?.currentTime;
     const playhead = typeof t === "number" && Number.isFinite(t) && t >= 0 ? t : undefined;
@@ -890,6 +924,7 @@ function App() {
       })
       : null;
     if (!reply) {
+      answerBusyRef.current = false;
       setContextToast("Answer kept in Comments only: no question markers for this entry.");
       return;
     }
@@ -912,31 +947,33 @@ function App() {
       if (playlistPath) {
         try {
           const fs = await import("@tauri-apps/plugin-fs");
-          const { answersPathFor } = await import("./lib/questionPlaylist");
+          const { answersPathFor, parseAnswersFile } = await import("./lib/questionPlaylist");
           const answersPath = answersPathFor(playlistPath);
-          await fs.writeTextFile(answersPath, serializeAnswersFile(records));
-          setContextToast(`Answer ${verdict} → reply in Comments, answers.json rebuilt (${records.length}).`);
+          // Слияние, не перезапись: легаси 0.25.54 цело («не стирает»).
+          let existing: AnswerRecord[] = [];
+          try {
+            existing = parseAnswersFile(await fs.readTextFile(answersPath));
+          } catch {
+            // файла ещё нет — выжимка первая
+          }
+          await fs.writeTextFile(answersPath, serializeAnswersFile(mergeAnswerRecords(existing, records)));
+          recordAnswer();
+          setContextToast(`Saved ${ANSWER_BUTTON_LABEL[verdict]} (${verdict}) → ${qid} + reply in Comments.`);
           return;
         } catch {
+          answerBusyRef.current = false;
           setContextToast("Answer: could not write answers file.");
           return;
         }
       }
     }
-    // Пути плейлиста нет — выжимка целиком в аутбокс (снимок, не привесок:
-    // файл = выжимка, дублей быть не должно).
-    try {
-      localStorage.setItem(
-        (await import("./lib/questionPlaylist")).QUESTION_ANSWERS_OUTBOX_KEY,
-        JSON.stringify(records),
-      );
-    } catch {
-      // ignore — ответ потерян только в web без LS
-    }
+    // Пути плейлиста нет — слияние целиком в аутбокс (та же семантика).
+    writeAnswersOutbox(mergeAnswerRecords(readAnswersOutbox(), records));
+    recordAnswer();
     setContextToast(
       isTauriRuntimeSync()
-        ? "Answer saved locally (open the question playlist from file for answers.json) + reply in Comments."
-        : "Answer saved locally (web outbox) + reply in Comments.",
+        ? `Saved ${ANSWER_BUTTON_LABEL[verdict]} (${verdict}) → ${qid} locally (open the question playlist from file for answers.json) + reply in Comments.`
+        : `Saved ${ANSWER_BUTTON_LABEL[verdict]} (${verdict}) → ${qid} (web outbox) + reply in Comments.`,
     );
   }
   function activateQuestionFor(path: string, questionId?: string | null): void {
@@ -1292,8 +1329,16 @@ function App() {
     // tb_1791809796_24701_1: импорт плейлиста тоже пишет напрямую (панель
     // плейлиста) — markers:changed перечитываем так же, иначе шкала пуста,
     // пока видео не переоткроют.
+    // tb_1791819024_26192_2: плейлист пересобрали (Clear/импорт) — карточка
+    // мёртвой записи гаснет (revalidate). Web: storage чужого документа.
+    const onPlaylistStorage = (event: StorageEvent) => {
+      if (event.key !== "vetka_player_lab_playlist_v1") return;
+      revalidateActiveQuestion();
+    };
+    window.addEventListener("storage", onPlaylistStorage);
     let unlisten: (() => void) | null = null;
     let unlistenChanged: (() => void) | null = null;
+    let unlistenPlaylist: (() => void) | null = null;
     if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
       void import("@tauri-apps/api/event").then(({ listen }) => {
         listen(MARKERS_RELOAD_EVENT, () => {
@@ -1302,12 +1347,17 @@ function App() {
         listen(MARKERS_CHANGED_EVENT, () => {
           setMarkers(readStoredMarkers());
         }).then((fn) => { unlistenChanged = fn; }).catch(() => {});
+        listen(PLAYLIST_RELOAD_EVENT, () => {
+          revalidateActiveQuestion();
+        }).then((fn) => { unlistenPlaylist = fn; }).catch(() => {});
       }).catch(() => {});
     }
     return () => {
       window.removeEventListener("storage", onStorage);
+      window.removeEventListener("storage", onPlaylistStorage);
       unlisten?.();
       unlistenChanged?.();
+      unlistenPlaylist?.();
     };
   }, []);
 
@@ -3790,11 +3840,19 @@ function App() {
 
   // tb_1791521998_11250_5: клик по записи-вопросу ведёт к in (медиа грузится
   // асинхронно — ждём duration, потом прыгаем).
+  // tb_1791819024_26192_2: follow-переключение карточкой НЕ дёргает playhead:
+  // он уже внутри скобок (проверка ниже), прыжок только с чужой точки.
   useEffect(() => {
     if (!activeQuestion || duration <= 0) return;
     if (questionPathRef.current !== currentFilePathRef.current) return;
     const t = activeQuestion.in_sec;
     if (t === undefined || !(t >= 0) || !(t < duration)) return;
+    const nowT = Number(videoRef.current?.currentTime ?? currentTime);
+    const outT = activeQuestion.out_sec;
+    if (
+      Number.isFinite(nowT) && nowT >= t &&
+      (typeof outT !== "number" || !Number.isFinite(outT) || nowT <= outT)
+    ) return;
     const video = videoRef.current;
     if (video) {
       try {
@@ -3804,7 +3862,32 @@ function App() {
       }
     }
     setSeekTarget(t);
-  }, [activeQuestion, duration]);
+  }, [activeQuestion, duration, currentTime]);
+
+  // tb_1791819024_26192_2: карточка следует за playhead внутри одного файла
+  // (капча: 28 слайдов — один mp4, смена файла не стреляет). Нашли чужую
+  // запись под секундой — переключаем; вне скобок держим последнюю (без
+  // мигания); ввод не теряем (dirty-guard + один тост на вопрос).
+  useEffect(() => {
+    if (mediaKind !== "video" || !currentFilePath) return;
+    let hit: QuestionEntry | null = null;
+    try {
+      hit = findQuestionEntryAtTime(loadPlaylist()?.entries, currentFilePath, currentTime);
+    } catch {
+      return;
+    }
+    if (!hit?.question_id) return;
+    if (hit.question_id === activeQuestion?.question_id && questionPathRef.current === currentFilePath) return;
+    if (questionComment.trim() !== "" || questionChoice !== null) {
+      if (followBlockedRef.current !== hit.question_id) {
+        followBlockedRef.current = hit.question_id;
+        setContextToast(`Question ${hit.question_id} is here — finish or clear your input to switch.`);
+      }
+      return;
+    }
+    followBlockedRef.current = null;
+    activateQuestionFor(currentFilePath, hit.question_id);
+  }, [currentTime, currentFilePath, mediaKind, activeQuestion, questionComment, questionChoice]);
 
   // tb_1791686462_1275_1: авто-старт plain-записи со штатной [ скобки —
   // вопроса нет (activeQuestion пуст), а скобки на шкале есть. Разовый флаг
@@ -5250,9 +5333,9 @@ function App() {
                               className="question-card-side-verdict"
                               data-testid="question-answer-comment"
                               onClick={() => void answerQuestion("comment")}
-                              title="Disputed (comment)"
+                              title="Not sure (comment)"
                             >
-                              Dispute
+                              Not sure
                             </button>
                           </div>
                         </div>

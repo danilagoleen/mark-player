@@ -4,9 +4,11 @@ import {
   answersFromMarkers,
   appendAnswerRecord,
   findQuestionEntry,
+  findQuestionEntryAtTime,
   formatAnswerReplyText,
   isQuestionPlaylist,
   lerpQuestionBox,
+  mergeAnswerRecords,
   normalizeQuestionBox,
   normalizeQuestionEntry,
   parseAnswerReplyText,
@@ -281,5 +283,41 @@ describe("answersFromMarkers (tb_1791809796_24701_1: выжимка вместо
   it("пустой автор — confirmed_by operator, как раньше", () => {
     const [r] = answersFromMarkers([qmat, reply({ author: "" })]);
     expect(r.confirmed_by).toBe("operator");
+  });
+});
+
+describe("findQuestionEntryAtTime (tb_1791819024_26192_2: follow playhead)", () => {
+  const entries = [
+    { path: "/v/c.mp4", name: "c", duration: 300, addedAt: "x", question_id: "m1", in_sec: 0, out_sec: 10 },
+    { path: "/v/c.mp4", name: "c", duration: 300, addedAt: "x", question_id: "m2", in_sec: 10, out_sec: 20 },
+    { path: "/v/d.mp4", name: "d", duration: 50, addedAt: "x", question_id: "s1", in_sec: 15, out_sec: 35 },
+    { path: "/v/c.mp4", name: "c", duration: 300, addedAt: "x", question_id: "m3" },
+  ];
+  it("внутри скобок — своя запись того же файла", () => {
+    expect(findQuestionEntryAtTime(entries, "/v/c.mp4", 5)?.question_id).toBe("m1");
+    expect(findQuestionEntryAtTime(entries, "/v/c.mp4", 15)?.question_id).toBe("m2");
+    expect(findQuestionEntryAtTime(entries, "/v/d.mp4", 20)?.question_id).toBe("s1");
+  });
+  it("вне скобок / чужой файл / без скобок — null (держим последнюю)", () => {
+    expect(findQuestionEntryAtTime(entries, "/v/c.mp4", 25)).toBeNull();
+    expect(findQuestionEntryAtTime(entries, "/v/e.mp4", 5)).toBeNull();
+    expect(findQuestionEntryAtTime(entries, "/v/c.mp4", NaN)).toBeNull();
+    expect(findQuestionEntryAtTime([], "/v/c.mp4", 5)).toBeNull();
+  });
+});
+
+describe("mergeAnswerRecords (tb_1791819024_26192_2: не стирает)", () => {
+  const old1: AnswerRecord = { question_id: "q1", verdict: "favorite", answered_at: "t1" };
+  const dup: AnswerRecord = { question_id: "q1", verdict: "favorite", answered_at: "t1" };
+  const fresh: AnswerRecord = { question_id: "q1", verdict: "negative", comment: "x", answered_at: "t2" };
+  it("старое цело, новое дописывается, дубли нет", () => {
+    const merged = mergeAnswerRecords([old1], [dup, fresh]);
+    expect(merged).toHaveLength(2);
+    expect(merged[0]).toBe(old1);
+    expect(merged[1].verdict).toBe("negative");
+  });
+  it("пустой вход — как есть", () => {
+    expect(mergeAnswerRecords([], [fresh])).toHaveLength(1);
+    expect(mergeAnswerRecords([old1], [])).toEqual([old1]);
   });
 });
