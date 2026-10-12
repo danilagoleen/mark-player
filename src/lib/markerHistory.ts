@@ -5,6 +5,7 @@
 // Снапшоты хранятся по ссылке: вызывающий отдаёт массивы, которые сам
 // больше не мутирует (React state по конвенции неизменяем).
 import { markerBelongsToMedia } from "./markersSync";
+import { isQuestionMarker } from "./markerReply";
 
 export interface MarkerHistory<T> {
   past: T[][];
@@ -70,6 +71,9 @@ export interface HasKindMedia {
   kind: string;
   media_path?: string;
   content_hash?: string | null;
+  /** id и поле вопроса — чтобы Clear не сносил импорт Беты (см. ниже). */
+  marker_id?: string;
+  question_id?: string | null;
 }
 
 const CLEAR_SCOPE_KINDS: Record<Exclude<ClearScope, "all">, string[]> = {
@@ -83,6 +87,9 @@ const CLEAR_SCOPE_KINDS: Record<Exclude<ClearScope, "all">, string[]> = {
 // media null → [] (без видео чистить нечего).
 // 0.22: опциональный contentHash — та же identity, что у списка
 // (markerBelongsToMedia): копия видео чистит СВОИ метки, а не путь.
+// tb_1791839608_26192_1: маркеры вопросов (импорт Беты) НЕ жертвы никогда —
+// иначе Clear убивает qmat и карточке не к чему цеплять ответы (кейс 0.25.57:
+// Confirm молча ничего не создал). Вопросы чистятся только удалением плейлиста.
 export function selectMarkersToClear<T extends HasKindMedia>(
   markers: T[],
   media: string | null,
@@ -94,7 +101,8 @@ export function selectMarkersToClear<T extends HasKindMedia>(
   return markers.filter(
     (m) =>
       markerBelongsToMedia(m, { mediaKey: media, contentHash }) &&
-      (kinds === null || kinds.includes(m.kind)),
+      (kinds === null || kinds.includes(m.kind)) &&
+      !isQuestionMarker(m.marker_id, m.question_id),
   );
 }
 
@@ -127,7 +135,7 @@ export function formatClearConfirm<T extends HasKindMedia>(victims: T[]): string
   const parts = [...byBucket.entries()].map(([bucket, count]) => kindCountLabel(bucket, count));
   const total = victims.length;
   const totalLabel = total === 1 ? "marker" : "markers";
-  return `Delete ${parts.join(" and ")} (${total} ${totalLabel} of this video)? You can bring them back with Undo (Cmd+Z).`;
+  return `Delete ${parts.join(" and ")} (${total} ${totalLabel} of this video)? Question markers are kept. You can bring the rest back with Undo (Cmd+Z).`;
 }
 
 // Нативный confirm очистки. Tauri — plugin-dialog, браузер (dev) —

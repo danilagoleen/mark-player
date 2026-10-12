@@ -128,6 +128,22 @@ describe("selectMarkersToClear (0.21 clear by kind)", () => {
     // Без хеша — только путь, как раньше.
     expect(selectMarkersToClear(hashed, "copy.mp4", "all").map((m) => m.marker_id)).toEqual(["l1"]);
   });
+
+  // tb_1791839608_26192_1: Clear не сносит вопросы Беты (иначе карточке не к
+  // чему цеплять ответы — кейс 0.25.57). Ответы-реплики при этом чистятся.
+  it("qmat-родители и поле question_id — не жертвы даже под all", () => {
+    const withQ = [
+      ...ALL,
+      { marker_id: "qmat_mrg-01_in", kind: "comment", media_path: "a.mp4" },
+      { marker_id: "qmat_mrg-01_out", kind: "comment", media_path: "a.mp4" },
+      { marker_id: "qm1", kind: "comment", media_path: "a.mp4", question_id: "mrg-02" },
+      { marker_id: "reply_1", kind: "favorite", media_path: "a.mp4", reply_to: "qmat_mrg-01_in" },
+    ];
+    const victims = selectMarkersToClear(withQ, "a.mp4", "all").map((m) => m.marker_id);
+    expect(victims).toHaveLength(8);
+    expect(victims).toContain("reply_1");
+    expect(victims.some((id) => id === "qmat_mrg-01_in" || id === "qmat_mrg-01_out" || id === "qm1")).toBe(false);
+  });
 });
 
 describe("formatClearConfirm (0.21)", () => {
@@ -135,7 +151,7 @@ describe("formatClearConfirm (0.21)", () => {
     expect(formatClearConfirm([
       { kind: "comment", media_path: "a.mp4" },
       { kind: "comment", media_path: "a.mp4" },
-    ])).toBe("Delete 2 comments (2 markers of this video)? You can bring them back with Undo (Cmd+Z).");
+    ])).toBe("Delete 2 comments (2 markers of this video)? Question markers are kept. You can bring the rest back with Undo (Cmd+Z).");
   });
 
   it("единственное число + in/out одним ведром", () => {
@@ -144,7 +160,7 @@ describe("formatClearConfirm (0.21)", () => {
       { kind: "in", media_path: "a.mp4" },
       { kind: "out", media_path: "a.mp4" },
     ])).toBe(
-      "Delete 1 favorite and 2 in/out points (3 markers of this video)? You can bring them back with Undo (Cmd+Z).",
+      "Delete 1 favorite and 2 in/out points (3 markers of this video)? Question markers are kept. You can bring the rest back with Undo (Cmd+Z).",
     );
   });
 });

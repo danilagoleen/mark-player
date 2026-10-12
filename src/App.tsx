@@ -928,7 +928,10 @@ function App() {
       : null;
     if (!reply) {
       answerBusyRef.current = false;
-      setContextToast("Answer kept in Comments only: no question markers for this entry.");
+      // tb_1791839608_26192_1: честно — ответ НЕ сохранён (было «kept in
+      // Comments only», врало: ничего никуда не писалось). С гардом кнопок
+      // сюда не попасть из UI, ветка — страховка.
+      setContextToast("Answer NOT saved: no question markers for this entry — reimport the playlist.");
       return;
     }
     pushMarkerHistory();
@@ -978,6 +981,14 @@ function App() {
         ? `Saved ${ANSWER_BUTTON_LABEL[verdict]} (${verdict}) → ${qid} locally (open the question playlist from file for answers.json) + reply in Comments.`
         : `Saved ${ANSWER_BUTTON_LABEL[verdict]} (${verdict}) → ${qid} (web outbox) + reply in Comments.`,
     );
+  }
+  // tb_1791839608_26192_1: гард карточки — ответу нужен маркер-родитель.
+  // Без qmat кнопки гаснут (кейс 0.25.57: Confirm молча ничего не создал).
+  function questionHasMarkers(qid: string | null | undefined): boolean {
+    if (!qid) return false;
+    const inId = materializedMarkerId(qid, "in");
+    const prefix = materializedMarkerPrefix(qid);
+    return mediaMarkers.some((m) => m.marker_id === inId || m.marker_id.startsWith(prefix));
   }
   function activateQuestionFor(path: string, questionId?: string | null): void {
     try {
@@ -5269,8 +5280,11 @@ function App() {
                         </div>
                       </div>
                       {/* tb_1791764026_23730_1: вопрос — компактной карточкой
-                          справа вверху, вплотную к тулбару (план Б). Пилюлю
-                          не трогает. Текст режется ellipsis, полный — в title. */}
+                          (план Б). Пилюлю не трогает. Текст режется ellipsis,
+                          полный — в title.
+                          tb_1791839608_26192_1: карточка в центре под пилюлей —
+                          правый верх отдан тосту (приказ оператора). Без
+                          маркеров вопроса кнопки гаснут + подсказка. */}
                       {mediaKind === "video" && activeQuestion && questionPathRef.current === currentFilePath ? (
                         <div
                           data-testid="question-card"
@@ -5319,7 +5333,8 @@ function App() {
                               className="question-card-side-verdict"
                               data-testid="question-answer-favorite"
                               onClick={() => void answerQuestion("favorite")}
-                              title="Confirm"
+                              disabled={!questionHasMarkers(activeQuestion?.question_id)}
+                              title={questionHasMarkers(activeQuestion?.question_id) ? "Confirm" : "No question markers — reimport the playlist"}
                             >
                               Confirm
                             </button>
@@ -5328,7 +5343,8 @@ function App() {
                               className="question-card-side-verdict"
                               data-testid="question-answer-negative"
                               onClick={() => void answerQuestion("negative")}
-                              title="Reject"
+                              disabled={!questionHasMarkers(activeQuestion?.question_id)}
+                              title={questionHasMarkers(activeQuestion?.question_id) ? "Reject" : "No question markers — reimport the playlist"}
                             >
                               Reject
                             </button>
@@ -5337,11 +5353,17 @@ function App() {
                               className="question-card-side-verdict"
                               data-testid="question-answer-comment"
                               onClick={() => void answerQuestion("comment")}
-                              title="Not sure (comment)"
+                              disabled={!questionHasMarkers(activeQuestion?.question_id)}
+                              title={questionHasMarkers(activeQuestion?.question_id) ? "Not sure (comment)" : "No question markers — reimport the playlist"}
                             >
                               Not sure
                             </button>
                           </div>
+                          {!questionHasMarkers(activeQuestion?.question_id) ? (
+                            <div className="question-card-side-row" data-testid="question-no-markers">
+                              <span className="question-card-side-hint">No question markers for this entry — answers won&apos;t save. Reimport the playlist.</span>
+                            </div>
+                          ) : null}
                         </div>
                       ) : null}
                       <button

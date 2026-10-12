@@ -341,11 +341,14 @@ select {
 }
 /* tb_1791764026_23730_1: вопрос — компактная карточка справа вверху,
  * вплотную к тулбару (план Б). Пилюлю не трогает. Текст режется
- * ellipsis (данные целы, полный вопрос — в title). */
+ * ellipsis (данные целы, полный вопрос — в title).
+ * tb_1791839608_26192_1: переезд в центр под пилюлю — правый верх отдан
+ * тосту (оператор: тост там где должен быть, карточка уехала). */
 .question-card-side {
   position: absolute;
-  top: 14px;
-  right: 14px;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
   width: 340px;
   z-index: 4;
   display: flex;
@@ -400,6 +403,16 @@ select {
 }
 .question-card-side-choice[aria-pressed="true"] {
   background: rgba(255, 255, 255, 0.22);
+}
+/* tb_1791839608_26192_1: гард — кнопки без маркеров гаснут, подсказка видна. */
+.question-card-side-verdict:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.question-card-side-hint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.75);
 }
 .question-card-side-input {
   flex: 1 1 auto;
