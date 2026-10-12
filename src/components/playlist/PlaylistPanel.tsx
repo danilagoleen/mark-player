@@ -11,6 +11,7 @@ import {
   type MaterializedMarker,
 } from "../../lib/questionMaterialize";
 import { toAssetUrl } from "../../lib/nativeWindow";
+import { notifyMarkersChanged } from "../../lib/markersSync";
 import { importBetaBundleText } from "../../lib/betaBundles";
 import { readInOutPlayEnabled, writeInOutPlayEnabled, INOUT_PLAY_STORAGE_KEY } from "../../lib/inOutPlayback";
 import { Download, Repeat, Repeat1, Scissors, Shuffle, Upload } from "lucide-react";
@@ -311,6 +312,10 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
       try {
         localStorage.setItem("vetka_player_lab_markers_v1", JSON.stringify([...arr, ...fresh]));
       } catch { /* ignore — панель остаётся рабочей в памяти */ }
+      // tb_1791809796_24701_1: маркеры дописаны напрямую в LS — главное окно
+      // и панель mid-session об этом не узнают (storage между вебвью не
+      // ходит): будим событием, обе стороны перечитывают хранилище.
+      notifyMarkersChanged();
     }
     if (questions === 0) return `Loaded ${fileLabel}: no questions.`;
     return fresh.length > 0

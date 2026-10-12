@@ -61,4 +61,11 @@ describe("normalizeImportedMarker", () => {
     expect(normalizeImportedMarker({ kind: "comment", text: "y", reply_to: "a b" })?.reply_to).toBeUndefined();
     expect(normalizeImportedMarker({ kind: "comment", text: "y", reply_to: "" })?.reply_to).toBeUndefined();
   });
+
+  // tb_1791809796_24701_1: id вопроса едет через импорт (выжимка ответов).
+  it("passes question_id through, drops garbage", () => {
+    expect(normalizeImportedMarker({ kind: "in", text: "q", question_id: "mrg-01" })?.question_id).toBe("mrg-01");
+    expect(normalizeImportedMarker({ kind: "in", text: "q" })?.question_id).toBeUndefined();
+    expect(normalizeImportedMarker({ kind: "in", text: "q", question_id: "   " })?.question_id).toBeUndefined();
+  });
 });

@@ -38,10 +38,10 @@ import { buildUIManifest, type UIManifest } from "./lib/uiManifest";
 import { DOOR_IDS, checkModuleDoor, doorClickTransition, doorEndpoint, doorLabel, type DoorId, type ModuleDoor } from "./lib/moduleDoors";
 import type { ProbeResult } from "./lib/nativeWindow";
 import { createEmptyPlaylist, savePlaylist, loadPlaylist, addEntry, getNextEntry, loadPlaybackMode, sanitizePlaylistFilename, trackOpenedFile, type QuestionPlaylistEntry } from "./lib/playlist";
-import { appendAnswersOutbox, appendAnswerRecord, findQuestionEntry, formatAnswerReplyText, lerpQuestionBox, normalizeQuestionEntry, parseAnswersFile, readQuestionPlaylistPath, rememberQuestionPlaylistPath, serializeAnswersFile, DEFAULT_CONFIRMED_BY, isQuestionPlaylist, type AnswerRecord, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
+import { answersFromMarkers, findQuestionEntry, formatAnswerReplyText, lerpQuestionBox, normalizeQuestionEntry, readQuestionPlaylistPath, rememberQuestionPlaylistPath, serializeAnswersFile, isQuestionPlaylist, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
 import { isSameMediaPath, resolveMediaContentHash } from "./lib/mediaOpen";
 import { mediaPlayability, mediaRefusalReason } from "./lib/mediaPlayability";
-import { markerBelongsToMedia, notifyMediaChanged, resolveExternalMarkers, MARKERS_RELOAD_EVENT, type MediaIdentity } from "./lib/markersSync";
+import { markerBelongsToMedia, notifyMediaChanged, resolveExternalMarkers, MARKERS_CHANGED_EVENT, MARKERS_RELOAD_EVENT, type MediaIdentity } from "./lib/markersSync";
 import { isSameImportedMarker, matchGroupToPath, parseXmemlMarkers, type ImportedMarker } from "./lib/xmemlImport";
 import type { CutPlayerMenuAction } from "./lib/cutPlayerMenu";
 import { useDragDrop } from "./lib/useDragDrop";
@@ -59,8 +59,11 @@ import { normalizeImportedMarker } from "./lib/markersJson";
 import {
   loadCommentAuthorName,
   parseReplyText,
-  resolveReplyAuthor,
 } from "./lib/commentAuthor";
+import {
+  buildReplyMarkerFull,
+  resolveReplyAuthorForParent,
+} from "./lib/markerReply";
 import { materializedMarkerId, materializedMarkerPrefix } from "./lib/questionMaterialize";
 import {
   VOLUME_STEP,
@@ -187,6 +190,8 @@ interface PlayerTimeMarker {
   // tb_1791585558_31907_1: ответ — ссылка на родителя (marker_id).
   // Опциональна: старые маркеры без неё — корни.
   reply_to?: string;
+  // tb_1791809796_24701_1: id вопроса у qmat-маркера (выжимка ответов).
+  question_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -846,91 +851,71 @@ function App() {
     setQuestionChoice(null);
     setQuestionComment("");
   }
+  // tb_1791809796_24701_1: канон «одна правда — маркеры». Ответ = reply-маркер
+  // на qmat (общий конструктор lib/markerReply, anchor = playhead); answers.json
+  // — чистая выжимка answersFromMarkers из всех маркеров, второго пути записи
+  // в файл больше нет. Без родителя-qmat — только reply в Comments + тост
+  // (в выжимку непривязанный ответ не идёт, честно).
   async function answerQuestion(verdict: AnswerVerdict): Promise<void> {
     const q = activeQuestion;
     if (!q || !q.question_id) return;
     const qid = q.question_id;
-    const record: AnswerRecord = {
-      question_id: qid,
-      verdict,
-      confirmed_by: DEFAULT_CONFIRMED_BY,
-      answered_at: new Date().toISOString(),
-    };
     const comment = questionComment.trim();
-    if (comment) record.comment = comment;
     const t = videoRef.current?.currentTime;
-    if (typeof t === "number" && Number.isFinite(t) && t >= 0) record.t_sec = t;
-    if (questionChoice) record.choice = questionChoice;
-    // Скобки — только если пользователь их сдвинул своими in/out.
-    const myIn = mediaMarkers.find((m) => m.kind === "in")?.anchor_sec;
-    const myOut = mediaMarkers.find((m) => m.kind === "out")?.anchor_sec;
-    if (
-      typeof myIn === "number" && Number.isFinite(myIn) &&
-      typeof myOut === "number" && Number.isFinite(myOut) && myOut > myIn &&
-      (myIn !== q.in_sec || myOut !== q.out_sec)
-    ) {
-      record.in_sec = myIn;
-      record.out_sec = myOut;
-    }
-    // tb_1791754893_1275_4: ответ виден человеку — дубль reply-маркером
-    // в Comments (§6.2: choice + comment + verdict), родитель — in-маркер
-    // вопроса (qmat), иначе первый маркер вопроса, иначе точка ответа.
+    const playhead = typeof t === "number" && Number.isFinite(t) && t >= 0 ? t : undefined;
     const replyParent =
       mediaMarkers.find((m) => m.marker_id === materializedMarkerId(qid, "in")) ??
       mediaMarkers.find((m) => m.marker_id.startsWith(materializedMarkerPrefix(qid))) ??
       null;
-    const replyAt = replyParent
-      ? Number(replyParent.anchor_sec ?? replyParent.start_sec ?? 0)
-      : Math.max(0, Number(videoRef.current?.currentTime ?? currentTime ?? 0));
-    const replyAnchor = Number.isFinite(replyAt) && replyAt >= 0 ? replyAt : 0;
     const replyText = formatAnswerReplyText({ verdict, choice: questionChoice ?? undefined, comment: comment || undefined });
-    const replyAuthor = resolveReplyAuthor(commentAuthorRef.current, replyParent?.author);
-    const writeReplyMarker = (): void => {
-      if (!currentMediaKey) return;
-      const now = new Date().toISOString();
-      const reply: PlayerTimeMarker = {
-        marker_id: createMarkerId(),
-        schema_version: "cut_time_marker_v1",
-        project_id: "cut_demo",
-        timeline_id: "main",
-        media_path: currentMediaKey,
-        content_hash: contentHashRef.current ?? null,
-        kind: "comment",
-        start_sec: replyParent ? Number(replyParent.start_sec ?? replyAnchor) : replyAnchor,
-        end_sec: replyParent ? Number(replyParent.end_sec ?? replyParent.start_sec ?? replyAnchor) : replyAnchor,
-        anchor_sec: replyAnchor,
-        score: 0.6,
-        label: `[answer] ${qid}`.slice(0, 80),
+    const now = new Date().toISOString();
+    const replyAuthor = resolveReplyAuthorForParent(commentAuthorRef.current, replyParent);
+    const reply = replyParent && currentMediaKey
+      ? buildReplyMarkerFull({
+        parent: {
+          marker_id: replyParent.marker_id,
+          start_sec: replyParent.start_sec,
+          end_sec: replyParent.end_sec,
+          anchor_sec: replyParent.anchor_sec,
+          media_path: currentMediaKey,
+          author: replyParent.author,
+          content_hash: contentHashRef.current ?? null,
+          question_id: replyParent.question_id ?? qid,
+        },
         text: replyText,
         author: replyAuthor,
-        context_slice: null,
-        cam_payload: null,
-        chat_thread_id: null,
-        comment_thread_id: null,
-        source_engine: "player_lab",
-        reply_to: replyParent ? replyParent.marker_id : undefined,
-        created_at: now,
-        updated_at: now,
-      };
-      pushMarkerHistory();
-      setMarkers((prev) => [...prev, reply]);
-    };
+        label: `[answer] ${qid}`.slice(0, 80),
+        now,
+        playheadSec: playhead,
+      })
+      : null;
+    if (!reply) {
+      setContextToast("Answer kept in Comments only: no question markers for this entry.");
+      return;
+    }
+    pushMarkerHistory();
+    const updated = [...markersRef.current, reply as PlayerTimeMarker];
+    setMarkers(updated);
+    const playlist = loadPlaylist();
+    const entries = Array.isArray(playlist?.entries) ? playlist.entries as QuestionEntry[] : [];
+    const records = answersFromMarkers(updated, {
+      resolveLegacyQuestionId: (parentId) =>
+        entries.find((e) => e.question_id && parentId.startsWith(materializedMarkerPrefix(e.question_id)))?.question_id,
+      choicesOf: (questionId) => {
+        const hit = entries.find((e) => e.question_id === questionId);
+        return Array.isArray(hit?.choices) ? hit.choices as string[] : undefined;
+      },
+    });
+    setQuestionComment("");
     if (isTauriRuntimeSync()) {
       const playlistPath = readQuestionPlaylistPath();
       if (playlistPath) {
         try {
           const fs = await import("@tauri-apps/plugin-fs");
-          const answersPath = (await import("./lib/questionPlaylist")).answersPathFor(playlistPath);
-          let existing: AnswerRecord[] = [];
-          try {
-            existing = parseAnswersFile(await fs.readTextFile(answersPath));
-          } catch {
-            // файла ещё нет — начнём с пустого, только дописываем
-          }
-          await fs.writeTextFile(answersPath, serializeAnswersFile(appendAnswerRecord(existing, record)));
-          writeReplyMarker();
-          setContextToast(`Answer ${verdict} → ${answersPath} + reply in Comments.`);
-          setQuestionComment("");
+          const { answersPathFor } = await import("./lib/questionPlaylist");
+          const answersPath = answersPathFor(playlistPath);
+          await fs.writeTextFile(answersPath, serializeAnswersFile(records));
+          setContextToast(`Answer ${verdict} → reply in Comments, answers.json rebuilt (${records.length}).`);
           return;
         } catch {
           setContextToast("Answer: could not write answers file.");
@@ -938,9 +923,16 @@ function App() {
         }
       }
     }
-    appendAnswersOutbox(record);
-    writeReplyMarker();
-    setQuestionComment("");
+    // Пути плейлиста нет — выжимка целиком в аутбокс (снимок, не привесок:
+    // файл = выжимка, дублей быть не должно).
+    try {
+      localStorage.setItem(
+        (await import("./lib/questionPlaylist")).QUESTION_ANSWERS_OUTBOX_KEY,
+        JSON.stringify(records),
+      );
+    } catch {
+      // ignore — ответ потерян только в web без LS
+    }
     setContextToast(
       isTauriRuntimeSync()
         ? "Answer saved locally (open the question playlist from file for answers.json) + reply in Comments."
@@ -1258,6 +1250,8 @@ function App() {
 
   // tb_1791754893_1275_4: рамка-лицо прямо сейчас: lerp bbox→bbox_end за
   // in..out («трекинг для бедных»); без скобок/конца — статичный bbox.
+  // tb_1791809796_24701_1: вне скобок вопроса рамку не рисуем (Beta: квадратик
+  // висел в пустоте). Карточку гейт не трогает — введённый ответ не теряется.
   const questionBoxNow: QuestionBox | null = useMemo(() => {
     const entry = activeQuestion;
     const box = entry?.bbox;
@@ -1269,6 +1263,7 @@ function App() {
       typeof inSec === "number" && typeof outSec === "number" &&
       Number.isFinite(inSec) && Number.isFinite(outSec) && outSec > inSec
     ) {
+      if (currentTime < inSec || currentTime > outSec) return null;
       return lerpQuestionBox(box, end, (currentTime - inSec) / (outSec - inSec));
     }
     return box;
@@ -1294,17 +1289,25 @@ function App() {
     window.addEventListener("storage", onStorage);
     // tb_1791654032_27281_1: панель пишет в то же хранилище, но storage
     // между вебвью Tauri не ходит — слушаем markers:reload и перечитываем.
+    // tb_1791809796_24701_1: импорт плейлиста тоже пишет напрямую (панель
+    // плейлиста) — markers:changed перечитываем так же, иначе шкала пуста,
+    // пока видео не переоткроют.
     let unlisten: (() => void) | null = null;
+    let unlistenChanged: (() => void) | null = null;
     if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
       void import("@tauri-apps/api/event").then(({ listen }) => {
         listen(MARKERS_RELOAD_EVENT, () => {
           setMarkers(readStoredMarkers());
         }).then((fn) => { unlisten = fn; }).catch(() => {});
+        listen(MARKERS_CHANGED_EVENT, () => {
+          setMarkers(readStoredMarkers());
+        }).then((fn) => { unlistenChanged = fn; }).catch(() => {});
       }).catch(() => {});
     }
     return () => {
       window.removeEventListener("storage", onStorage);
       unlisten?.();
+      unlistenChanged?.();
     };
   }, []);
 
@@ -2062,6 +2065,8 @@ function App() {
                 if (norm.author) marker.author = norm.author;
                 // tb_1791585558_31907_1: ссылка ответа.
                 if (norm.reply_to) marker.reply_to = norm.reply_to;
+                // tb_1791809796_24701_1: id вопроса (выжимка ответов).
+                if (norm.question_id) marker.question_id = norm.question_id;
                 added.push(marker);
               }
             }

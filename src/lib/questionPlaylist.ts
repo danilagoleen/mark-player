@@ -164,6 +164,126 @@ export function formatAnswerReplyText(input: { verdict: AnswerVerdict; choice?: 
   return head ? `[answer] ${head} (${input.verdict})` : `[answer] (${input.verdict})`;
 }
 
+// tb_1791809796_24701_1: обратная разборка текста ответа (канон «одна правда —
+// маркеры»): `[answer] choice: comment (verdict)`. Без префикса — null
+// (свободный текст трактует answersFromMarkers, не парсер).
+const ANSWER_RE = /^\[answer\]\s*([\s\S]*?)\s*\((favorite|negative|comment)\)\s*$/;
+
+export interface ParsedAnswerReply {
+  verdict: AnswerVerdict;
+  choice?: string;
+  comment?: string;
+  /** одиночный head `[answer] X (v)`: разобрать позже по вариантам вопроса. */
+  single?: string;
+}
+
+export function parseAnswerReplyText(text: string | null | undefined): ParsedAnswerReply | null {
+  if (typeof text !== "string") return null;
+  const m = ANSWER_RE.exec(text.trim());
+  if (!m) return null;
+  const verdict = m[2] as AnswerVerdict;
+  const head = (m[1] ?? "").trim().replace(/\s+/g, " ");
+  if (!head) return { verdict };
+  const sep = head.indexOf(": ");
+  if (sep < 0) return { verdict, single: head };
+  const choice = head.slice(0, sep).trim();
+  const comment = head.slice(sep + 2).trim();
+  const out: ParsedAnswerReply = { verdict };
+  if (choice) out.choice = choice;
+  if (comment) out.comment = comment;
+  return out;
+}
+
+/** Минимум маркера, нужный выжимке (оба окна структурно подходят). */
+export interface ExtractableMarker {
+  marker_id: string;
+  text?: string | null;
+  author?: string | null;
+  anchor_sec?: number | null;
+  start_sec?: number | null;
+  end_sec?: number | null;
+  reply_to?: string | null;
+  created_at?: string | null;
+  /** поле qmat-маркера; у старых — только id-префикс (см. legacy). */
+  question_id?: string | null;
+}
+
+export interface AnswersExtractOptions {
+  /** Старые qmat-маркеры без поля: id-префикс → question_id (плейлист того же окна). */
+  resolveLegacyQuestionId?: (parentId: string) => string | undefined;
+  /** Одиночный head `[answer] X (v)`: X — choice, если в списке вариантов вопроса. */
+  choicesOf?: (questionId: string) => string[] | undefined;
+}
+
+function finiteNum(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+/**
+ * tb_1791809796_24701_1: answers.json = выжимка из маркеров. Прямые дети qmat —
+ * ответы: с префиксом [answer] — разбор вердикта/choice/comment, без — свободный
+ * текст (verdict comment, Commander). t_sec = anchor ответа (карточка ставит
+ * playhead), answered_at = created_at, скобки = текущий диапазон родителя
+ * (человек двигает сам qmat). Несколько ответов на вопрос — все (последний
+ * главнее — дело потребителя, см. resolveAnswers). Плеер ответы не стирает.
+ */
+export function answersFromMarkers(
+  markers: ExtractableMarker[],
+  opts?: AnswersExtractOptions,
+): AnswerRecord[] {
+  if (!Array.isArray(markers)) return [];
+  const byId = new Map<string, ExtractableMarker>();
+  for (const m of markers) {
+    if (m && typeof m === "object" && typeof m.marker_id === "string") byId.set(m.marker_id, m);
+  }
+  const out: AnswerRecord[] = [];
+  for (const m of markers) {
+    if (!m || typeof m !== "object") continue;
+    const parentId = typeof m.reply_to === "string" ? m.reply_to : "";
+    if (!parentId) continue;
+    const parent = byId.get(parentId);
+    if (!parent) continue;
+    const fieldQid = typeof parent.question_id === "string" ? parent.question_id.trim() : "";
+    const legacyQid = !fieldQid && typeof parentId === "string" && parentId.startsWith("qmat_")
+      ? opts?.resolveLegacyQuestionId?.(parentId)
+      : undefined;
+    // Родитель — вопрос только с полем или легаси-резолвом: обычный тред
+    // (родитель не qmat) в выжимку не идёт, даже с префиксом.
+    const qid = fieldQid || (typeof legacyQid === "string" ? legacyQid : "");
+    if (!qid) continue;
+    const rawText = typeof m.text === "string" ? m.text.trim() : "";
+    const parsed = parseAnswerReplyText(rawText);
+    const record: AnswerRecord = {
+      question_id: qid,
+      verdict: parsed?.verdict ?? "comment",
+      answered_at: typeof m.created_at === "string" && m.created_at ? m.created_at : "",
+    };
+    if (parsed) {
+      if (parsed.choice) record.choice = parsed.choice;
+      else if (parsed.single) {
+        const known = opts?.choicesOf?.(qid);
+        if (known && known.includes(parsed.single)) record.choice = parsed.single;
+        else record.comment = parsed.single;
+      }
+      if (parsed.comment) record.comment = parsed.comment;
+    } else if (rawText) {
+      record.comment = rawText;
+    } else {
+      continue;
+    }
+    const t = finiteNum(m.anchor_sec) ?? finiteNum(parent.anchor_sec);
+    if (t !== undefined && t >= 0) record.t_sec = t;
+    const inSec = finiteNum(parent.start_sec);
+    const outSec = finiteNum(parent.end_sec);
+    if (inSec !== undefined && inSec >= 0) record.in_sec = inSec;
+    if (outSec !== undefined && outSec >= 0) record.out_sec = outSec;
+    const author = typeof m.author === "string" ? m.author.trim() : "";
+    record.confirmed_by = author || DEFAULT_CONFIRMED_BY;
+    out.push(record);
+  }
+  return out;
+}
+
 /** Мягкая нормализация одной записи: чужое отбрасывается, своё чистится. */
 export function normalizeQuestionEntry(raw: unknown): QuestionEntryFields {
   if (!raw || typeof raw !== "object") return {};

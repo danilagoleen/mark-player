@@ -16,6 +16,8 @@ export interface NormalizedMarkerImport {
   author?: string;
   /** tb_1791585558_31907_1: ссылка на родителя (ответ). */
   reply_to?: string;
+  /** tb_1791809796_24701_1: id вопроса у qmat-маркера (выжимка ответов). */
+  question_id?: string;
   anchorSec?: number;
   startSec?: number;
   endSec?: number;
@@ -50,6 +52,8 @@ export function normalizeImportedMarker(entry: unknown): NormalizedMarkerImport 
   if (author !== undefined) norm.author = author;
   const replyTo = normalizeReplyTo(m.reply_to);
   if (replyTo !== undefined) norm.reply_to = replyTo;
+  const qid = textOrUndefined(m.question_id);
+  if (qid !== undefined) norm.question_id = qid;
   if (anchorSec !== undefined) norm.anchorSec = anchorSec;
   if (startSec !== undefined) norm.startSec = startSec;
   if (endSec !== undefined) norm.endSec = endSec;

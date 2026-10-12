@@ -17,6 +17,9 @@ function clampLabel(raw: string): string {
 // BareMarker из панелей: лишнего не требуем, недостающего не пишем).
 export interface MaterializedMarker {
   marker_id: string;
+  // tb_1791809796_24701_1: вопрос хранит свой id полем — обратный разбор
+  // санитизированного id не нужен (выжимка answersFromMarkers берёт отсюда).
+  question_id: string;
   schema_version: "cut_time_marker_v1";
   project_id: string;
   timeline_id: string;
@@ -91,9 +94,10 @@ export function agentAuthorFor(by: unknown): string {
   return `${AGENT_AUTHOR_PREFIX}${clean}`;
 }
 
-function baseMarker(ctx: MaterializeContext, markerId: string): Omit<MaterializedMarker, "kind" | "start_sec" | "end_sec" | "anchor_sec" | "label" | "text"> {
+function baseMarker(ctx: MaterializeContext, markerId: string, questionId: string): Omit<MaterializedMarker, "kind" | "start_sec" | "end_sec" | "anchor_sec" | "label" | "text"> {
   return {
     marker_id: markerId,
+    question_id: questionId,
     schema_version: "cut_time_marker_v1",
     project_id: "cut_demo",
     timeline_id: "main",
@@ -144,7 +148,7 @@ export function materializeQuestionEntry(
     : undefined;
   if (inSec !== undefined) {
     out.push({
-      ...baseMarker(ctx, materializedMarkerId(qid, "in")),
+      ...baseMarker(ctx, materializedMarkerId(qid, "in"), qid),
       kind: "in",
       start_sec: inSec,
       end_sec: inSec,
@@ -155,7 +159,7 @@ export function materializeQuestionEntry(
   }
   if (outSec !== undefined && inSec !== undefined && outSec > inSec) {
     out.push({
-      ...baseMarker(ctx, materializedMarkerId(qid, "out")),
+      ...baseMarker(ctx, materializedMarkerId(qid, "out"), qid),
       kind: "out",
       start_sec: outSec,
       end_sec: outSec,
@@ -172,7 +176,7 @@ export function materializeQuestionEntry(
     const kind = normalizeKind(m.kind);
     const mText = typeof m.text === "string" ? m.text.trim() : "";
     out.push({
-      ...baseMarker(ctx, materializedMarkerId(qid, `c${i}`)),
+      ...baseMarker(ctx, materializedMarkerId(qid, `c${i}`), qid),
       kind,
       start_sec: t,
       end_sec: t,

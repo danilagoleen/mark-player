@@ -253,6 +253,8 @@ interface SidecarMarker {
   /** tb_1791585558_31907_1: ссылка на родителя (ответ). */
   reply_to?: string;
   created_at?: string;
+  /** tb_1791809796_24701_1: id вопроса у qmat-маркера (выжимка ответов). */
+  question_id?: string;
 }
 
 interface SidecarProvisionalEvent {
@@ -289,6 +291,7 @@ export function exportToSidecar(
       author: m.author || "",
       reply_to: m.reply_to || "",
       created_at: m.created_at || "",
+      question_id: m.question_id || "",
     })),
     provisional_events: provisionalEvents.map((e) => ({
       provisional_event_id: e.provisional_event_id,

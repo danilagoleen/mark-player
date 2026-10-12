@@ -1,6 +1,7 @@
 // tb_1791521998_11250_5: схема плейлиста-вопроса + answers.json.
 import { describe, expect, it } from "vitest";
 import {
+  answersFromMarkers,
   appendAnswerRecord,
   findQuestionEntry,
   formatAnswerReplyText,
@@ -8,6 +9,7 @@ import {
   lerpQuestionBox,
   normalizeQuestionBox,
   normalizeQuestionEntry,
+  parseAnswerReplyText,
   parseAnswersFile,
   resolveAnswers,
   serializeAnswersFile,
@@ -190,5 +192,94 @@ describe("answers.json", () => {
   });
   it("путь ответов — рядом с плейлистом", () => {
     expect(answersPathFor("/idx/cal.json")).toBe("/idx/cal.json.answers.json");
+  });
+});
+
+describe("parseAnswerReplyText (tb_1791809796_24701_1)", () => {
+  it("полная грамматика choice: comment (verdict)", () => {
+    expect(parseAnswerReplyText("[answer] same: сошлось (favorite)")).toEqual({
+      verdict: "favorite",
+      choice: "same",
+      comment: "сошлось",
+    });
+  });
+  it("голый вердикт", () => {
+    expect(parseAnswerReplyText("[answer] (negative)")).toEqual({ verdict: "negative" });
+  });
+  it("одиночный head — single, разберёт выжимка", () => {
+    expect(parseAnswerReplyText("[answer] pan (favorite)")).toEqual({ verdict: "favorite", single: "pan" });
+  });
+  it("без префикса и мусор — null", () => {
+    expect(parseAnswerReplyText("просто текст")).toBeNull();
+    expect(parseAnswerReplyText("[answer] x (unknown)")).toBeNull();
+    expect(parseAnswerReplyText(null)).toBeNull();
+  });
+});
+
+describe("answersFromMarkers (tb_1791809796_24701_1: выжимка вместо второго пути)", () => {
+  const qmat = {
+    marker_id: "qmat_mrg-01_in",
+    kind: "comment",
+    start_sec: 10,
+    end_sec: 12,
+    anchor_sec: 10,
+    text: "Кто это?",
+    author: "agent:Beta",
+    question_id: "mrg-01",
+  };
+  const reply = (over: Record<string, unknown> = {}) => ({
+    marker_id: "reply_1",
+    kind: "comment",
+    start_sec: 10,
+    end_sec: 12,
+    anchor_sec: 11.5,
+    text: "[answer] pan: сошлось (favorite)",
+    author: "operator",
+    reply_to: "qmat_mrg-01_in",
+    created_at: "2026-10-12T02:00:00Z",
+    ...over,
+  });
+  it("прямой ребёнок qmat с префиксом — запись со всеми полями", () => {
+    const [r] = answersFromMarkers([qmat, reply()]);
+    expect(r.question_id).toBe("mrg-01");
+    expect(r.verdict).toBe("favorite");
+    expect(r.choice).toBe("pan");
+    expect(r.comment).toBe("сошлось");
+    expect(r.t_sec).toBe(11.5);
+    expect(r.answered_at).toBe("2026-10-12T02:00:00Z");
+    expect(r.in_sec).toBe(10);
+    expect(r.out_sec).toBe(12);
+    expect(r.confirmed_by).toBe("operator");
+  });
+  it("свободный текст без префикса — verdict comment", () => {
+    const [r] = answersFromMarkers([qmat, reply({ text: "сомневаюсь, переснять" })]);
+    expect(r.verdict).toBe("comment");
+    expect(r.comment).toBe("сомневаюсь, переснять");
+  });
+  it("одиночный head: в вариантах — choice, иначе comment", () => {
+    const m = [qmat, reply({ text: "[answer] pan (favorite)" })];
+    expect(answersFromMarkers(m, { choicesOf: () => ["pan", "tilt"] })[0].choice).toBe("pan");
+    expect(answersFromMarkers(m, { choicesOf: () => ["tilt"] })[0].comment).toBe("pan");
+    expect(answersFromMarkers(m)[0].comment).toBe("pan");
+  });
+  it("обычный тред (родитель не qmat) — мимо, даже с префиксом", () => {
+    const plain = { marker_id: "comment_1", kind: "comment", start_sec: 5, end_sec: 5, anchor_sec: 5, text: "x" };
+    expect(answersFromMarkers([plain, reply({ reply_to: "comment_1" })])).toEqual([]);
+  });
+  it("родитель потерян / пустой текст — мимо", () => {
+    expect(answersFromMarkers([reply({ reply_to: "nope" })])).toEqual([]);
+    expect(answersFromMarkers([qmat, reply({ text: "  " })])).toEqual([]);
+  });
+  it("легаси qmat без поля — через resolveLegacyQuestionId", () => {
+    const { question_id: _drop, ...legacy } = qmat;
+    const withId = { ...legacy, marker_id: "qmat_mrg-02_in" };
+    const opts = { resolveLegacyQuestionId: (id: string) => (id.startsWith("qmat_mrg-02_") ? "mrg-02" : undefined) };
+    const child = reply({ reply_to: "qmat_mrg-02_in" });
+    expect(answersFromMarkers([withId, child], opts)[0].question_id).toBe("mrg-02");
+    expect(answersFromMarkers([withId, child])).toEqual([]);
+  });
+  it("пустой автор — confirmed_by operator, как раньше", () => {
+    const [r] = answersFromMarkers([qmat, reply({ author: "" })]);
+    expect(r.confirmed_by).toBe("operator");
   });
 });

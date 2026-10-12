@@ -10,12 +10,16 @@ import {
   selectMarkersToClear,
 } from "./lib/markerHistory";
 import { resolvePlayerHotkey } from "./lib/playerHotkeys";
-import { markerBelongsToMedia, notifyMarkersReloaded, MEDIA_CHANGED_EVENT, resolveEffectiveMedia, type MediaChangedPayload } from "./lib/markersSync";
+import { markerBelongsToMedia, notifyMarkersReloaded, MEDIA_CHANGED_EVENT, MARKERS_CHANGED_EVENT, resolveEffectiveMedia, type MediaChangedPayload } from "./lib/markersSync";
+import {
+  buildReplyMarkerFull,
+  resolveReplyAuthorForParent,
+  type ReplyParent,
+} from "./lib/markerReply";
 import {
   applyAuthorPromptResult,
   loadCommentAuthorName,
   markCommentAuthorAsked,
-  resolveReplyAuthor,
   saveCommentAuthorName,
   wasCommentAuthorAsked,
 } from "./lib/commentAuthor";
@@ -40,6 +44,8 @@ interface BareMarker {
   reply_to?: string;
   // 0.22: штамп содержимого — копия видео опознаётся и здесь.
   content_hash?: string | null;
+  // tb_1791809796_24701_1: штамп ответа (выжимка answers: answered_at).
+  created_at?: string;
 }
 
 // 0.10.16c: media-scope для СПИСКА, не только выбора — CommentOverlay
@@ -135,21 +141,31 @@ export function buildCommentMarker(input: NewCommentInput): BareMarker {
 
 // tb_1791690899_1275_3: ответ — в точке родителя (у родителя тоже мог не
 // быть anchor_sec — добиваем из start_sec, иначе второй ноль на шкале).
+// tb_1791809796_24701_1: канон — один конструктор в lib/markerReply (окно
+// Markers playhead не знает: anchor родителя). Здесь тонкий совместимый
+// фасад (тесты и оверлей зовут его).
 export function buildReplyMarker(parent: BareMarker, text: string, author: string): BareMarker | null {
   if (!parent || typeof parent !== "object") return null;
-  const at = Number(parent.anchor_sec ?? parent.start_sec ?? 0);
-  const anchor = Number.isFinite(at) && at >= 0 ? at : 0;
-  return {
-    marker_id: `reply_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e6).toString(36)}`,
-    kind: "comment",
-    start_sec: Number(parent.start_sec ?? 0),
-    end_sec: Number(parent.end_sec ?? parent.start_sec ?? 0),
-    anchor_sec: anchor,
+  const full = buildReplyMarkerFull({
+    parent: parent as ReplyParent,
     text,
-    media_path: parent.media_path,
     author,
-    reply_to: parent.marker_id,
-    content_hash: parent.content_hash ?? null,
+    label: "",
+    now: new Date().toISOString(),
+  });
+  if (!full) return null;
+  return {
+    marker_id: full.marker_id,
+    kind: full.kind,
+    start_sec: full.start_sec,
+    end_sec: full.end_sec,
+    anchor_sec: full.anchor_sec,
+    text: full.text,
+    media_path: full.media_path,
+    author: full.author,
+    reply_to: full.reply_to,
+    content_hash: full.content_hash,
+    created_at: full.created_at,
   };
 }
 
@@ -244,7 +260,8 @@ function CommentsStandalone() {
   const [mediaOverride, setMediaOverride] = useState<MediaChangedPayload | null>(null);
   useEffect(() => {
     if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
-    let unlisten: (() => void) | null = null;
+    let unlistenMedia: (() => void) | null = null;
+    let unlistenChanged: (() => void) | null = null;
     void import("@tauri-apps/api/event").then(({ listen }) => {
       listen<MediaChangedPayload>(MEDIA_CHANGED_EVENT, (event) => {
         const p = event.payload;
@@ -254,9 +271,14 @@ function CommentsStandalone() {
           contentHash: typeof p.contentHash === "string" ? p.contentHash : null,
         });
         setMarkers(loadAllMarkers());
-      }).then((fn) => { unlisten = fn; }).catch(() => {});
+      }).then((fn) => { unlistenMedia = fn; }).catch(() => {});
+      // tb_1791809796_24701_1: импорт плейлиста дописал маркеры напрямую —
+      // перечитать, иначе вопрос в пилюле есть, а здесь его нет вообще.
+      listen(MARKERS_CHANGED_EVENT, () => {
+        setMarkers(loadAllMarkers());
+      }).then((fn) => { unlistenChanged = fn; }).catch(() => {});
     }).catch(() => {});
-    return () => { unlisten?.(); };
+    return () => { unlistenMedia?.(); unlistenChanged?.(); };
   }, []);
 
   const search = typeof window !== "undefined" ? window.location.search : "";
@@ -339,14 +361,16 @@ function CommentsStandalone() {
 
   // tb_1791586270_32802_2: ответ человека — новый коммент в той же точке,
   // reply_to = родитель. Автор — тот же пассивный ensureAuthor.
-  // tb_1791754893_1275_4: пустой свой — fallback на автора родителя.
+  // tb_1791809796_24701_1: fallback на автора родителя запрещён только для
+  // qmat-родителей (там agent:Beta); обычные треды — как раньше. Ответ на
+  // qmat — это ответ на вопрос: выжимка answers его подберёт.
   const handleReply = useCallback((parentId: string, text: string) => {
     const clean = text.trim();
     if (!clean) return;
     const prev = markersRef.current;
     const parent = prev.find((m) => m.marker_id === parentId);
     if (!parent) return;
-    const reply = buildReplyMarker(parent, clean, resolveReplyAuthor(ensureAuthor(), parent.author));
+    const reply = buildReplyMarker(parent, clean, resolveReplyAuthorForParent(ensureAuthor(), parent as ReplyParent));
     if (!reply) return;
     historyRef.current = historyPush(historyRef.current, prev);
     const updated = [...prev, reply];

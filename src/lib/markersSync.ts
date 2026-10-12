@@ -53,6 +53,23 @@ export function notifyMarkersReloaded(): void {
   // web: setItem уже стрельнул storage в чужом документе — делать нечего.
 }
 
+// tb_1791809796_24701_1: импорт плейлиста пишет маркеры в LS напрямую
+// (PlaylistPanel) — ни главное окно, ни панель mid-session об этом не узнают:
+// storage между вебвью Tauri не ходит, MEDIA_CHANGED — только смена видео.
+// Итог без события: вопрос в пилюле есть, а в Comments его нет вообще.
+// Шлём событие — обе стороны перечитывают хранилище.
+export const MARKERS_CHANGED_EVENT = "markers:changed";
+
+/** Кто-то дописал маркеры в хранилище напрямую — всем перечитать (best-effort). */
+export function notifyMarkersChanged(): void {
+  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+    import("@tauri-apps/api/event").then(({ emit }) => {
+      emit(MARKERS_CHANGED_EVENT, {}).catch(() => {});
+    }).catch(() => {});
+  }
+  // web: setItem уже стрельнул storage в чужом документе — делать нечего.
+}
+
 export function resolveExternalMarkers(raw: string | null | undefined): ExternalMarker[] | null {
   if (!raw) return null;
   let parsed: unknown;

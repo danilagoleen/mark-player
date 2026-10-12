@@ -120,4 +120,12 @@ describe("questionMaterialize bbox (tb_1791754893_1275_4)", () => {
     const markers = materializeQuestionEntry({ question_id: long, question: long, in_sec: 1, out_sec: 2 }, CTX);
     for (const m of markers) expect(m.label.length).toBeLessThanOrEqual(80);
   });
+  it("tb_1791809796_24701_1: каждый маркер несёт question_id полем", () => {
+    const markers = materializeQuestionEntry(
+      { question_id: "mrg-01", question: "Кто?", in_sec: 1, out_sec: 2, markers: [{ kind: "comment", t_sec: 1.5 }] },
+      CTX,
+    );
+    expect(markers.length).toBeGreaterThan(0);
+    for (const m of markers) expect(m.question_id).toBe("mrg-01");
+  });
 });

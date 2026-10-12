@@ -235,6 +235,17 @@ describe("exportToSidecar", () => {
     expect(json.content_hash).toBe("ch1:aaaa");
     expect(json.media_path).toBe("video.mp4");
   });
+
+  it("tb_1791809796_24701_1: question_id едет в сайдкар (выжимка ответов)", () => {
+    const qmat = [{
+      marker_id: "qmat_mrg-01_in", kind: "in", start_sec: 5, end_sec: 5, anchor_sec: 5,
+      label: "mrg-01", text: "Кто?", media_path: "v.mp4", question_id: "mrg-01",
+    }];
+    const json = JSON.parse(exportToSidecar(qmat, [], "v.mp4"));
+    expect(json.markers[0].question_id).toBe("mrg-01");
+    const plain = JSON.parse(exportToSidecar(markers, [], "video.mp4"));
+    expect(plain.markers[0].question_id).toBe("");
+  });
 });
 
 describe("exportMarkersToXml", () => {
