@@ -94,6 +94,39 @@ describe("normalizeQuestionBox (tb_1791754893_1275_4)", () => {
     expect(out.bbox_end).toEqual({ x: 0.32, y: 0.21, w: 0.2, h: 0.3 });
     expect(normalizeQuestionEntry({ question_id: "pq2", bbox: { x: 2, y: 0, w: 1, h: 1 } })).not.toHaveProperty("bbox");
   });
+  it("tolerant-read (tb_1791764026_23730_1): bbox из markers[0], как у Беты", () => {
+    const out = normalizeQuestionEntry({
+      question_id: "mrg-01",
+      in_sec: 257.75,
+      out_sec: 261.75,
+      markers: [
+        {
+          kind: "comment",
+          t_sec: 259.75,
+          text: "merge P254+P278",
+          bbox: { x: 0.3844, y: 0.2, w: 0.0698, h: 0.1963 },
+          bbox_end: { x: 0.3302, y: 0.0556, w: 0.07, h: 0.19 },
+        },
+      ],
+    });
+    expect(out.bbox).toEqual({ x: 0.3844, y: 0.2, w: 0.0698, h: 0.1963 });
+    expect(out.bbox_end).toEqual({ x: 0.3302, y: 0.0556, w: 0.07, h: 0.19 });
+  });
+  it("tolerant-read: своя рамка записи побеждает маркерную", () => {
+    const out = normalizeQuestionEntry({
+      question_id: "q3",
+      bbox: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 },
+      markers: [{ kind: "comment", t_sec: 1, bbox: { x: 0.5, y: 0.5, w: 0.2, h: 0.2 } }],
+    });
+    expect(out.bbox).toEqual({ x: 0.1, y: 0.1, w: 0.2, h: 0.2 });
+  });
+  it("tolerant-read: мусор в маркерах не даёт рамку", () => {
+    const out = normalizeQuestionEntry({
+      question_id: "q4",
+      markers: [{ kind: "comment", t_sec: 1, bbox: { x: 5, y: 0, w: 1, h: 1 } }],
+    });
+    expect(out).not.toHaveProperty("bbox");
+  });
 });
 
 describe("lerpQuestionBox (tb_1791754893_1275_4)", () => {

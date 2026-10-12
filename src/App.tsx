@@ -4945,99 +4945,31 @@ function App() {
                           окно открывает лого Марка (context-action выше). */}
                     </div>
                     <div className="topbar-zone topbar-center">
-                      {/* tb_1791754893_1275_4: в момент вопроса пилюля
-                          СТАНОВИТСЯ карточкой (вопрос-режим) — кнопки
-                          создания маркеров прячутся, дублей ★✕💬 больше
-                          нет, вердикты — словами. */}
-                      {mediaKind === "video" && activeQuestion && questionPathRef.current === currentFilePath ? (
-                        <div
-                          className="marker-dock marker-dock-question"
-                          data-testid="question-card"
-                          title={activeQuestion.hypothesis || activeQuestion.question || activeQuestion.question_id}
-                        >
-                          <span className="question-pill-text" data-testid="question-text">
-                            {activeQuestion.question || activeQuestion.question_id}
-                          </span>
-                          {(activeQuestion.choices ?? []).map((choice) => (
-                            <button
-                              key={choice}
-                              type="button"
-                              className="question-pill-choice"
-                              data-testid="question-choice"
-                              aria-pressed={questionChoice === choice}
-                              onClick={() => setQuestionChoice((prev) => (prev === choice ? null : choice))}
-                            >
-                              {choice}
-                            </button>
-                          ))}
-                          <input
-                            className="question-pill-input"
-                            data-testid="question-comment"
-                            value={questionComment}
-                            onChange={(e) => setQuestionComment(e.target.value)}
-                            placeholder="Comment…"
-                            aria-label="Answer comment"
-                          />
-                          <button
-                            type="button"
-                            className="question-pill-verdict"
-                            data-testid="question-answer-favorite"
-                            onClick={() => void answerQuestion("favorite")}
-                            title="Confirm"
-                          >
-                            Confirm
-                          </button>
-                          <button
-                            type="button"
-                            className="question-pill-verdict"
-                            data-testid="question-answer-negative"
-                            onClick={() => void answerQuestion("negative")}
-                            title="Reject"
-                          >
-                            Reject
-                          </button>
-                          <button
-                            type="button"
-                            className="question-pill-verdict"
-                            data-testid="question-answer-comment"
-                            onClick={() => void answerQuestion("comment")}
-                            title="Disputed (comment)"
-                          >
-                            Dispute
-                          </button>
-                          <button
-                            type="button"
-                            className="question-pill-close"
-                            data-testid="question-close"
-                            onClick={clearActiveQuestion}
-                            title="Dismiss question"
-                          >
-                            ✕
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="marker-dock">
-                          <button className="transport-button" type="button" onClick={() => { addMomentMarker("favorite"); setContextToast("Favorite marked."); }} data-testid="marker-favorite" aria-label={tooltipFor("marker-favorite")} title={tooltipFor("marker-favorite")}>
-                            <IconMarkerFavorite />
-                          </button>
-                          <button className="transport-button" type="button" onClick={() => { addMomentMarker("negative"); setContextToast("Negative marked."); }} data-testid="marker-negative" aria-label={tooltipFor("marker-negative")} title={tooltipFor("marker-negative")}>
-                            <IconMarkerNegative />
-                          </button>
-                          <button className="transport-button" type="button" onClick={() => { addMomentMarker("in"); setContextToast("In point marked."); }} data-testid="marker-in" aria-label={tooltipFor("marker-in")} title={tooltipFor("marker-in")}>
-                            <IconMarkerIn />
-                          </button>
-                          <button className="transport-button" type="button" onClick={() => { addMomentMarker("out"); setContextToast("Out point marked."); }} data-testid="marker-out" aria-label={tooltipFor("marker-out")} title={tooltipFor("marker-out")}>
-                            <IconMarkerOut />
-                          </button>
-                          <button className="transport-button" type="button" onClick={() => { openCommentsPanel("comment"); }} data-testid="marker-comment" aria-label={tooltipFor("marker-comment")} title={tooltipFor("marker-comment")}>
-                            <IconMarkerComment />
-                            {commentMomentCount > 0 ? <span className="transport-count-badge">{commentMomentCount}</span> : null}
-                          </button>
-                          {/* Bell №2: agent-chat button removed — chat is a separate
-                              module, not in the default bundle. Marker pill:
-                              ★ ✗ [ ] 💬(comment). */}
-                        </div>
-                      )}
+                      {/* tb_1791764026_23730_1: пилюля ВСЕГДА цела — вопрос
+                          её не подменяет (вердикт оператора 12.10:
+                          маркеры — лицо плеера). Вопрос живёт отдельной
+                          компактной карточкой справа вверху. */}
+                      <div className="marker-dock">
+                        <button className="transport-button" type="button" onClick={() => { addMomentMarker("favorite"); setContextToast("Favorite marked."); }} data-testid="marker-favorite" aria-label={tooltipFor("marker-favorite")} title={tooltipFor("marker-favorite")}>
+                          <IconMarkerFavorite />
+                        </button>
+                        <button className="transport-button" type="button" onClick={() => { addMomentMarker("negative"); setContextToast("Negative marked."); }} data-testid="marker-negative" aria-label={tooltipFor("marker-negative")} title={tooltipFor("marker-negative")}>
+                          <IconMarkerNegative />
+                        </button>
+                        <button className="transport-button" type="button" onClick={() => { addMomentMarker("in"); setContextToast("In point marked."); }} data-testid="marker-in" aria-label={tooltipFor("marker-in")} title={tooltipFor("marker-in")}>
+                          <IconMarkerIn />
+                        </button>
+                        <button className="transport-button" type="button" onClick={() => { addMomentMarker("out"); setContextToast("Out point marked."); }} data-testid="marker-out" aria-label={tooltipFor("marker-out")} title={tooltipFor("marker-out")}>
+                          <IconMarkerOut />
+                        </button>
+                        <button className="transport-button" type="button" onClick={() => { openCommentsPanel("comment"); }} data-testid="marker-comment" aria-label={tooltipFor("marker-comment")} title={tooltipFor("marker-comment")}>
+                          <IconMarkerComment />
+                          {commentMomentCount > 0 ? <span className="transport-count-badge">{commentMomentCount}</span> : null}
+                        </button>
+                        {/* Bell №2: agent-chat button removed — chat is a separate
+                            module, not in the default bundle. Marker pill:
+                            ★ ✗ [ ] 💬(comment). */}
+                      </div>
                     </div>
                     <div className="topbar-zone topbar-right" />
                   </div>
@@ -5244,6 +5176,82 @@ function App() {
                           ) : null}
                         </div>
                       </div>
+                      {/* tb_1791764026_23730_1: вопрос — компактной карточкой
+                          справа вверху, вплотную к тулбару (план Б). Пилюлю
+                          не трогает. Текст режется ellipsis, полный — в title. */}
+                      {mediaKind === "video" && activeQuestion && questionPathRef.current === currentFilePath ? (
+                        <div
+                          data-testid="question-card"
+                          className="question-card-side"
+                          title={activeQuestion.hypothesis || activeQuestion.question || activeQuestion.question_id}
+                        >
+                          <div className="question-card-side-head">
+                            <span data-testid="question-text" className="question-card-side-text">
+                              {activeQuestion.question || activeQuestion.question_id}
+                            </span>
+                            <button
+                              type="button"
+                              className="question-card-side-x"
+                              data-testid="question-close"
+                              onClick={clearActiveQuestion}
+                              title="Dismiss question"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                          {(activeQuestion.choices ?? []).map((choice) => (
+                            <button
+                              key={choice}
+                              type="button"
+                              className="question-card-side-choice"
+                              data-testid="question-choice"
+                              aria-pressed={questionChoice === choice}
+                              onClick={() => setQuestionChoice((prev) => (prev === choice ? null : choice))}
+                            >
+                              {choice}
+                            </button>
+                          ))}
+                          <div className="question-card-side-row">
+                            <input
+                              className="question-card-side-input"
+                              data-testid="question-comment"
+                              value={questionComment}
+                              onChange={(e) => setQuestionComment(e.target.value)}
+                              placeholder="Comment…"
+                              aria-label="Answer comment"
+                            />
+                          </div>
+                          <div className="question-card-side-row">
+                            <button
+                              type="button"
+                              className="question-card-side-verdict"
+                              data-testid="question-answer-favorite"
+                              onClick={() => void answerQuestion("favorite")}
+                              title="Confirm"
+                            >
+                              Confirm
+                            </button>
+                            <button
+                              type="button"
+                              className="question-card-side-verdict"
+                              data-testid="question-answer-negative"
+                              onClick={() => void answerQuestion("negative")}
+                              title="Reject"
+                            >
+                              Reject
+                            </button>
+                            <button
+                              type="button"
+                              className="question-card-side-verdict"
+                              data-testid="question-answer-comment"
+                              onClick={() => void answerQuestion("comment")}
+                              title="Disputed (comment)"
+                            >
+                              Dispute
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
                       <button
                         className="seek-zone seek-zone-left"
                         type="button"

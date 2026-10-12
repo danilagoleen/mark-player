@@ -205,9 +205,22 @@ export function normalizeQuestionEntry(raw: unknown): QuestionEntryFields {
   }
   const choices = stringArrayOrUndefined(m.choices);
   if (choices !== undefined) out.choices = choices;
-  const bbox = normalizeQuestionBox(m.bbox);
+  // tb_1791764026_23730_1: tolerant-read — канон на записи, но Бета
+  // фактически несёт bbox в markers[0] (people_merges_v01): нет своего —
+  // берём из первого сырого маркера, где есть. Сырые, не чищенные:
+  // normalizeQuestionBox валидирует заново.
+  const rawMarkers = Array.isArray(m.markers) ? m.markers : [];
+  const firstMarkerBox = (key: string): QuestionBox | undefined => {
+    for (const rm of rawMarkers) {
+      if (!rm || typeof rm !== "object") continue;
+      const b = normalizeQuestionBox((rm as Record<string, unknown>)[key]);
+      if (b !== undefined) return b;
+    }
+    return undefined;
+  };
+  const bbox = normalizeQuestionBox(m.bbox) ?? firstMarkerBox("bbox");
   if (bbox !== undefined) out.bbox = bbox;
-  const bboxEnd = normalizeQuestionBox(m.bbox_end);
+  const bboxEnd = normalizeQuestionBox(m.bbox_end) ?? firstMarkerBox("bbox_end");
   if (bboxEnd !== undefined) out.bbox_end = bboxEnd;
   return out;
 }

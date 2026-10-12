@@ -339,51 +339,76 @@ select {
   border: 1px solid rgba(255, 255, 255, 0.1);
   backdrop-filter: blur(20px);
 }
-/* tb_1791754893_1275_4: вопрос-режим пилюли — та же пилюля становится
- * карточкой вопроса (никаких дублей ★✕💬 и плавающих полос). Текст
- * сжимается ellipsis, полный вопрос — в title. */
-.marker-dock-question {
-  border-radius: 14px;
-  max-width: min(72vw, 860px);
+/* tb_1791764026_23730_1: вопрос — компактная карточка справа вверху,
+ * вплотную к тулбару (план Б). Пилюлю не трогает. Текст режется
+ * ellipsis (данные целы, полный вопрос — в title). */
+.question-card-side {
+  position: absolute;
+  top: 64px;
+  right: 14px;
+  width: 340px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(18, 20, 22, 0.92);
+  font-size: 12px;
 }
-.question-pill-text {
+.question-card-side-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.question-card-side-text {
+  flex: 1 1 auto;
+  min-width: 0;
   font-weight: 600;
   font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 340px;
 }
-.question-pill-choice,
-.question-pill-verdict {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 6px;
-  color: inherit;
-  cursor: pointer;
-  padding: 2px 8px;
-  font-size: 12px;
-  white-space: nowrap;
-}
-.question-pill-choice[aria-pressed="true"] {
-  background: rgba(255, 255, 255, 0.22);
-}
-.question-pill-input {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 6px;
-  color: inherit;
-  padding: 2px 8px;
-  font-size: 12px;
-  width: 110px;
-}
-.question-pill-close {
+.question-card-side-x {
+  flex: none;
   background: none;
   border: none;
   cursor: pointer;
   opacity: 0.6;
   font-size: 13px;
   color: inherit;
+}
+.question-card-side-row {
+  display: flex;
+  gap: 6px;
+}
+.question-card-side-choice,
+.question-card-side-verdict {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.question-card-side-choice[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.22);
+}
+.question-card-side-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  color: inherit;
+  padding: 2px 8px;
+  font-size: 12px;
 }
 /* tb_1791754893_1275_4: рамка региона-лица поверх кадра. Живёт внутри
  * .video-raster (ровно размер отображаемого кадра + letterbox-офсеты
