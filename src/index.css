@@ -344,7 +344,7 @@ select {
  * ellipsis (данные целы, полный вопрос — в title). */
 .question-card-side {
   position: absolute;
-  top: 64px;
+  top: 14px;
   right: 14px;
   width: 340px;
   z-index: 4;
@@ -354,9 +354,10 @@ select {
   gap: 6px;
   margin: 0;
   padding: 8px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 12px;
-  background: rgba(18, 20, 22, 0.92);
+  background: rgba(12, 14, 16, 0.55);
+  backdrop-filter: blur(20px);
   font-size: 12px;
 }
 .question-card-side-head {
