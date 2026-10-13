@@ -158,15 +158,66 @@ export function getNextEntry(
   if (!entries.length) return null;
   if (!currentPath) return entries[0];
   const idx = entries.findIndex((e) => e.path === currentPath);
-  if (mode.loop === "one" && idx >= 0) return entries[idx];
+  return stepFromIndex(entries, idx, mode, random)?.entry ?? null;
+}
+
+function stepFromIndex(
+  entries: PlaylistEntry[],
+  idx: number,
+  mode: PlaybackMode,
+  random: () => number,
+): { entry: PlaylistEntry; index: number } | null {
+  if (!entries.length) return null;
+  if (mode.loop === "one" && idx >= 0) return { entry: entries[idx], index: idx };
   if (mode.shuffle) {
-    const others = entries.filter((_, i) => i !== idx);
-    if (!others.length) return mode.loop === "all" ? entries[idx] : null;
-    return others[Math.min(others.length - 1, Math.floor(random() * others.length))];
+    const others = entries.map((_, i) => i).filter((i) => i !== idx);
+    if (!others.length) return mode.loop === "all" && idx >= 0 ? { entry: entries[idx], index: idx } : null;
+    const pick = others[Math.min(others.length - 1, Math.floor(random() * others.length))];
+    return { entry: entries[pick], index: pick };
   }
   if (idx < 0) return null;
-  if (idx >= entries.length - 1) return mode.loop === "all" ? entries[0] : null;
-  return entries[idx + 1];
+  if (idx >= entries.length - 1) return mode.loop === "all" ? { entry: entries[0], index: 0 } : null;
+  return { entry: entries[idx + 1], index: idx + 1 };
+}
+
+/** Курсор текущей записи: путь + вопрос (панель везёт оба). */
+export interface AdvanceCursor {
+  path: string | null;
+  questionId?: string | null;
+}
+
+// tb_1791865711_84020_5: фантом «плейлист возвращается назад». Корень:
+// несколько записей-вопросов делят один path (60 видео, вопросы Beta),
+// а переход искал findIndex-первое вхождение — с не-первой дублированной
+// записи прыгал НАЗАД (на первую+1). Индекс текущей — по вопросу, иначе
+// по пути; вопрос чужого пути не засчитываем.
+export function findCurrentEntryIndex(entries: unknown, cursor: AdvanceCursor): number {
+  if (!Array.isArray(entries)) return -1;
+  const path = cursor.path;
+  const qid = cursor.questionId;
+  if (typeof qid === "string" && qid) {
+    const byQ = (entries as unknown[]).findIndex((raw) =>
+      !!raw && typeof raw === "object" &&
+      (raw as { question_id?: unknown }).question_id === qid &&
+      (!path || (raw as { path?: unknown }).path === path));
+    if (byQ >= 0) return byQ;
+  }
+  if (typeof path !== "string" || !path) return -1;
+  return (entries as unknown[]).findIndex((raw) =>
+    !!raw && typeof raw === "object" && (raw as { path?: unknown }).path === path);
+}
+
+/** Следующая запись от КУРСОРА (а не от первого совпадения пути). */
+export function getNextEntryFromCursor(
+  playlist: Playlist,
+  cursor: AdvanceCursor,
+  mode: PlaybackMode = DEFAULT_PLAYBACK_MODE,
+  random: () => number = Math.random,
+): { entry: PlaylistEntry; index: number } | null {
+  const { entries } = playlist;
+  if (!entries.length) return null;
+  if (!cursor.path) return { entry: entries[0], index: 0 };
+  return stepFromIndex(entries, findCurrentEntryIndex(entries, cursor), mode, random);
 }
 
 export function serializePlaylist(playlist: Playlist): string {

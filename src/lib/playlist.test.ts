@@ -6,6 +6,8 @@ import {
   removeEntry,
   moveEntry,
   getNextEntry,
+  getNextEntryFromCursor,
+  findCurrentEntryIndex,
   nextLoopMode,
   loadPlaybackMode,
   savePlaybackMode,
@@ -121,6 +123,48 @@ describe("getNextEntry", () => {
   it("returns null for empty playlist", () => {
     const pl = createEmptyPlaylist();
     expect(getNextEntry(pl, null)).toBeNull();
+  });
+});
+
+describe("advance by cursor, dup paths (tb_1791865711_84020_5)", () => {
+  // Три вопроса на одном видео + следующее: переход с НЕ-первой дублированной
+  // записи шёл findIndex-назад (на первую+1) — фантом «возвращает назад».
+  const dupes = () => {
+    let pl = createEmptyPlaylist();
+    pl = addEntry(pl, { path: "/v/a.mp4", name: "a1", duration: 1, question_id: "q1" } as never);
+    pl = addEntry(pl, { path: "/v/a.mp4", name: "a2", duration: 1, question_id: "q2" } as never);
+    pl = addEntry(pl, { path: "/v/a.mp4", name: "a3", duration: 1, question_id: "q3" } as never);
+    pl = addEntry(pl, { path: "/v/b.mp4", name: "b", duration: 1 });
+    return pl;
+  };
+  it("индекс текущей — по вопросу, а не первое вхождение пути", () => {
+    const pl = dupes();
+    expect(findCurrentEntryIndex(pl.entries, { path: "/v/a.mp4", questionId: "q3" })).toBe(2);
+    expect(findCurrentEntryIndex(pl.entries, { path: "/v/a.mp4", questionId: "q1" })).toBe(0);
+    expect(findCurrentEntryIndex(pl.entries, { path: "/v/b.mp4" })).toBe(3);
+    expect(findCurrentEntryIndex(pl.entries, { path: "/v/no.mp4" })).toBe(-1);
+    expect(findCurrentEntryIndex(pl.entries, { path: "/v/a.mp4", questionId: "qx" })).toBe(0);
+  });
+  it("с третьей дублированной записи — вперёд на /v/b.mp4, а не назад", () => {
+    const pl = dupes();
+    const found = getNextEntryFromCursor(pl, { path: "/v/a.mp4", questionId: "q3" });
+    expect(found?.entry.path).toBe("/v/b.mp4");
+    expect(found?.index).toBe(3);
+  });
+  it("с первой дублированной — на вторую того же видео", () => {
+    const pl = dupes();
+    const found = getNextEntryFromCursor(pl, { path: "/v/a.mp4", questionId: "q1" });
+    expect(found?.entry.path).toBe("/v/a.mp4");
+    expect(found?.index).toBe(1);
+  });
+  it("без вопроса — с первого вхождения (старое поведение)", () => {
+    const pl = dupes();
+    const found = getNextEntryFromCursor(pl, { path: "/v/a.mp4" });
+    expect(found?.index).toBe(1);
+  });
+  it("getNextEntry без курсора — поведение не изменилось", () => {
+    const pl = dupes();
+    expect(getNextEntry(pl, "/v/a.mp4")?.path).toBe("/v/a.mp4");
   });
 });
 

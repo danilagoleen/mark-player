@@ -342,4 +342,12 @@ describe("resolveQuestionSnapTime (tb_1791848907_63972_2: рывок тольк�
     expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 25, null)).toBeNull();
     expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 25, { question_id: "m9" })).toBeNull();
   });
+  it("tb_1791871361_84020_1: ножницы ON — за OUT молчим (владения tail), щель до in — рывок", () => {
+    expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 25, m1, true)).toBeNull();
+    const m9 = { question_id: "m9", in_sec: 30, out_sec: 40 };
+    const entries9 = [{ path: "/v/c.mp4", question_id: "m9", in_sec: 30, out_sec: 40 }];
+    expect(resolveQuestionSnapTime(entries9, "/v/c.mp4", 25, m9, true)).toBe(30);
+    expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 25, m1, false)).toBe(0);
+    expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 25, m1)).toBe(0);
+  });
 });

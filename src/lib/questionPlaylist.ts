@@ -314,17 +314,24 @@ export function findQuestionEntryAtTime(
  * Правило: приземление внутри ЛЮБОГО вопроса — без рывка (null; карточку
  * подхватит follow), рывок к in_sec активного — только из щели (hit null),
  * когда follow никого не подхватит. Чистая, тестируем.
+ * tb_1791871361_84020_1: scissorsOwnTail — ножницы ON. Выход playhead за OUT
+ * активного вопроса при игре вперёд — владения tail-advance (следующее
+ * видео уже едет async-аттачем); снап назад к in_sec гонялся с аттачем
+ * и давал 3-5 повторов одной записи — здесь молчим (null). Ножницы OFF
+ * и щель ДО in — как раньше.
  */
 export function resolveQuestionSnapTime(
   entries: unknown,
   path: string | null | undefined,
   nowT: number,
   active: { question_id?: string | null; in_sec?: number; out_sec?: number } | null,
+  scissorsOwnTail?: boolean,
 ): number | null {
   if (!active || typeof active.in_sec !== "number" || !Number.isFinite(active.in_sec)) return null;
   if (findQuestionEntryAtTime(entries, path, nowT)) return null;
   const outT = typeof active.out_sec === "number" ? active.out_sec : NaN;
   if (nowT >= active.in_sec && (Number.isNaN(outT) || nowT <= outT)) return null;
+  if (scissorsOwnTail && !Number.isNaN(outT) && nowT > outT) return null;
   return active.in_sec;
 }
 
