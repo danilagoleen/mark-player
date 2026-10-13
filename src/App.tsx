@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   computeDreamScore,
   computeDisplayedBox,
@@ -24,6 +24,8 @@ import { sumSelectionSeconds, pairInOutRanges } from "./lib/selectionDuration";
 import {
   buildPlaybackSegments,
   firstInAnchor,
+  isManualSeekSuppressed,
+  markManualSeek,
   outCrossAction,
   readInOutPlayEnabled,
   wouldNestInPair,
@@ -38,16 +40,17 @@ import { buildUIManifest, type UIManifest } from "./lib/uiManifest";
 import { DOOR_IDS, checkModuleDoor, doorClickTransition, doorEndpoint, doorLabel, type DoorId, type ModuleDoor } from "./lib/moduleDoors";
 import type { ProbeResult } from "./lib/nativeWindow";
 import { createEmptyPlaylist, savePlaylist, loadPlaylist, addEntry, getNextEntry, loadPlaybackMode, sanitizePlaylistFilename, trackOpenedFile, type QuestionPlaylistEntry } from "./lib/playlist";
-import { answersFromMarkers, findQuestionEntry, findQuestionEntryAtTime, formatAnswerReplyText, lerpQuestionBox, mergeAnswerRecords, normalizeQuestionEntry, readAnswersOutbox, readQuestionPlaylistPath, rememberQuestionPlaylistPath, serializeAnswersFile, writeAnswersOutbox, isQuestionPlaylist, type AnswerRecord, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
+import { answersFromMarkers, findQuestionEntry, findQuestionEntryAtTime, formatAnswerReplyText, lerpQuestionBox, mergeAnswerRecords, normalizeQuestionEntry, readAnswersOutbox, readQuestionPlaylistPath, rememberQuestionPlaylistPath, resolveQuestionSnapTime, serializeAnswersFile, writeAnswersOutbox, isQuestionPlaylist, type AnswerRecord, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
 import { isSameMediaPath, resolveMediaContentHash } from "./lib/mediaOpen";
 import { mediaPlayability, mediaRefusalReason } from "./lib/mediaPlayability";
-import { markerBelongsToMedia, notifyMediaChanged, resolveExternalMarkers, MARKERS_CHANGED_EVENT, MARKERS_RELOAD_EVENT, type MediaIdentity } from "./lib/markersSync";
+import { markerBelongsToMedia, notifyMarkersChanged, notifyMediaChanged, resolveExternalMarkers, MARKERS_CHANGED_EVENT, MARKERS_RELOAD_EVENT, type MediaIdentity } from "./lib/markersSync";
 import { isSameImportedMarker, matchGroupToPath, parseXmemlMarkers, type ImportedMarker } from "./lib/xmemlImport";
 import type { CutPlayerMenuAction } from "./lib/cutPlayerMenu";
 import { useDragDrop } from "./lib/useDragDrop";
 import { ReverseShuttle, getShuttleDisplay, resolveJumpTarget, resolvePlayerHotkey, resolveProportionalStep, shuttleSlotClass } from "./lib/playerHotkeys";
 import {
   confirmClearMarkers,
+  countSparedQuestionReplies,
   createMarkerHistory,
   historyPush,
   historyRedo,
@@ -55,7 +58,10 @@ import {
   selectMarkersToClear,
 } from "./lib/markerHistory";
 import type { ClearScope } from "./lib/markerHistory";
+import { hitTestPlayhead, markerDragThresholdPassed, type PlayheadHitMarker } from "./lib/playheadHit";
+import { pauseBeforeMarkerJump } from "./lib/markerJump";
 import { normalizeImportedMarker } from "./lib/markersJson";
+import { decideMarkersImportTarget, readSidecarBinding, singlePlaylistMediaPath } from "./lib/markersImport";
 import {
   loadCommentAuthorName,
   parseReplyText,
@@ -64,7 +70,7 @@ import {
   buildReplyMarkerFull,
   resolveReplyAuthorForParent,
 } from "./lib/markerReply";
-import { materializedMarkerId, materializedMarkerPrefix } from "./lib/questionMaterialize";
+import { markerDedupKey, materializePlaylistQuestions, materializedMarkerId, materializedMarkerPrefix } from "./lib/questionMaterialize";
 import {
   VOLUME_STEP,
   createFrameCalibrator,
@@ -1579,17 +1585,20 @@ function App() {
           if (!video) break;
           event.preventDefault();
           video.currentTime = Math.max(0, video.currentTime - frameStep);
+          markManualSeek();
           break;
         case "frameStepForward":
           if (!video) break;
           event.preventDefault();
           video.currentTime = Math.min(duration || video.duration || 0, video.currentTime + frameStep);
+          markManualSeek();
           break;
         case "proportionalStepBack": {
           if (!video) break;
           event.preventDefault();
           const step = resolveProportionalStep(duration || video.duration || 0);
           video.currentTime = Math.max(0, video.currentTime - step);
+          markManualSeek();
           break;
         }
         case "proportionalStepForward": {
@@ -1597,6 +1606,7 @@ function App() {
           event.preventDefault();
           const step = resolveProportionalStep(duration || video.duration || 0);
           video.currentTime = Math.min(duration || video.duration || 0, video.currentTime + step);
+          markManualSeek();
           break;
         }
         case "jumpPrevMarker":
@@ -1608,7 +1618,13 @@ function App() {
             .filter((m) => markerBelongsToMedia(m, { mediaKey: currentMediaKeyRef.current, contentHash: contentHashRef.current }))
             .map((m) => m.anchor_sec);
           const target = resolveJumpTarget(anchors, video.currentTime, action === "jumpPrevMarker" ? -1 : 1);
-          if (target !== undefined) video.currentTime = target;
+          if (target !== undefined) {
+            // tb_1791860202_84020_2: прыжок из play — сначала пауза (как в
+            // Premiere), иначе плейхед дёргается между play и seek.
+            pauseBeforeMarkerJump(video);
+            video.currentTime = target;
+            markManualSeek();
+          }
           break;
         }
         case "volumeUp":
@@ -1625,11 +1641,13 @@ function App() {
           if (!video) break;
           event.preventDefault();
           video.currentTime = 0;
+          markManualSeek();
           break;
         case "goToEnd":
           if (!video) break;
           event.preventDefault();
           video.currentTime = video.duration || 0;
+          markManualSeek();
           break;
         case "playBack":
           if (!video) break;
@@ -1805,6 +1823,8 @@ function App() {
         const dir = event.deltaX > 0 ? 1 : -1;
         const limit = duration || video.duration || 0;
         video.currentTime = Math.min(limit, Math.max(0, video.currentTime + dir * frameStep));
+        // tb_1791843935_63972_2: покадровый скраб — навигация, ножницы молчат.
+        markManualSeek();
       } else {
         const now = performance.now();
         if (now - wheelVolumeAtRef.current < 50) return;
@@ -2107,38 +2127,89 @@ function App() {
       input.onchange = (event) => {
         const file = (event.target as HTMLInputElement).files?.[0];
         if (!file) return;
-        file.text().then((text) => {
+        void file.text().then(async (text) => {
           try {
-            const parsed = JSON.parse(text);
+            const parsed: unknown = JSON.parse(text);
             const imported = Array.isArray(parsed)
               ? parsed
-              : (parsed.markers && Array.isArray(parsed.markers) ? parsed.markers : []);
+              : (parsed !== null && typeof parsed === "object" &&
+                "markers" in parsed &&
+                Array.isArray((parsed as { markers: unknown }).markers)
+                ? (parsed as { markers: unknown[] }).markers
+                : []);
             if (!imported.length) { setContextToast("Markers JSON: file has no markers."); return; }
+            // tb_1791854416_63972_5: файл везёт видео — SOS пишет media_path +
+            // content_hash, раньше импорт их игнорировал и клал маркеры на
+            // текущее видео (без видео — в пустоту). Открываем видео файла,
+            // затем маркеры; голый массив без привязки — как раньше.
+            const binding = readSidecarBinding(parsed);
+            const target = decideMarkersImportTarget(binding, currentFilePathRef.current, isTauriRuntimeSync());
+            let openedBase: string | null = null;
+            if (target.mode === "open") {
+              await handleOpenPath(target.path);
+              openedBase = target.path.split(/[\\/]/).pop() || target.path;
+            } else if (target.mode === "need-video") {
+              setContextToast("Markers JSON: open a video first to attach markers.");
+              return;
+            }
+            const media = currentMediaKeyRef.current;
+            if (!media) { setContextToast("Markers JSON: open a video first to attach markers."); return; }
+            const hash = contentHashRef.current ?? binding.contentHash;
+            const playhead = Math.max(0, Number(videoRef.current?.currentTime ?? 0));
+            const seen = new Set(markersRef.current.map((m) => m.marker_id));
             const added: PlayerTimeMarker[] = [];
+            let dupes = 0;
+            const now = new Date().toISOString();
             for (const m of imported) {
-              // tb_1791146800_70644_20: нормализация в чистом модуле (тест round-trip),
-              // здесь только сборка через buildMarker (media/ids/дефолты).
+              // tb_1791146800_70644_20: нормализация в чистом модуле (тест round-trip).
               const norm = normalizeImportedMarker(m);
               if (!norm) continue;
-              const marker = buildMarker(norm.kind, norm.text);
-              if (marker) {
-                marker.anchor_sec = norm.anchorSec ?? marker.anchor_sec;
-                marker.start_sec = norm.startSec ?? marker.anchor_sec - 0.5;
-                marker.end_sec = norm.endSec ?? marker.anchor_sec + 0.5;
+              const raw = m as Record<string, unknown>;
+              // id из файла сохраняем (цепочки reply_to/question_id целы
+              // при round-trip); повторный импорт тех же id — пропускаем.
+              const rawId = typeof raw.marker_id === "string" && raw.marker_id ? raw.marker_id : createMarkerId();
+              if (seen.has(rawId)) { dupes += 1; continue; }
+              seen.add(rawId);
+              const rawLabel = typeof raw.label === "string" ? raw.label.trim().slice(0, 64) : "";
+              const anchor = norm.anchorSec ?? playhead;
+              added.push({
+                marker_id: rawId,
+                schema_version: "cut_time_marker_v1",
+                project_id: "cut_demo",
+                timeline_id: "main",
+                media_path: media,
+                content_hash: hash,
+                kind: norm.kind,
+                start_sec: norm.startSec ?? anchor - 0.5,
+                end_sec: norm.endSec ?? anchor + 0.5,
+                anchor_sec: anchor,
+                score: norm.kind === "favorite" ? 0.85 : 0.6,
+                label: rawLabel || defaultMarkerLabel(norm.kind),
+                text: norm.text,
                 // tb_1791583578_64923_1: автор из файла (agent:<роль>) едет
-                // в маркер, иначе подпись текущего подписанта из buildMarker.
-                if (norm.author) marker.author = norm.author;
+                // в маркер, иначе подпись текущего подписанта.
+                author: norm.author ?? commentAuthorRef.current,
+                context_slice: null,
+                cam_payload: null,
+                chat_thread_id: null,
+                comment_thread_id: null,
+                source_engine: "player_lab",
                 // tb_1791585558_31907_1: ссылка ответа.
-                if (norm.reply_to) marker.reply_to = norm.reply_to;
+                ...(norm.reply_to ? { reply_to: norm.reply_to } : {}),
                 // tb_1791809796_24701_1: id вопроса (выжимка ответов).
-                if (norm.question_id) marker.question_id = norm.question_id;
-                added.push(marker);
-              }
+                ...(norm.question_id ? { question_id: norm.question_id } : {}),
+                created_at: now,
+                updated_at: now,
+              });
             }
             if (added.length) {
               pushMarkerHistory();
               setMarkers((prev) => [...prev, ...added]);
-              setContextToast(`Markers imported: ${added.length}`);
+              const dupNote = dupes ? ` (${dupes} already present)` : "";
+              const openNote = openedBase ? ` Opened ${openedBase}.` : "";
+              setContextToast(`Markers imported: ${added.length}${dupNote}.${openNote}`);
+            } else if (dupes) {
+              setContextToast(`Nothing new: ${dupes} marker${dupes === 1 ? "" : "s"} already present.`);
             } else {
               setContextToast("Markers JSON: open a video first to attach markers.");
             }
@@ -2235,6 +2306,111 @@ function App() {
     pushMarkerHistory();
     setDraggingMarkerId(markerId);
   }
+  // tb_1791844731_63972_4: плейхед-вертикаль — единый слой указателя (§3.2).
+  // Сик одним трактом: факт в video + setSeekTarget; ручной — с меткой
+  // markManualSeek (ножницы молчат 800мс, как мосты markers:seek).
+  function seekTransportTo(sec: number, manual: boolean): void {
+    if (!Number.isFinite(sec) || sec < 0) return;
+    const video = videoRef.current;
+    if (video) {
+      try {
+        video.currentTime = sec;
+      } catch {
+        // ignore — останется внешнее
+      }
+    }
+    setSeekTarget(sec);
+    if (manual) markManualSeek();
+  }
+  // Значки для hitTest — из тех же mediaMarkers, что отрисованы: центры по
+  // anchor_sec, полуширина по CSS (.transport-marker 21px, скобки ~16px).
+  function timelineHitMarkers(rectWidth: number): PlayheadHitMarker[] {
+    const span = Math.max(duration, 0.001);
+    return mediaMarkers.map((m) => ({
+      id: m.marker_id,
+      x: (m.anchor_sec / span) * rectWidth,
+      halfWidth: m.kind === "in" || m.kind === "out" ? 8 : 10.5,
+    }));
+  }
+  function resolveTimelineRow(target: EventTarget | null): "ruler" | "lane" {
+    const el = target as HTMLElement | null;
+    return el && typeof el.closest === "function" && el.closest(".time-ruler") ? "ruler" : "lane";
+  }
+  // Один mousedown на весь transport-progress-wrap: hitTest решает, кого
+  // хватаем. У значков своих onMouseDown больше нет (только dblclick).
+  function handleTimelinePress(e: ReactMouseEvent): void {
+    if (e.button !== 0 || duration <= 0) return;
+    const wrap = progressWrapRef.current;
+    if (!wrap) return;
+    e.preventDefault();
+    const rect = wrap.getBoundingClientRect();
+    if (!(rect.width > 0)) return;
+    const span = Math.max(duration, 0.001);
+    const timeAt = (x: number): number => Math.max(0, Math.min(1, x / rect.width)) * span;
+    const playheadX = (Math.min(currentTime, span) / span) * rect.width;
+    const hit = hitTestPlayhead({
+      row: resolveTimelineRow(e.target),
+      x: e.clientX - rect.left,
+      playheadX,
+      markers: timelineHitMarkers(rect.width),
+      altKey: e.altKey,
+    });
+    if (hit.target === "marker") {
+      // §3.3: нажатие — ещё не перетаскивание. Порог 4px — жестом: раньше —
+      // клик (плейхед на anchor_sec), позже — beginMarkerDrag (история + везём).
+      const id = hit.markerId;
+      const x0 = e.clientX - rect.left;
+      let crossed = false;
+      const onMove = (ev: MouseEvent): void => {
+        if (crossed) return;
+        if (markerDragThresholdPassed(x0, ev.clientX - rect.left)) {
+          crossed = true;
+          beginMarkerDrag(id);
+        }
+      };
+      const onUp = (): void => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        if (crossed) return;
+        const m = markersRef.current.find((mm) => mm.marker_id === id);
+        const anchor = Number(m?.anchor_sec);
+        if (Number.isFinite(anchor) && anchor >= 0) {
+          // tb_1791860202_84020_2: клик по значку из play — тоже сначала пауза.
+          pauseBeforeMarkerJump(videoRef.current);
+          seekTransportTo(Math.min(anchor, span), true);
+        }
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+      return;
+    }
+    // playhead/scrub (§3.2 п.1/п.2/п.5): прыжок в точку + протяжка.
+    seekTransportTo(timeAt(e.clientX - rect.left), true);
+    const onMove = (ev: MouseEvent): void => seekTransportTo(timeAt(ev.clientX - rect.left), true);
+    const onUp = (): void => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+  // §3.4: курсор без ре-рендеров — прямо в style слоя (App большой).
+  function handleTimelineHover(e: ReactMouseEvent): void {
+    if (e.buttons !== 0 || duration <= 0) return;
+    const wrap = progressWrapRef.current;
+    if (!wrap) return;
+    const rect = wrap.getBoundingClientRect();
+    if (!(rect.width > 0)) return;
+    const span = Math.max(duration, 0.001);
+    const hit = hitTestPlayhead({
+      row: resolveTimelineRow(e.target),
+      x: e.clientX - rect.left,
+      playheadX: (Math.min(currentTime, span) / span) * rect.width,
+      markers: timelineHitMarkers(rect.width),
+      altKey: e.altKey,
+    });
+    wrap.style.cursor = hit.target === "playhead" ? "ew-resize" : hit.target === "scrub" ? "default" : "";
+  }
   // 0.21: Clear по видам из Edit → Clear. Scope — только текущее видео.
   // Confirm с разбивкой по видам, сама очистка — в undo-стек.
   async function performClearMarkers(scope: ClearScope): Promise<void> {
@@ -2242,7 +2418,8 @@ function App() {
     if (!media) { setContextToast("Clear: open a video first."); return; }
     const victims = selectMarkersToClear(markersRef.current, media, scope, contentHashRef.current);
     if (!victims.length) { setContextToast("Nothing to clear."); return; }
-    if (!(await confirmClearMarkers(victims))) return;
+    const sparedReplies = countSparedQuestionReplies(markersRef.current, media, scope, contentHashRef.current);
+    if (!(await confirmClearMarkers(victims, sparedReplies))) return;
     pushMarkerHistory();
     const victimIds = new Set(victims.map((m) => m.marker_id));
     setMarkers((prev) => prev.filter((m) => !victimIds.has(m.marker_id)));
@@ -3857,26 +4034,28 @@ function App() {
   // асинхронно — ждём duration, потом прыгаем).
   // tb_1791819024_26192_2: follow-переключение карточкой НЕ дёргает playhead:
   // он уже внутри скобок (проверка ниже), прыжок только с чужой точки.
+  // tb_1791848907_63972_2: эффект бежит раньше follow и видел СТАРЫЙ вопрос —
+  // любой прыжок из него дёргался назад (баунс cmd/shift-вперёд). Теперь
+  // приземление внутри ЛЮБОГО вопроса — без рывка (карточку подхватит
+  // follow), рывок только из щели.
   useEffect(() => {
     if (!activeQuestion || duration <= 0) return;
     if (questionPathRef.current !== currentFilePathRef.current) return;
     const t = activeQuestion.in_sec;
     if (t === undefined || !(t >= 0) || !(t < duration)) return;
     const nowT = Number(videoRef.current?.currentTime ?? currentTime);
-    const outT = activeQuestion.out_sec;
-    if (
-      Number.isFinite(nowT) && nowT >= t &&
-      (typeof outT !== "number" || !Number.isFinite(outT) || nowT <= outT)
-    ) return;
+    if (!Number.isFinite(nowT)) return;
+    const snap = resolveQuestionSnapTime(loadPlaylist()?.entries, currentFilePathRef.current, nowT, activeQuestion);
+    if (snap === null) return;
     const video = videoRef.current;
     if (video) {
       try {
-        video.currentTime = t;
+        video.currentTime = snap;
       } catch {
         // ignore — останется внешнее
       }
     }
-    setSeekTarget(t);
+    setSeekTarget(snap);
   }, [activeQuestion, duration, currentTime]);
 
   // tb_1791819024_26192_2: карточка следует за playhead внутри одного файла
@@ -3940,6 +4119,8 @@ function App() {
       if (video) {
         video.currentTime = sec;
         setSeekTarget(sec);
+        // tb_1791843935_63972_2: клик-сик из панели — навигация.
+        markManualSeek();
       }
     };
     window.addEventListener("storage", onStorageSeek);
@@ -3958,6 +4139,8 @@ function App() {
         if (video) {
           video.currentTime = sec;
           setSeekTarget(sec);
+          // tb_1791843935_63972_2: клик-сик из панели — навигация.
+          markManualSeek();
         }
       }).then((fn) => { unlisten = fn; });
     }).catch(() => {});
@@ -4346,7 +4529,38 @@ function App() {
       rememberQuestionPlaylistPath(isQuestionPlaylist(parsed) ? path : null);
       // tb_1791563210_29299_4: уже открытая панель сама не узнает — будим событием
       notifyPlaylistReloaded();
-      setContextToast(`Playlist "${parsed.name}": ${parsed.entries.length} file${parsed.entries.length === 1 ? "" : "s"}.`);
+      // tb_1791854416_63972_5: меню открывает видео файла (один path записей) —
+      // раньше маркеры материализовались мимо currentMediaKey: Markers пуст,
+      // гард гасил Confirm (окно плейлиста работает, т.к. оператор открывает
+      // видео сам). Несколько разных — не гадаем, оператор выберет записью.
+      let openedBase: string | null = null;
+      if (isTauriRuntimeSync() && isQuestionPlaylist(parsed)) {
+        const single = singlePlaylistMediaPath(parsed.entries);
+        if (single) {
+          const target = decideMarkersImportTarget(
+            { mediaPath: single, contentHash: null },
+            currentFilePathRef.current,
+            true,
+          );
+          if (target.mode === "open") {
+            await handleOpenPath(target.path);
+            openedBase = target.path.split(/[\\/]/).pop() || target.path;
+          }
+        }
+      }
+      // tb_1791840835_63972_1: меню материализует вопросы так же, как панель
+      // (раньше клало записи без маркеров — карточка молчала по гарду;
+      // имя — fileLabel, поля name у файла Беты нет). Персист — эффектом
+      // markers→LS, чужие окна — событием.
+      const loadedLine = await materializePlaylistQuestions(parsed, fileLabel, {
+        // tb_1791861762_84020_3: дедуп по паре id+медиа — тот же вопрос на
+        // другом видео материализуется заново, а не режется как дубль.
+        readStoredKeys: () => new Set(markersRef.current.map((m) => markerDedupKey(m.marker_id, m.media_path))),
+        appendMarkers: (fresh) => setMarkers((prev) => [...prev, ...(fresh as unknown as PlayerTimeMarker[])]),
+        resolveMediaUrl: (p) => toAssetUrl(p),
+        notifyChanged: () => notifyMarkersChanged(),
+      });
+      setContextToast(openedBase ? `Opened ${openedBase}. ${loadedLine}` : loadedLine);
       await openPanelWindow("panel-playlist", "playlist", "Playlist", 360, 500);
     } catch {
       setContextToast("Open Playlist: could not read the file.");
@@ -4918,6 +5132,8 @@ function App() {
                             // Прыжок только при пересечении OUT во время
                             // проигрывания (скраб свободный: большой скачок
                             // и video.seeking отфильтровываются в lib).
+                            // tb_1791843935_63972_2: ручной сик — навигация,
+                            // ножницы молчат 800мс (см. markManualSeek).
                             const video = event.currentTarget;
                             const prevT = inOutPrevTRef.current;
                             inOutPrevTRef.current = t;
@@ -4927,6 +5143,7 @@ function App() {
                               !video.paused &&
                               !video.seeking &&
                               !video.ended &&
+                              !isManualSeekSuppressed() &&
                               currentMediaKey &&
                               duration > 0
                             ) {
@@ -5131,7 +5348,12 @@ function App() {
                                 {shuttleDisplay.badge ?? ""}
                               </span>
                             </span>
-                            <div ref={progressWrapRef} className="transport-progress-wrap">
+                            <div
+                              ref={progressWrapRef}
+                              className="transport-progress-wrap"
+                              onMouseDown={handleTimelinePress}
+                              onMouseMove={handleTimelineHover}
+                            >
                               <div className="time-ruler">
                                 {timelineTicks.map((tick, i) => (
                                   <span
@@ -5162,11 +5384,6 @@ function App() {
                                       className={`transport-marker ${draggingMarkerId === marker.marker_id ? "transport-marker-dragging" : ""}`}
                                       style={{ left: `${(marker.anchor_sec / Math.max(duration, 0.001)) * 100}%` }}
                                       title={marker.label || marker.kind}
-                                      onMouseDown={(e) => {
-                                        e.stopPropagation();
-                                        e.preventDefault();
-                                        beginMarkerDrag(marker.marker_id);
-                                      }}
                                       onDoubleClick={() => {
                                         deleteMarkerById(marker.marker_id);
                                       }}
@@ -5195,11 +5412,6 @@ function App() {
                                     // tb_1791689190_1275_1: опознание скобки — время +
                                     // автор (qmat_*/agent:* = импорт, своё имя = своя рука).
                                     title={`${marker.kind === "in" ? "In" : "Out"} point ${formatTimecode(marker.anchor_sec, resolveXmlFps(containerFps, probeResult?.fps, estimatedFps))}${marker.author ? ` · ${marker.author}` : ""}`}
-                                      onMouseDown={(e) => {
-                                        e.stopPropagation();
-                                        e.preventDefault();
-                                        beginMarkerDrag(marker.marker_id);
-                                      }}
                                       onDoubleClick={() => {
                                         deleteMarkerById(marker.marker_id);
                                       }}
@@ -5227,6 +5439,12 @@ function App() {
                               />
                               <div
                                 className="transport-playhead"
+                                style={{ left: `${(currentTime / Math.max(duration, 0.001)) * 100}%` }}
+                              />
+                              {/* tb_1791844731_63972_4: линия вертикали 1px через
+                                  все ряды — от верхнего шарика к нижнему. */}
+                              <div
+                                className="transport-playhead-line"
                                 style={{ left: `${(currentTime / Math.max(duration, 0.001)) * 100}%` }}
                               />
                             </div>

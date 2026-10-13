@@ -5,7 +5,7 @@
 // Снапшоты хранятся по ссылке: вызывающий отдаёт массивы, которые сам
 // больше не мутирует (React state по конвенции неизменяем).
 import { markerBelongsToMedia } from "./markersSync";
-import { isQuestionMarker } from "./markerReply";
+import { QUESTION_MARKER_ID_PREFIX, isQuestionMarker } from "./markerReply";
 
 export interface MarkerHistory<T> {
   past: T[][];
@@ -74,6 +74,8 @@ export interface HasKindMedia {
   /** id и поле вопроса — чтобы Clear не сносил импорт Беты (см. ниже). */
   marker_id?: string;
   question_id?: string | null;
+  /** reply_to родителя — ответы на вопросы Clear не трогает (см. ниже). */
+  reply_to?: string | null;
 }
 
 const CLEAR_SCOPE_KINDS: Record<Exclude<ClearScope, "all">, string[]> = {
@@ -87,9 +89,31 @@ const CLEAR_SCOPE_KINDS: Record<Exclude<ClearScope, "all">, string[]> = {
 // media null → [] (без видео чистить нечего).
 // 0.22: опциональный contentHash — та же identity, что у списка
 // (markerBelongsToMedia): копия видео чистит СВОИ метки, а не путь.
-// tb_1791839608_26192_1: маркеры вопросов (импорт Беты) НЕ жертвы никогда —
+// tb_1791845483_63972_1: маркеры вопросов (импорт Беты) НЕ жертвы никогда —
 // иначе Clear убивает qmat и карточке не к чему цеплять ответы (кейс 0.25.57:
 // Confirm молча ничего не создал). Вопросы чистятся только удалением плейлиста.
+// tb_1791845483_63972_1: ответы-реплики на вопросы — тоже НЕ жертвы: с 0.25.55
+// ответы единственная правда, undo живёт только до перезапуска — Clear по видам
+// стирал ответы человека. Ответы удаляются только поштучно (один клик в окне
+// Markers, штатный deleteMarkerById мимо selectMarkersToClear).
+function isQuestionReply<T extends HasKindMedia>(m: T, byId: Map<string, T>): boolean {
+  const parentRef = typeof m.reply_to === "string" ? m.reply_to.trim() : "";
+  if (!parentRef) return false;
+  const parent = byId.get(parentRef);
+  // Родитель в массиве: вопрос — поле question_id, иначе легаси-префикс id.
+  if (parent) return isQuestionMarker(parent.marker_id, parent.question_id);
+  // Родителя нет в массиве — верим префиксу qmat_ (легаси-импорты Беты).
+  return parentRef.startsWith(QUESTION_MARKER_ID_PREFIX);
+}
+
+function indexMarkersById<T extends HasKindMedia>(markers: T[]): Map<string, T> {
+  const byId = new Map<string, T>();
+  for (const m of markers) {
+    if (typeof m.marker_id === "string" && m.marker_id) byId.set(m.marker_id, m);
+  }
+  return byId;
+}
+
 export function selectMarkersToClear<T extends HasKindMedia>(
   markers: T[],
   media: string | null,
@@ -98,12 +122,35 @@ export function selectMarkersToClear<T extends HasKindMedia>(
 ): T[] {
   if (!media) return [];
   const kinds = scope === "all" ? null : CLEAR_SCOPE_KINDS[scope];
+  const byId = indexMarkersById(markers);
   return markers.filter(
     (m) =>
       markerBelongsToMedia(m, { mediaKey: media, contentHash }) &&
       (kinds === null || kinds.includes(m.kind)) &&
-      !isQuestionMarker(m.marker_id, m.question_id),
+      !isQuestionMarker(m.marker_id, m.question_id) &&
+      !isQuestionReply(m, byId),
   );
+}
+
+// Сколько ответов на вопросы пощадила эта очистка — для честного confirm.
+// Тот же media/scope/kinds, что у жертв: чужой вид не считаем.
+export function countSparedQuestionReplies<T extends HasKindMedia>(
+  markers: T[],
+  media: string | null,
+  scope: ClearScope,
+  contentHash: string | null = null,
+): number {
+  if (!media) return 0;
+  const kinds = scope === "all" ? null : CLEAR_SCOPE_KINDS[scope];
+  const byId = indexMarkersById(markers);
+  let spared = 0;
+  for (const m of markers) {
+    if (!markerBelongsToMedia(m, { mediaKey: media, contentHash })) continue;
+    if (kinds !== null && !kinds.includes(m.kind)) continue;
+    if (isQuestionMarker(m.marker_id, m.question_id)) continue;
+    if (isQuestionReply(m, byId)) spared += 1;
+  }
+  return spared;
 }
 
 // Ведро вида для confirm-разбивки: in/out идут одной строкой.
@@ -126,7 +173,8 @@ function kindCountLabel(bucket: string, count: number): string {
 }
 
 // EN-текст нативного confirm: разбивка по видам + честное "вернётся через Undo".
-export function formatClearConfirm<T extends HasKindMedia>(victims: T[]): string {
+// keptReplies — пощажённые ответы на вопросы (tb_1791845483_63972_1).
+export function formatClearConfirm<T extends HasKindMedia>(victims: T[], keptReplies = 0): string {
   const byBucket = new Map<string, number>();
   for (const m of victims) {
     const bucket = clearKindBucket(m.kind);
@@ -135,14 +183,18 @@ export function formatClearConfirm<T extends HasKindMedia>(victims: T[]): string
   const parts = [...byBucket.entries()].map(([bucket, count]) => kindCountLabel(bucket, count));
   const total = victims.length;
   const totalLabel = total === 1 ? "marker" : "markers";
-  return `Delete ${parts.join(" and ")} (${total} ${totalLabel} of this video)? Question markers are kept. You can bring the rest back with Undo (Cmd+Z).`;
+  const kept =
+    keptReplies > 0
+      ? ` Question markers and ${keptReplies === 1 ? "1 question reply" : `${keptReplies} question replies`} are kept.`
+      : " Question markers are kept.";
+  return `Delete ${parts.join(" and ")} (${total} ${totalLabel} of this video)?${kept} You can bring the rest back with Undo (Cmd+Z).`;
 }
 
 // Нативный confirm очистки. Tauri — plugin-dialog, браузер (dev) —
 // window.confirm. Отмена/недоступность → false.
-export async function confirmClearMarkers<T extends HasKindMedia>(victims: T[]): Promise<boolean> {
+export async function confirmClearMarkers<T extends HasKindMedia>(victims: T[], keptReplies = 0): Promise<boolean> {
   if (!victims.length) return false;
-  const message = formatClearConfirm(victims);
+  const message = formatClearConfirm(victims, keptReplies);
   try {
     if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
       const dialog = await import("@tauri-apps/plugin-dialog");

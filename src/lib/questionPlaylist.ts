@@ -306,6 +306,28 @@ export function findQuestionEntryAtTime(
   return null;
 }
 
+/**
+ * tb_1791848907_63972_2: куда (если вообще) дёргать playhead при смене
+ * активного вопроса. Корень баунса cmd/shift-вперёд: follow-seek-эффект
+ * в App бежит раньше follow и оценивает позицию по СТАРОМУ вопросу —
+ * любой прыжок из текущего вопроса дёргался назад к его in_sec.
+ * Правило: приземление внутри ЛЮБОГО вопроса — без рывка (null; карточку
+ * подхватит follow), рывок к in_sec активного — только из щели (hit null),
+ * когда follow никого не подхватит. Чистая, тестируем.
+ */
+export function resolveQuestionSnapTime(
+  entries: unknown,
+  path: string | null | undefined,
+  nowT: number,
+  active: { question_id?: string | null; in_sec?: number; out_sec?: number } | null,
+): number | null {
+  if (!active || typeof active.in_sec !== "number" || !Number.isFinite(active.in_sec)) return null;
+  if (findQuestionEntryAtTime(entries, path, nowT)) return null;
+  const outT = typeof active.out_sec === "number" ? active.out_sec : NaN;
+  if (nowT >= active.in_sec && (Number.isNaN(outT) || nowT <= outT)) return null;
+  return active.in_sec;
+}
+
 function answerRecordKey(r: AnswerRecord): string {
   return [
     r.question_id,

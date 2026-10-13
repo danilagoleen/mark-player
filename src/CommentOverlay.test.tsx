@@ -386,8 +386,8 @@ describe("CommentOverlay initialKindFilter (tb_1791690899_1275_3: фильтр �
   });
 });
 
-// tb_1791837678_26192_1: нитки не режутся фильтром — ответы-вердикты (★/✕)
-// видны под 💬-фильтром, qmat-родитель виден под ★-фильтром.
+// tb_1791843894_63972_1: точная семантика фильтра — вид = свои маркеры +
+// свои ответы + родители; 💬 = всё обсуждение (см. selectVisibleRows).
 describe("CommentOverlay threads survive kind filter", () => {
   const THREAD = [
     { marker_id: "qmat_mrg-01_in", kind: "comment", start_sec: 7, text: "вопрос?", question_id: "mrg-01" },
@@ -416,11 +416,43 @@ describe("CommentOverlay threads survive kind filter", () => {
     expect(container.textContent).toContain("★");
     expect(container.textContent).toContain("✗");
   });
-  it("★-фильтр: родитель вопроса подтянут, ответы — под ним, а не сироты", () => {
+  it("★-фильтр: свой ответ + родитель-контекст, чужой ✕-ответ скрыт", () => {
     const container = renderThread("favorite");
-    // родитель + ответ-favorite (нитка), negative-ответ тоже виден (reply_to)
+    // родитель (контекст) + ответ-favorite; negative-ответ чужого вида скрыт
     expect(container.querySelectorAll('[data-testid="comment-row"]')).toHaveLength(1);
-    expect(container.querySelectorAll('[data-testid="comment-reply"]')).toHaveLength(2);
+    expect(container.querySelectorAll('[data-testid="comment-reply"]')).toHaveLength(1);
     expect(container.textContent).toContain("вопрос?");
+    expect(container.textContent).not.toContain("[answer] (negative)");
+  });
+});
+
+// tb_1791843959_63972_3: active-подсветка кликнутой строки.
+describe("CommentOverlay active-row", () => {
+  const ACTIVE_BG = "rgba(255, 255, 255, 0.04)";
+  function renderActive() {
+    return render(
+      <CommentOverlay
+        marker={null}
+        markers={[
+          { marker_id: "a1", kind: "comment", start_sec: 1, text: "one" },
+          { marker_id: "a2", kind: "comment", start_sec: 2, text: "two" },
+        ]}
+        onClose={() => {}}
+        onUpdateText={() => {}}
+        onDeleteMarker={() => {}}
+        standalone
+      />,
+    );
+  }
+  it("клик зажигает строку, повторный клик по другой гасит первую", () => {
+    const { container } = renderActive();
+    const rows = container.querySelectorAll('[data-testid="comment-row"]');
+    expect((rows[0] as HTMLElement).style.background).not.toBe(ACTIVE_BG);
+    fireEvent.click(rows[1]);
+    expect((rows[1] as HTMLElement).style.background).toBe(ACTIVE_BG);
+    expect((rows[0] as HTMLElement).style.background).not.toBe(ACTIVE_BG);
+    fireEvent.click(rows[0]);
+    expect((rows[0] as HTMLElement).style.background).toBe(ACTIVE_BG);
+    expect((rows[1] as HTMLElement).style.background).not.toBe(ACTIVE_BG);
   });
 });

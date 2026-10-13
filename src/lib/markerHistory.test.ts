@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   clearKindBucket,
   confirmClearMarkers,
+  countSparedQuestionReplies,
   createMarkerHistory,
   formatClearConfirm,
   historyCanRedo,
@@ -130,8 +131,10 @@ describe("selectMarkersToClear (0.21 clear by kind)", () => {
   });
 
   // tb_1791839608_26192_1: Clear не сносит вопросы Беты (иначе карточке не к
-  // чему цеплять ответы — кейс 0.25.57). Ответы-реплики при этом чистятся.
-  it("qmat-родители и поле question_id — не жертвы даже под all", () => {
+  // чему цеплять ответы — кейс 0.25.57).
+  // tb_1791845483_63972_1: ответы-реплики на вопросы — тоже не жертвы
+  // (единственная правда с 0.25.55, undo сессионный): только поштучно.
+  it("qmat-родители, поле question_id и ответы на вопросы — не жертвы даже под all", () => {
     const withQ = [
       ...ALL,
       { marker_id: "qmat_mrg-01_in", kind: "comment", media_path: "a.mp4" },
@@ -140,9 +143,54 @@ describe("selectMarkersToClear (0.21 clear by kind)", () => {
       { marker_id: "reply_1", kind: "favorite", media_path: "a.mp4", reply_to: "qmat_mrg-01_in" },
     ];
     const victims = selectMarkersToClear(withQ, "a.mp4", "all").map((m) => m.marker_id);
-    expect(victims).toHaveLength(8);
-    expect(victims).toContain("reply_1");
+    expect(victims).toHaveLength(7);
+    expect(victims).not.toContain("reply_1");
     expect(victims.some((id) => id === "qmat_mrg-01_in" || id === "qmat_mrg-01_out" || id === "qm1")).toBe(false);
+  });
+
+  it("ответы щадим под своим видом тоже: favorite-скоуп не трогает ★-ответ", () => {
+    const markers = [
+      { marker_id: "qmat_mrg-01_in", kind: "comment", media_path: "a.mp4" },
+      { marker_id: "r1", kind: "favorite", media_path: "a.mp4", reply_to: "qmat_mrg-01_in" },
+      { marker_id: "r2", kind: "comment", media_path: "a.mp4", reply_to: "qmat_mrg-01_in" },
+      { marker_id: "f1", kind: "favorite", media_path: "a.mp4" },
+    ];
+    expect(selectMarkersToClear(markers, "a.mp4", "favorite").map((m) => m.marker_id)).toEqual(["f1"]);
+    expect(selectMarkersToClear(markers, "a.mp4", "comment").map((m) => m.marker_id)).toEqual([]);
+    expect(countSparedQuestionReplies(markers, "a.mp4", "favorite")).toBe(1);
+    expect(countSparedQuestionReplies(markers, "a.mp4", "comment")).toBe(1);
+    expect(countSparedQuestionReplies(markers, "a.mp4", "all")).toBe(2);
+  });
+
+  it("ответ на вопрос без qmat-префикса в id (только поле question_id) — щадим", () => {
+    const markers = [
+      { marker_id: "qm9", kind: "comment", media_path: "a.mp4", question_id: "mrg-09" },
+      { marker_id: "r9", kind: "negative", media_path: "a.mp4", reply_to: "qm9" },
+    ];
+    expect(selectMarkersToClear(markers, "a.mp4", "all")).toEqual([]);
+    expect(countSparedQuestionReplies(markers, "a.mp4", "all")).toBe(1);
+  });
+
+  it("reply_to на обычный маркер — жертва как раньше, не ответ", () => {
+    const markers = [
+      { marker_id: "c1", kind: "comment", media_path: "a.mp4" },
+      { marker_id: "t1", kind: "comment", media_path: "a.mp4", reply_to: "c1" },
+    ];
+    expect(selectMarkersToClear(markers, "a.mp4", "all").map((m) => m.marker_id)).toEqual(["c1", "t1"]);
+    expect(countSparedQuestionReplies(markers, "a.mp4", "all")).toBe(0);
+  });
+
+  it("родителя нет в массиве: qmat-префикс щадим, обычный id — жертва", () => {
+    const markers = [
+      { marker_id: "r1", kind: "comment", media_path: "a.mp4", reply_to: "qmat_gone_in" },
+      { marker_id: "r2", kind: "comment", media_path: "a.mp4", reply_to: "gone_plain" },
+    ];
+    expect(selectMarkersToClear(markers, "a.mp4", "all").map((m) => m.marker_id)).toEqual(["r2"]);
+    expect(countSparedQuestionReplies(markers, "a.mp4", "all")).toBe(1);
+  });
+
+  it("media null → и жертв, и пощажённых ноль", () => {
+    expect(countSparedQuestionReplies(ALL, null, "all")).toBe(0);
   });
 });
 
@@ -161,6 +209,15 @@ describe("formatClearConfirm (0.21)", () => {
       { kind: "out", media_path: "a.mp4" },
     ])).toBe(
       "Delete 1 favorite and 2 in/out points (3 markers of this video)? Question markers are kept. You can bring the rest back with Undo (Cmd+Z).",
+    );
+  });
+
+  it("пощажённые ответы — честная строка в confirm (мн./ед. число)", () => {
+    expect(formatClearConfirm([{ kind: "comment", media_path: "a.mp4" }], 2)).toBe(
+      "Delete 1 comment (1 marker of this video)? Question markers and 2 question replies are kept. You can bring the rest back with Undo (Cmd+Z).",
+    );
+    expect(formatClearConfirm([{ kind: "comment", media_path: "a.mp4" }], 1)).toContain(
+      "Question markers and 1 question reply are kept.",
     );
   });
 });

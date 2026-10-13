@@ -16,6 +16,30 @@ export interface PlaybackSegment {
 /** Порог «это скраб, а не проигрывание» между соседними timeupdate, сек. */
 export const SKIP_SCRUB_THRESHOLD_SEC = 1.5;
 
+/**
+ * tb_1791843935_63972_2: ручной сик — навигация, а не проигрывание.
+ * OUT-переход срабатывал на жестах навигации (cmd-стрелки, покадровый
+ * скролл, shift-шаги, клик по строке комментария): мелкий шаг ≤1.5с через
+ * OUT во время play App считал пересечением и уносил плейхед — найти или
+ * поставить момент было невозможно. Лекарство: каждый ручной сик метится
+ * (markManualSeek), OUT-переход в окне MANUAL_SEEK_SUPPRESS_MS после метки
+ * не срабатывает. Естественное проигрывание меток не ставит — ножницы
+ * целы. inOutPrevTRef при этом продолжает обновляться, ретро-рывка нет.
+ */
+export const MANUAL_SEEK_SUPPRESS_MS = 800;
+
+let lastManualSeekAt = Number.NEGATIVE_INFINITY;
+
+/** Отметить ручной сик (жест навигации). now инжектится для тестов. */
+export function markManualSeek(now: number = Date.now()): void {
+  lastManualSeekAt = now;
+}
+
+/** Внутри ли окна подавления после ручного сика. */
+export function isManualSeekSuppressed(now: number = Date.now()): boolean {
+  return now - lastManualSeekAt < MANUAL_SEEK_SUPPRESS_MS;
+}
+
 /** Тумблер In–Out Play, ON по умолчанию. */
 export const INOUT_PLAY_STORAGE_KEY = "vetka_player_lab_inout_play_v1";
 

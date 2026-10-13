@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { CommentOverlay } from "./components/chat/CommentOverlay";
 import {
   confirmClearMarkers,
+  countSparedQuestionReplies,
   createMarkerHistory,
   historyPush,
   historyRedo,
@@ -416,7 +417,8 @@ function CommentsStandalone() {
     const prev = markersRef.current;
     const victims = selectMarkersToClear(prev, media, "all", contentHash);
     if (!victims.length) return;
-    if (!(await confirmClearMarkers(victims))) return;
+    const sparedReplies = countSparedQuestionReplies(prev, media, "all", contentHash);
+    if (!(await confirmClearMarkers(victims, sparedReplies))) return;
     historyRef.current = historyPush(historyRef.current, prev);
     const victimIds = new Set(victims.map((m) => m.marker_id));
     const updated = prev.filter((m) => !victimIds.has(m.marker_id));

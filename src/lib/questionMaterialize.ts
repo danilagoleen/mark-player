@@ -3,6 +3,9 @@
 // пишет штатные маркеры (in/out-пары режут клипы в XML, комменты едут
 // с автором agent:<роль>). Чистый модуль без DOM/LS-зависимостей.
 import type { QuestionBox, QuestionEntryFields, QuestionMarker } from "./questionPlaylist";
+import { isQuestionPlaylist, normalizeQuestionEntry } from "./questionPlaylist";
+import type { QuestionPlaylist } from "./questionPlaylist";
+import type { Playlist } from "./playlist";
 import { AGENT_AUTHOR_PREFIX } from "./commentAuthor";
 
 // tb_1791754893_1275_4: label короткий (манифест §5.1: ≤80 — иначе имя
@@ -52,8 +55,11 @@ export interface MaterializeContext {
   now: string;
 }
 
-// id детерминированы: повторный импорт не плодит дубли — маркеры с теми же
-// id просто пропускаются (см. filterNewMarkers).
+// id детерминированы, но дедуп — НЕ по голому id: один и тот же вопрос на
+// ДРУГОМ видео — это новые маркеры, а не дубли (кейс оператора 13.10:
+// новый плейлист поверх открытого с теми же question_id — всё резалось,
+// видео уже новое — Markers пуст). Ключ дедупа — пара id + media_path
+// (см. markerDedupKey / filterNewMarkers).
 function sanitizeIdPart(raw: string): string {
   const clean = String(raw ?? "").trim().replace(/[^A-Za-z0-9_-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
   return (clean || "q").slice(0, 48);
@@ -198,10 +204,76 @@ export function countMaterializable(entries: unknown): number {
   ).length;
 }
 
-/** Вычесть уже существующие id (повторный импорт — без дублей). */
+/** Ключ дедупа импорта: id + медиа. Тот же вопрос на другом видео — новый маркер. */
+export function markerDedupKey(markerId: string, mediaPath: string | null | undefined): string {
+  return markerId + "\u0000" + (mediaPath ?? "");
+}
+
+/** Вычесть уже существующие (повторный импорт того же файла — без дублей). */
 export function filterNewMarkers(
-  existingIds: Set<string>,
+  existingKeys: Set<string>,
   markers: MaterializedMarker[],
 ): MaterializedMarker[] {
-  return markers.filter((m) => !existingIds.has(m.marker_id));
+  return markers.filter((m) => !existingKeys.has(markerDedupKey(m.marker_id, m.media_path)));
+}
+
+/** Ввод-вывод материализации: панель Playlist и меню File дают свои реализации. */
+export interface QuestionMaterializeIO {
+  /** Ключи уже лежащих в хранилище маркеров (markerDedupKey — дедуп повторного импорта). */
+  readStoredKeys(): Set<string>;
+  /** Дописать свежие маркеры в хранилище. */
+  appendMarkers(markers: MaterializedMarker[]): void;
+  /** media_path маркера из пути записи (в Tauri — asset-URL). */
+  resolveMediaUrl(path: string): Promise<string | null>;
+  /** Разбудить окна (markers:changed — обе стороны перечитывают хранилище). */
+  notifyChanged(): void;
+}
+
+/**
+ * tb_1791840835_63972_1: общая материализация вопрос-плейлиста — один код на
+ * оба пути импорта (панель Playlist и File → Open Playlist). Раньше жил
+ * только в панели: меню клало записи без маркеров, карточка молчала по гарду
+ * (кейс оператора 0.25.58). Возвращает строку статуса для тоста/панели;
+ * имя берётся из fileLabel — поля name у файла Беты нет (тост «undefined»).
+ */
+export async function materializePlaylistQuestions(
+  parsed: Playlist,
+  fileLabel: string,
+  io: QuestionMaterializeIO,
+  now?: string,
+): Promise<string> {
+  const entryCount = parsed.entries.length;
+  if (!isQuestionPlaylist(parsed)) {
+    return `Loaded ${fileLabel}: ${entryCount} entries.`;
+  }
+  const qp = parsed as QuestionPlaylist;
+  const author = agentAuthorFor(qp.source?.by);
+  const existingKeys = io.readStoredKeys();
+  const stamp = now ?? new Date().toISOString();
+  const fresh: MaterializedMarker[] = [];
+  let questions = 0;
+  for (const rawEntry of qp.entries) {
+    const norm = normalizeQuestionEntry(rawEntry);
+    if (!norm.question_id?.trim()) continue;
+    questions += 1;
+    const entryPath = (rawEntry as { path?: unknown }).path;
+    if (typeof entryPath !== "string" || !entryPath) continue;
+    const built = materializeQuestionEntry(norm, {
+      mediaPath: (await io.resolveMediaUrl(entryPath)) ?? entryPath,
+      author,
+      now: stamp,
+    });
+    for (const m of filterNewMarkers(existingKeys, built)) {
+      fresh.push(m);
+      existingKeys.add(markerDedupKey(m.marker_id, m.media_path));
+    }
+  }
+  if (fresh.length > 0) {
+    io.appendMarkers(fresh);
+    io.notifyChanged();
+  }
+  if (questions === 0) return `Loaded ${fileLabel}: no questions.`;
+  return fresh.length > 0
+    ? `Loaded ${fileLabel}: ${questions} questions → ${fresh.length} markers (${author}).`
+    : `Loaded ${fileLabel}: ${questions} questions already in markers.`;
 }

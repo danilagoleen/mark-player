@@ -2,13 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Playlist, PlaylistEntry, QuestionPlaylistEntry } from "../../lib/playlist";
 import type { PlaybackMode } from "../../lib/playlist";
 import { createEmptyPlaylist, loadPlaylist, removeEntry, moveEntry, serializePlaylist, loadPlaybackMode, savePlaybackMode, savePlaylist, nextLoopMode, renamePlaylist, sanitizePlaylistFilename } from "../../lib/playlist";
-import type { QuestionPlaylist } from "../../lib/questionPlaylist";
-import { isQuestionPlaylist, normalizeQuestionEntry, rememberQuestionPlaylistPath } from "../../lib/questionPlaylist";
+import { rememberQuestionPlaylistPath } from "../../lib/questionPlaylist";
 import {
-  agentAuthorFor,
-  filterNewMarkers,
-  materializeQuestionEntry,
-  type MaterializedMarker,
+  markerDedupKey,
+  materializePlaylistQuestions,
 } from "../../lib/questionMaterialize";
 import { toAssetUrl } from "../../lib/nativeWindow";
 import { notifyMarkersChanged } from "../../lib/markersSync";
@@ -290,56 +287,37 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
 
   // tb_1791654032_27281_1: импорт вопрос-плейлиста сразу пишет штатные
   // маркеры (кнопки «Материализовать» больше нет). Повтор — без дублей:
-  // id детерминированы (qmat_<qid>_*), существующие пропускаются.
+  // id детерминированы (qmat_<qid>_*), дедуп по паре id+медиа
+  // (tb_1791861762_84020_3: тот же вопрос на другом видео — новый маркер).
+  // tb_1791840835_63972_1: тело уехало в lib (materializePlaylistQuestions) —
+  // один код на оба пути импорта (панель + File-меню).
   const describeLoadedPlaylist = useCallback(async (parsed: Playlist, fileLabel: string): Promise<string> => {
-    const entryCount = parsed.entries.length;
-    if (!isQuestionPlaylist(parsed)) {
-      return `Loaded ${fileLabel}: ${entryCount} entries.`;
-    }
-    const qp = parsed as QuestionPlaylist;
-    const author = agentAuthorFor(qp.source?.by);
-    let stored: unknown = [];
-    try {
-      stored = JSON.parse(localStorage.getItem("vetka_player_lab_markers_v1") || "[]");
-    } catch { stored = []; }
-    const arr = Array.isArray(stored) ? stored : [];
-    const existingIds = new Set(
-      arr
-        .filter((m): m is { marker_id: string } => !!m && typeof m === "object" && typeof (m as { marker_id?: unknown }).marker_id === "string")
-        .map((m) => m.marker_id),
-    );
-    const now = new Date().toISOString();
-    const fresh: MaterializedMarker[] = [];
-    let questions = 0;
-    for (const rawEntry of qp.entries) {
-      const norm = normalizeQuestionEntry(rawEntry);
-      if (!norm.question_id?.trim()) continue;
-      questions += 1;
-      const entry = rawEntry as QuestionPlaylistEntry;
-      if (!entry.path) continue;
-      const built = materializeQuestionEntry(norm, {
-        mediaPath: (await toAssetUrl(entry.path)) ?? entry.path,
-        author,
-        now,
-      });
-      for (const m of filterNewMarkers(existingIds, built)) {
-        fresh.push(m);
-        existingIds.add(m.marker_id);
-      }
-    }
-    if (fresh.length > 0) {
-      try {
-        localStorage.setItem("vetka_player_lab_markers_v1", JSON.stringify([...arr, ...fresh]));
-      } catch { /* ignore — панель остаётся рабочей в памяти */ }
-      // tb_1791809796_24701_1: маркеры дописаны напрямую в LS — главное окно
-      // и панель mid-session об этом не узнают (storage между вебвью не
-      // ходит): будим событием, обе стороны перечитывают хранилище.
-      notifyMarkersChanged();
-    }
-    if (questions === 0) return `Loaded ${fileLabel}: no questions.`;
-    return fresh.length > 0
-      ? `Loaded ${fileLabel}: ${questions} questions → ${fresh.length} markers (${author}).`
-      : `Loaded ${fileLabel}: ${questions} questions already in markers.`;
+    return materializePlaylistQuestions(parsed, fileLabel, {
+      readStoredKeys: () => {
+        let stored: unknown = [];
+        try {
+          stored = JSON.parse(localStorage.getItem("vetka_player_lab_markers_v1") || "[]");
+        } catch { stored = []; }
+        const arr = Array.isArray(stored) ? stored : [];
+        return new Set(
+          arr
+            .filter((m): m is { marker_id: string; media_path?: unknown } => !!m && typeof m === "object" && typeof (m as { marker_id?: unknown }).marker_id === "string")
+            .map((m) => markerDedupKey(m.marker_id, typeof m.media_path === "string" ? m.media_path : null)),
+        );
+      },
+      appendMarkers: (fresh) => {
+        let arr: unknown[] = [];
+        try {
+          const stored = JSON.parse(localStorage.getItem("vetka_player_lab_markers_v1") || "[]");
+          if (Array.isArray(stored)) arr = stored;
+        } catch { /* ignore */ }
+        try {
+          localStorage.setItem("vetka_player_lab_markers_v1", JSON.stringify([...arr, ...fresh]));
+        } catch { /* ignore — панель остаётся рабочей в памяти */ }
+      },
+      resolveMediaUrl: (path) => toAssetUrl(path),
+      notifyChanged: () => notifyMarkersChanged(),
+    });
   }, []);
 
   // tb_1791683106_1275_5: новый пустой лист — Clear оставляет schema

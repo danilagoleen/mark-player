@@ -2,6 +2,9 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import {
   buildPlaybackSegments,
   firstInAnchor,
+  isManualSeekSuppressed,
+  markManualSeek,
+  MANUAL_SEEK_SUPPRESS_MS,
   outCrossAction,
   pauseAtOutOnCross,
   resolveSkipTarget,
@@ -215,5 +218,28 @@ describe("outCrossAction (tb_1791662784_27409_3: черновой монтаж)"
   });
   it("пустые сегменты — null", () => {
     expect(outCrossAction([], 0, 1, false)).toBeNull();
+  });
+});
+
+describe("ручной сик (tb_1791843935_63972_2: навигация без ножниц)", () => {
+  it("окно 800мс: внутри подавлено, снаружи свободно", () => {
+    expect(MANUAL_SEEK_SUPPRESS_MS).toBe(800);
+    markManualSeek(10000);
+    expect(isManualSeekSuppressed(10000)).toBe(true);
+    expect(isManualSeekSuppressed(10799)).toBe(true);
+    expect(isManualSeekSuppressed(10800)).toBe(false);
+    expect(isManualSeekSuppressed(20000)).toBe(false);
+  });
+
+  it("каждая метка обновляет окно (серия wheel-тиков держит подавление)", () => {
+    markManualSeek(10000);
+    markManualSeek(10500);
+    expect(isManualSeekSuppressed(11299)).toBe(true);
+    expect(isManualSeekSuppressed(11300)).toBe(false);
+  });
+
+  it("без меток подавления нет (естественное проигрывание — ножницы целы)", () => {
+    markManualSeek(0);
+    expect(isManualSeekSuppressed(MANUAL_SEEK_SUPPRESS_MS + 1)).toBe(false);
   });
 });

@@ -14,6 +14,7 @@ import {
   parseAnswerReplyText,
   parseAnswersFile,
   resolveAnswers,
+  resolveQuestionSnapTime,
   serializeAnswersFile,
   answersPathFor,
   type AnswerRecord,
@@ -319,5 +320,26 @@ describe("mergeAnswerRecords (tb_1791819024_26192_2: не стирает)", () =
   it("пустой вход — как есть", () => {
     expect(mergeAnswerRecords([], [fresh])).toHaveLength(1);
     expect(mergeAnswerRecords([old1], [])).toEqual([old1]);
+  });
+});
+
+describe("resolveQuestionSnapTime (tb_1791848907_63972_2: рывок только из щели)", () => {
+  const entries = [
+    { path: "/v/c.mp4", name: "c", duration: 300, addedAt: "x", question_id: "m1", in_sec: 0, out_sec: 10 },
+    { path: "/v/c.mp4", name: "c", duration: 300, addedAt: "x", question_id: "m2", in_sec: 10, out_sec: 20 },
+  ];
+  const m1 = { question_id: "m1", in_sec: 0, out_sec: 10 };
+  it("внутри своего — null (не дёргаем)", () => {
+    expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 5, m1)).toBeNull();
+  });
+  it("внутри ЧУЖОГО — null (баунс cmd/shift-вперёд чинится: follow подхватит)", () => {
+    expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 15, m1)).toBeNull();
+  });
+  it("щель (вне всех) — рывок к in активного", () => {
+    expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 25, m1)).toBe(0);
+  });
+  it("без активного / без in — null", () => {
+    expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 25, null)).toBeNull();
+    expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 25, { question_id: "m9" })).toBeNull();
   });
 });

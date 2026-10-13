@@ -82,6 +82,30 @@ function kindMatchesFilter(kind: string, filter: KindFilter): boolean {
   return kind === filter;
 }
 
+// tb_1791843894_63972_1: точная семантика kind-фильтра (до этого нитки шли
+// целиком под любым фильтром — под ★ светился и ✕-ответ, оператора сбивало).
+// Фильтр X (★/✕/[/) = маркеры вида X + ответы (reply) вида X + их
+// родители-контекст из полного списка. Фильтр 💬 = всё обсуждение:
+// комменты + ВСЕ ответы + их родители. Сортировка хроно.
+export function selectVisibleRows(markers: PlayerTimeMarker[], kindFilter: KindFilter): PlayerTimeMarker[] {
+  const byId = new Map(markers.map((m) => [m.marker_id, m]));
+  const included = new Map<string, PlayerTimeMarker>();
+  for (const m of markers) {
+    if (kindMatchesFilter(m.kind, kindFilter)) included.set(m.marker_id, m);
+    // 💬 — всё обсуждение: ответы любого вида идут тоже, родители — ниже.
+    else if (kindFilter === "comment" && m.reply_to) included.set(m.marker_id, m);
+  }
+  let grown = true;
+  while (grown) {
+    grown = false;
+    for (const m of [...included.values()]) {
+      const p = m.reply_to ? byId.get(m.reply_to) : undefined;
+      if (p && !included.has(p.marker_id)) { included.set(p.marker_id, p); grown = true; }
+    }
+  }
+  return [...included.values()].sort((a, b) => Number(a.start_sec || 0) - Number(b.start_sec || 0));
+}
+
 const CSS = `
 .cm-ghost{background:none;border:none;color:#fff;opacity:.55;cursor:pointer;padding:4px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;transition:opacity .12s}
 .cm-ghost:hover,.cm-ghost:focus-visible{opacity:1;outline:none}
@@ -151,32 +175,15 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
   // tb_1791654032_27281_1: kind-фильтр вместо статусов (дефолт all;
   // tb_1791690899_1275_3: старт — initialKindFilter из ?filter=).
   const [kindFilter, setKindFilter] = useState<KindFilter>(initialKindFilter ?? "all");
+  // tb_1791843959_63972_3: active-подсветка кликнутой строки (клик = прыжок,
+  // оператор не видел куда). Держим id; смена медиа = новые markers без
+  // этого id — подсветка гаснет сама (см. activeShown ниже).
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const activeShown = activeId && markers.some((m) => m.marker_id === activeId) ? activeId : null;
 
-  // tb_1791146301_70644_18: окно показывает ВСЕ виды (сортировка по времени),
-  // правка текстов — только у comment (не ломаем Edit/Delete текстовых).
-  // Клик по строке — прыжок плейхеда (мост markerSeek, как в окне маркеров).
-  // У спаренных in/out — хрон сегмента.
-  // tb_1791837678_26192_1: нитки не режутся фильтром — ответы (reply_to) видны
-  // под ЛЮБЫМ kind-фильтром, родители видимых строк подтягиваются из полного
-  // списка (иначе 💬-фильтр прячет ответы-вердикты ★/✕, а ★-фильтр — их
-  // qmat-родителей и ответы становятся сиротами).
+  // tb_1791843894_63972_1: семантика фильтра — selectVisibleRows выше.
   const allRows = useMemo(
-    () => {
-      const byId = new Map(markers.map((m) => [m.marker_id, m]));
-      const included = new Map<string, PlayerTimeMarker>();
-      for (const m of markers) {
-        if (kindMatchesFilter(m.kind, kindFilter) || m.reply_to) included.set(m.marker_id, m);
-      }
-      let grown = true;
-      while (grown) {
-        grown = false;
-        for (const m of [...included.values()]) {
-          const p = m.reply_to ? byId.get(m.reply_to) : undefined;
-          if (p && !included.has(p.marker_id)) { included.set(p.marker_id, p); grown = true; }
-        }
-      }
-      return [...included.values()].sort((a, b) => Number(a.start_sec || 0) - Number(b.start_sec || 0));
-    },
+    () => selectVisibleRows(markers, kindFilter),
     [markers, kindFilter],
   );
 
@@ -192,6 +199,8 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
   }, [allRows]);
 
   const jumpTo = (m: PlayerTimeMarker) => {
+    // tb_1791843959_63972_3: клик зажигает строку (active-подсветка).
+    setActiveId(m.marker_id);
     requestPlayerSeek(Number(m.anchor_sec ?? m.start_sec ?? 0));
   };
 
@@ -259,7 +268,7 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
               className="cm-row"
               data-testid="comment-row"
               data-kind={row.kind}
-              style={{ ...S.item(marker !== null && row.marker_id === marker.marker_id) }}
+              style={{ ...S.item(marker !== null && row.marker_id === marker.marker_id || activeShown === row.marker_id) }}
               onClick={() => { if (editingId !== row.marker_id) jumpTo(row); }}
               title={`Jump to ${formatTimecode(Number(row.anchor_sec ?? row.start_sec ?? 0), fps)}`}
             >
@@ -339,7 +348,7 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
                 return (
                   <div
                     key={rep.marker_id}
-                    style={S.reply}
+                    style={{ ...S.reply, background: activeShown === rep.marker_id ? "rgba(255,255,255,0.04)" : "transparent" }}
                     data-testid="comment-reply"
                     onClick={(e) => { e.stopPropagation(); jumpTo(rep); }}
                     title={`Jump to ${formatTimecode(Number(rep.anchor_sec ?? rep.start_sec ?? 0), fps)}`}

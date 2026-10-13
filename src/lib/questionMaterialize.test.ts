@@ -4,10 +4,14 @@ import {
   countMaterializable,
   filterNewMarkers,
   formatRegionSuffix,
+  markerDedupKey,
+  materializePlaylistQuestions,
   materializeQuestionEntry,
   materializedMarkerId,
   materializedMarkerPrefix,
   MATERIALIZED_LABEL_MAX,
+  type MaterializedMarker,
+  type QuestionMaterializeIO,
 } from "./questionMaterialize";
 
 const CTX = { mediaPath: "asset://video.mov", author: "agent:Beta", now: "2026-10-10T00:00:00.000Z" };
@@ -48,7 +52,16 @@ describe("questionMaterialize (tb_1791586270_32802_2)", () => {
     const a = materializeQuestionEntry(entry, CTX);
     const b = materializeQuestionEntry(entry, CTX);
     expect(a.map((m) => m.marker_id)).toEqual(b.map((m) => m.marker_id));
-    expect(filterNewMarkers(new Set(a.map((m) => m.marker_id)), b)).toHaveLength(0);
+    expect(filterNewMarkers(new Set(a.map((m) => markerDedupKey(m.marker_id, m.media_path))), b)).toHaveLength(0);
+  });
+
+  it("tb_1791861762_84020_3: те же question_id на другом видео — новые маркеры", () => {
+    const entry = { question_id: "q03", in_sec: 1, out_sec: 2, markers: [] };
+    const otherCtx = { ...CTX, mediaPath: "asset://other.mov" };
+    const a = materializeQuestionEntry(entry, CTX);
+    const b = materializeQuestionEntry(entry, otherCtx);
+    expect(a.map((m) => m.marker_id)).toEqual(b.map((m) => m.marker_id));
+    expect(filterNewMarkers(new Set(a.map((m) => markerDedupKey(m.marker_id, m.media_path))), b)).toHaveLength(b.length);
   });
 
   it("без question_id — пусто", () => {
@@ -127,5 +140,80 @@ describe("questionMaterialize bbox (tb_1791754893_1275_4)", () => {
     );
     expect(markers.length).toBeGreaterThan(0);
     for (const m of markers) expect(m.question_id).toBe("mrg-01");
+  });
+});
+
+// tb_1791840835_63972_1: общая материализация на оба пути импорта.
+describe("materializePlaylistQuestions", () => {
+  const QP = {
+    entries: [
+      { question_id: "mrg-01", question: "Один?", in_sec: 1, out_sec: 2, path: "a.mp4" },
+      { question_id: "mrg-02", question: "Два?", in_sec: 3, out_sec: 4, path: "a.mp4" },
+    ],
+  };
+  function fakeIO(stored: MaterializedMarker[] = []): QuestionMaterializeIO & { appended: MaterializedMarker[]; notified: number } {
+    const keys = new Set(stored.map((m) => markerDedupKey(m.marker_id, m.media_path)));
+    const io = {
+      appended: [] as MaterializedMarker[],
+      notified: 0,
+      readStoredKeys: () => keys,
+      appendMarkers: (ms: MaterializedMarker[]) => { io.appended.push(...ms); },
+      resolveMediaUrl: async (p: string) => `asset://${p}`,
+      notifyChanged: () => { io.notified += 1; },
+    };
+    return io;
+  }
+  it("вопросы → маркеры + строка статуса с именем файла", async () => {
+    const io = fakeIO();
+    const line = await materializePlaylistQuestions(QP as never, "cap.json", io, "2026-10-12T00:00:00Z");
+    expect(io.appended.length).toBeGreaterThan(0);
+    expect(io.notified).toBe(1);
+    expect(line).toContain("cap.json");
+    expect(line).toContain("2 questions");
+    expect(line).not.toContain("undefined");
+    for (const m of io.appended) expect(m.media_path).toBe("asset://a.mp4");
+  });
+  it("повтор — без дублей, строка already", async () => {
+    const io = fakeIO();
+    await materializePlaylistQuestions(QP as never, "cap.json", io);
+    const before = io.appended.length;
+    for (const m of io.appended) io.readStoredKeys().add(markerDedupKey(m.marker_id, m.media_path));
+    const line = await materializePlaylistQuestions(QP as never, "cap.json", io);
+    expect(io.appended.length).toBe(before);
+    expect(line).toContain("already in markers");
+  });
+  it("не вопрос-плейлист — только счётчик записей", async () => {
+    const io = fakeIO();
+    const line = await materializePlaylistQuestions({ entries: [{ path: "a.mp4" }] } as never, "plain.json", io);
+    expect(line).toBe("Loaded plain.json: 1 entries.");
+    expect(io.appended).toHaveLength(0);
+    expect(io.notified).toBe(0);
+  });
+  it("запись без path считается вопросом, но маркеров не даёт", async () => {
+    const io = fakeIO();
+    const line = await materializePlaylistQuestions(
+      { entries: [{ question_id: "q1", question: "Без пути" }] } as never,
+      "nopath.json",
+      io,
+    );
+    expect(line).toContain("1 questions already in markers");
+    expect(io.appended).toHaveLength(0);
+  });
+  it("tb_1791861762_84020_3: новый файл поверх открытого (те же qid, другое видео) — маркеры есть", async () => {
+    const io = fakeIO();
+    await materializePlaylistQuestions(QP as never, "first.json", io);
+    const before = io.appended.length;
+    expect(before).toBeGreaterThan(0);
+    for (const m of io.appended) io.readStoredKeys().add(markerDedupKey(m.marker_id, m.media_path));
+    const QP2 = {
+      entries: [
+        { question_id: "mrg-01", question: "Один?", in_sec: 1, out_sec: 2, path: "b.mp4" },
+        { question_id: "mrg-02", question: "Два?", in_sec: 3, out_sec: 4, path: "b.mp4" },
+      ],
+    };
+    const line = await materializePlaylistQuestions(QP2 as never, "second.json", io);
+    expect(io.appended.length).toBeGreaterThan(before);
+    expect(line).toContain("2 questions →");
+    for (const m of io.appended.slice(before)) expect(m.media_path).toBe("asset://b.mp4");
   });
 });

@@ -1010,7 +1010,9 @@ select {
   /* 0.12 слайс: +2px под крупные тики */
   height: 22px;
   flex-shrink: 0;
-  pointer-events: none;
+  /* tb_1791844731_63972_4: линейка — часть единого слоя указателя
+     (было none — клики проваливались мимо hitTest). */
+  pointer-events: auto;
 }
 
 .time-ruler-tick {
@@ -1071,6 +1073,23 @@ select {
   height: 4px;
   width: 100%;
   margin: 0;
+  /* tb_1791844731_63972_4: нативный input указатель не принимает — только
+     клавиатура/доступность (testid + aria целы); тянут нарисованные шарики. */
+  pointer-events: none;
+}
+
+/* tb_1791856389_63972_6: вертикаль — только палочка 1px через все ряды
+   (верхний шарик убран по слову оператора 13.10). pointer-events:none:
+   указатель — единый слой transport-progress-wrap. */
+.transport-playhead-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #f5f7fa;
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 3;
 }
 
 .transport-marker {
