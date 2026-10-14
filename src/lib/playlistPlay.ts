@@ -29,9 +29,23 @@ export interface PlayRequest {
   at: number;
   /** tb_1791521998_11250_5: вопрос плейлиста — главное окно поднимет карточку */
   questionId?: string;
+  // tb_1791876286_57716_1: точная запись (сиблинги A/B делят qid, trk-10 —
+  // и path+qid): first-match поднимал A при клике на B. Панель везёт entry
+  // целиком (plain JSON) + индекс; главное окно валидирует оба.
+  entry?: Record<string, unknown>;
+  entryIndex?: number;
 }
 
-export function parsePlayRequest(raw: string | null | undefined, now: number = Date.now()): Pick<PlayRequest, "path" | "questionId"> | null {
+function cleanEntry(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  return raw as Record<string, unknown>;
+}
+
+function cleanIndex(raw: unknown): number | undefined {
+  return typeof raw === "number" && Number.isInteger(raw) && raw >= 0 ? raw : undefined;
+}
+
+export function parsePlayRequest(raw: string | null | undefined, now: number = Date.now()): Pick<PlayRequest, "path" | "questionId" | "entry" | "entryIndex"> | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as Partial<PlayRequest>;
@@ -42,26 +56,31 @@ export function parsePlayRequest(raw: string | null | undefined, now: number = D
     const questionId = typeof parsed?.questionId === "string" && parsed.questionId.length > 0
       ? parsed.questionId
       : undefined;
-    return { path, questionId };
+    const out: Pick<PlayRequest, "path" | "questionId" | "entry" | "entryIndex"> = { path, questionId };
+    const entry = cleanEntry(parsed?.entry);
+    if (entry) out.entry = entry;
+    const entryIndex = cleanIndex(parsed?.entryIndex);
+    if (entryIndex !== undefined) out.entryIndex = entryIndex;
+    return out;
   } catch {
     return null;
   }
 }
 
-export function encodePlayRequest(path: string, now: number = Date.now(), questionId?: string): string {
-  return JSON.stringify({ path, at: now, questionId } satisfies PlayRequest);
+export function encodePlayRequest(path: string, now: number = Date.now(), questionId?: string, entry?: Record<string, unknown>, entryIndex?: number): string {
+  return JSON.stringify({ path, at: now, questionId, entry, entryIndex } satisfies PlayRequest);
 }
 
 /** Панельная сторона: попросить главное окно открыть и играть. Возвращает транспорт. */
-export function requestPlaylistPlay(path: string, questionId?: string): "tauri" | "storage" {
+export function requestPlaylistPlay(path: string, questionId?: string, entry?: Record<string, unknown>, entryIndex?: number): "tauri" | "storage" {
   if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
     import("@tauri-apps/api/event").then(({ emit }) => {
-      emit("playlist:play", { path, questionId }).catch(() => {});
+      emit("playlist:play", { path, questionId, entry, entryIndex }).catch(() => {});
     }).catch(() => {});
     return "tauri";
   }
   try {
-    window.localStorage.setItem(PLAYER_PLAY_REQUEST_KEY, encodePlayRequest(path, Date.now(), questionId));
+    window.localStorage.setItem(PLAYER_PLAY_REQUEST_KEY, encodePlayRequest(path, Date.now(), questionId, entry, entryIndex));
   } catch {
     // storage недоступен — открытия не будет, панель остаётся списком
   }

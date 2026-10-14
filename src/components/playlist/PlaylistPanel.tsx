@@ -16,7 +16,9 @@ import { Download, Repeat, Repeat1, Scissors, Shuffle, Upload } from "lucide-rea
 
 interface PlaylistPanelProps {
   currentPath: string | null;
-  onPlay: (entry: PlaylistEntry) => void;
+  // tb_1791876286_57716_1: индекс вместе с записью — сиблинги A/B делят
+  // question_id (trk-10 — и path), first-match поднимал не ту запись.
+  onPlay: (entry: PlaylistEntry, index: number) => void;
   onClose: () => void;
   standalone?: boolean;
 }
@@ -169,6 +171,38 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
     if (!playlist) return;
     const json = serializePlaylist(playlist);
     const fileName = `${sanitizePlaylistFilename(playlist.name)}.json`;
+    // tb_1791885959_77379_1: ответы оператора (вердикты/комменты) едут рядом
+    // sibling .answers.json по конвенции answersPathFor — Commander видит
+    // комментарии, открытие подхватит их само. Источник — файл у исходного
+    // плейлиста, иначе аутбокс (веб/без пути). Нет ответов — уезжают entries.
+    let answersText: string | null = null;
+    let answersCount = 0;
+    try {
+      const qp = await import("../../lib/questionPlaylist");
+      let sourceText: string | null = null;
+      if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+        try {
+          const fs = await import("@tauri-apps/plugin-fs");
+          const srcPath = qp.readQuestionPlaylistPath();
+          if (srcPath) sourceText = await fs.readTextFile(qp.answersPathFor(srcPath));
+        } catch { /* файла ещё нет — дальше аутбокс */ }
+      }
+      answersText = qp.resolveExportAnswersText(sourceText, qp.readAnswersOutbox());
+      try {
+        answersCount = answersText ? qp.parseAnswersFile(answersText).length : 0;
+      } catch {
+        answersCount = 0;
+      }
+    } catch { /* экспорт entries всё равно уедет */ }
+    const downloadBlob = (text: string, name: string) => {
+      const blob = new Blob([text], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
     if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
       try {
         const dialog = await import("@tauri-apps/plugin-dialog");
@@ -179,16 +213,22 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
         });
         if (!savePath || typeof savePath !== "string") return;
         await fs.writeTextFile(savePath, json);
+        if (answersText) {
+          try {
+            const qp = await import("../../lib/questionPlaylist");
+            await fs.writeTextFile(qp.answersPathFor(savePath), answersText);
+            setLoadedLine(`Exported ${fileName} + ${answersCount} answers.`);
+          } catch {
+            setLoadedLine(`Exported ${fileName} (answers failed).`);
+          }
+          return;
+        }
+        setLoadedLine(`Exported ${fileName} (no answers yet).`);
         return;
       } catch { /* fallback to blob */ }
     }
-    const blob = new Blob([json], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = fileName;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(json, fileName);
+    if (answersText) downloadBlob(answersText, `${fileName}.answers.json`);
   }, [playlist]);
 
   const handleImport = useCallback(async () => {
@@ -301,8 +341,8 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
         const arr = Array.isArray(stored) ? stored : [];
         return new Set(
           arr
-            .filter((m): m is { marker_id: string; media_path?: unknown } => !!m && typeof m === "object" && typeof (m as { marker_id?: unknown }).marker_id === "string")
-            .map((m) => markerDedupKey(m.marker_id, typeof m.media_path === "string" ? m.media_path : null)),
+            .filter((m): m is { marker_id: string; media_path?: unknown; anchor_sec?: unknown } => !!m && typeof m === "object" && typeof (m as { marker_id?: unknown }).marker_id === "string")
+            .map((m) => markerDedupKey(m.marker_id, typeof m.media_path === "string" ? m.media_path : null, typeof m.anchor_sec === "number" ? m.anchor_sec : null)),
         );
       },
       appendMarkers: (fresh) => {
@@ -399,13 +439,15 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
             <div
               // tb_1791819024_26192_2: ключ по вопросу (у капчи 28 записей на
               // один path — дубли ключей глючили строки).
-              key={(entry as QuestionPlaylistEntry).question_id ?? entry.path}
+              // tb_1791876286_57716_1: qid делят сиблинги A/B (v07: один qid
+              // на пару) — ключ qid+path+окно, иначе строки A/B коллизили.
+              key={`${(entry as QuestionPlaylistEntry).question_id ?? ""}|${entry.path}|${(entry as QuestionPlaylistEntry).in_sec ?? ""}|${(entry as QuestionPlaylistEntry).out_sec ?? ""}`}
               draggable
               onDragStart={(e) => handleDragStart(e, index)}
               onDragOver={(e) => handleDragOver(e, index)}
               onDrop={(e) => handleDrop(e, index)}
               onDragEnd={handleDragEnd}
-              onClick={() => onPlay(entry)}
+              onClick={() => onPlay(entry, index)}
               style={{
                 display: "flex",
                 alignItems: "center",

@@ -445,13 +445,28 @@ export function isQuestionPlaylist(playlist: Playlist | null | undefined): playl
   return Array.isArray(p.entries) && p.entries.some((e) => (e as QuestionEntry).question_id !== undefined);
 }
 
-/** Найти запись-вопрос: сначала по question_id, иначе по path. */
+/** Найти запись-вопрос: точный индекс, иначе пара path+вопрос, иначе вопрос, иначе путь. */
 export function findQuestionEntry(
   playlist: Playlist | null | undefined,
-  opts: { questionId?: string | null; path?: string | null },
+  opts: { questionId?: string | null; path?: string | null; entryIndex?: number | null },
 ): QuestionEntry | null {
   if (!playlist || !Array.isArray(playlist.entries)) return null;
   const entries = playlist.entries as QuestionEntry[];
+  // tb_1791876286_57716_1: сиблинги A/B делят question_id (v07: один qid
+  // на пару) — first-match по qid поднимал запись A при открытии B:
+  // снап считал playhead внутри окна A и молчал, B играла с нуля.
+  // trk-10 делит и path+qid — там спасает только индекс.
+  const ei = opts.entryIndex;
+  if (typeof ei === "number" && Number.isInteger(ei) && ei >= 0 && ei < entries.length) {
+    const cand = entries[ei];
+    const pathOk = opts.path == null || cand.path === opts.path;
+    const qidOk = opts.questionId == null || cand.question_id === opts.questionId;
+    if (pathOk && qidOk) return cand;
+  }
+  if (opts.questionId && opts.path) {
+    const hit = entries.find((e) => e.question_id === opts.questionId && e.path === opts.path);
+    if (hit) return hit;
+  }
   if (opts.questionId) {
     const hit = entries.find((e) => e.question_id === opts.questionId);
     if (hit) return hit;
@@ -463,9 +478,99 @@ export function findQuestionEntry(
   return null;
 }
 
-/** Имя файла ответов рядом с плейлистом: <playlist>.answers.json */
-export function answersPathFor(playlistPath: string): string {
+/**
+ * tb_1791876286_57716_1: индекс записи по переданному (панель/переход) —
+ * сначала валидированный entryIndex, иначе сверка полей entry
+ * (path+qid+in+out различают даже сиблингов одного path+qid).
+ * Возвращает индекс или -1. Чистая, тестируем.
+ */
+export function resolveEntryIndex(
+  entries: unknown,
+  opts: {
+    entryIndex?: number | null;
+    entry?: { path?: unknown; question_id?: unknown; in_sec?: unknown; out_sec?: unknown } | null;
+    path?: string | null;
+    questionId?: string | null;
+  },
+): number {
+  if (!Array.isArray(entries)) return -1;
+  const list = entries as { path?: unknown; question_id?: unknown; in_sec?: unknown; out_sec?: unknown }[];
+  const ei = opts.entryIndex;
+  if (typeof ei === "number" && Number.isInteger(ei) && ei >= 0 && ei < list.length) {
+    const cand = list[ei];
+    if (cand && typeof cand === "object" &&
+        (opts.path == null || cand.path === opts.path) &&
+        (opts.questionId == null || cand.question_id === opts.questionId)) {
+      return ei;
+    }
+  }
+  const e = opts.entry;
+  if (e && typeof e === "object") {
+    const found = list.findIndex((raw) =>
+      !!raw && typeof raw === "object" &&
+      (opts.path == null || raw.path === opts.path) &&
+      (e.question_id == null || raw.question_id === e.question_id) &&
+      (e.in_sec == null || raw.in_sec === e.in_sec) &&
+      (e.out_sec == null || raw.out_sec === e.out_sec) &&
+      raw.path === e.path);
+    if (found >= 0) return found;
+  }
+  return -1;
+}
+
+/**
+ * tb_1791876286_57716_1: точная активная запись одним вызовом — сначала
+ * resolveEntryIndex (индекс/поля переданной записи), иначе findQuestionEntry
+ * (пара path+qid, иначе qid, иначе путь). Возвращает запись и её индекс
+ * (-1, когда запись опознана только переданным объектом вне списка).
+ * Чистая, тестируем.
+ */
+export function resolveActiveEntry(
+  entries: unknown,
+  opts: {
+    entryIndex?: number | null;
+    entry?: { path?: unknown; question_id?: unknown; in_sec?: unknown; out_sec?: unknown } | null;
+    path?: string | null;
+    questionId?: string | null;
+  },
+): { entry: QuestionEntry | null; index: number } {
+  const list = Array.isArray(entries) ? (entries as QuestionEntry[]) : [];
+  const idx = resolveEntryIndex(entries, opts);
+  if (idx >= 0 && idx < list.length) return { entry: list[idx], index: idx };
+  const hit = findQuestionEntry({ entries: list } as Playlist, {
+    questionId: opts.questionId ?? null,
+    path: opts.path ?? null,
+  });
+  if (hit) return { entry: hit, index: list.indexOf(hit) };
+  const ext = opts.entry;
+  if (ext && typeof ext === "object" && typeof (ext as QuestionEntry).question_id === "string") {
+    return { entry: ext as QuestionEntry, index: -1 };
+  }
+  return { entry: null, index: -1 };
+}
+
+/** Имя файла ответов рядом с плейлистом: <playlist>.answers.json */export function answersPathFor(playlistPath: string): string {
   return `${playlistPath}.answers.json`;
+}
+
+/**
+ * tb_1791885959_77379_1: что положить рядом с экспортом плейлиста.
+ * Вердикты/комменты оператора живут в <плейлист>.answers.json (или в
+ * аутбоксе, когда пути нет) — голый экспорт entries их терял, Commander
+ * не видел комментариев. Приоритет — файл у исходника, иначе аутбокс.
+ * Чистая, тестируем.
+ */
+export function resolveExportAnswersText(
+  sourceAnswersText: string | null | undefined,
+  outbox: AnswerRecord[],
+): string | null {
+  if (typeof sourceAnswersText === "string" && sourceAnswersText.trim() !== "") {
+    return sourceAnswersText;
+  }
+  if (Array.isArray(outbox) && outbox.length > 0) {
+    return serializeAnswersFile(outbox);
+  }
+  return null;
 }
 
 /** Только дописывание: новый ответ в конец, старое не трогаем. */

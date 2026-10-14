@@ -126,6 +126,30 @@ export function didCrossOut(segments: PlaybackSegment[], prevT: number, t: numbe
 }
 
 /**
+ * tb_1791885959_77379_1: пересечение OUT активной записи-вопроса — ведёт
+ * advance на следующую запись (tail), а НЕ jump в следующее окно того же
+ * файла. Кейс v07: 11 окон на одном 50-минутном прокси — out-cross уводил
+ * playhead в чужое окно той же дорожки (2831.75 → jump 2848.75), карточка
+ * врала, плейлист шёл подряд. Вопрос владеет проигрыванием, пока его
+ * карточка поднята; plain-тракт (вопроса нет) — без изменений.
+ * Чистая, тестируем.
+ */
+export function questionOutCrossed(
+  active: { out_sec?: unknown; in_sec?: unknown; question_id?: unknown } | null | undefined,
+  path: string | null | undefined,
+  questionPath: string | null | undefined,
+  prevT: number,
+  t: number,
+): boolean {
+  if (!active || typeof path !== "string" || questionPath !== path) return false;
+  const out = active.out_sec;
+  if (typeof out !== "number" || !Number.isFinite(out) || out < 0) return false;
+  if (!Number.isFinite(prevT) || !Number.isFinite(t) || t <= prevT) return false;
+  if (t - prevT > SKIP_SCRUB_THRESHOLD_SEC) return false;
+  return prevT < out && out <= t;
+}
+
+/**
  * tb_1791661175_27409_1: пересечение OUT при выключенном loop — пауза ровно
  * на скобке. Раньше этот кейс никак не обрабатывался (resolveSkipTarget null
  * = игнор) и видео уходило за OUT — а IN при этом работал, т.к. всё до

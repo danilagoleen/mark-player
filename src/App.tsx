@@ -27,6 +27,7 @@ import {
   isManualSeekSuppressed,
   markManualSeek,
   outCrossAction,
+  questionOutCrossed,
   readInOutPlayEnabled,
   wouldNestInPair,
   writeInOutPlayEnabled,
@@ -40,7 +41,7 @@ import { buildUIManifest, type UIManifest } from "./lib/uiManifest";
 import { DOOR_IDS, checkModuleDoor, doorClickTransition, doorEndpoint, doorLabel, type DoorId, type ModuleDoor } from "./lib/moduleDoors";
 import type { ProbeResult } from "./lib/nativeWindow";
 import { createEmptyPlaylist, savePlaylist, loadPlaylist, addEntry, getNextEntryFromCursor, loadPlaybackMode, sanitizePlaylistFilename, trackOpenedFile, type QuestionPlaylistEntry } from "./lib/playlist";
-import { answersFromMarkers, findQuestionEntry, findQuestionEntryAtTime, formatAnswerReplyText, lerpQuestionBox, mergeAnswerRecords, normalizeQuestionEntry, readAnswersOutbox, readQuestionPlaylistPath, rememberQuestionPlaylistPath, resolveQuestionSnapTime, serializeAnswersFile, writeAnswersOutbox, isQuestionPlaylist, type AnswerRecord, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
+import { answersFromMarkers, findQuestionEntryAtTime, formatAnswerReplyText, lerpQuestionBox, mergeAnswerRecords, normalizeQuestionEntry, readAnswersOutbox, readQuestionPlaylistPath, rememberQuestionPlaylistPath, resolveActiveEntry, resolveQuestionSnapTime, serializeAnswersFile, writeAnswersOutbox, isQuestionPlaylist, type AnswerRecord, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
 import { isSameMediaPath, resolveMediaContentHash } from "./lib/mediaOpen";
 import { mediaPlayability, mediaRefusalReason } from "./lib/mediaPlayability";
 import { markerBelongsToMedia, notifyMarkersChanged, notifyMediaChanged, resolveExternalMarkers, MARKERS_CHANGED_EVENT, MARKERS_RELOAD_EVENT, type MediaIdentity } from "./lib/markersSync";
@@ -71,7 +72,6 @@ import {
   resolveReplyAuthorForParent,
 } from "./lib/markerReply";
 import { markerDedupKey, materializePlaylistQuestions, materializedMarkerId, materializedMarkerPrefix } from "./lib/questionMaterialize";
-import { resolveQuestionForPath } from "./lib/questionSwitch";
 import {
   VOLUME_STEP,
   createFrameCalibrator,
@@ -709,7 +709,7 @@ function App() {
   // tb_1791865711_84020_5: курсор текущей ЗАПИСИ (путь + вопрос) для
   // автоперехода. Пути не уникальны (несколько вопросов на одном видео) —
   // findIndex-первое вхождение прыгало назад; индекс — по вопросу.
-  const currentEntryRef = useRef<{ path: string | null; questionId?: string | null }>({ path: null });
+  const currentEntryRef = useRef<{ path: string | null; questionId?: string | null; index?: number | null }>({ path: null });
   // tb_1791233024_7043_1: Resume — отложенная перемотка холодного старта
   // (позиция применяется в onLoadedMetadata, раньше декодер её роняет)
   // + троттл записи позиции (timeupdate ~4Гц, в LS пишем раз в 5с и точно
@@ -1001,9 +1001,17 @@ function App() {
     const prefix = materializedMarkerPrefix(qid);
     return mediaMarkers.some((m) => m.marker_id === inId || m.marker_id.startsWith(prefix));
   }
-  function activateQuestionFor(path: string, questionId?: string | null): void {
+  // tb_1791876286_57716_1: entry/entryIndex — точная запись (сиблинги A/B
+  // делят qid, trk-10 — и path+qid). Переданная валидная запись важнее
+  // лукапа; иначе resolveActiveEntry: индекс → пара path+qid → qid → путь.
+  function activateQuestionFor(path: string, questionId?: string | null, entry?: unknown, entryIndex?: number | null): void {
     try {
-      const hit = findQuestionEntry(loadPlaylist(), { questionId: questionId ?? null, path });
+      const { entry: hit } = resolveActiveEntry(loadPlaylist()?.entries, {
+        entryIndex: entryIndex ?? null,
+        entry: entry && typeof entry === "object" ? (entry as { path?: unknown; question_id?: unknown; in_sec?: unknown; out_sec?: unknown }) : null,
+        path,
+        questionId: questionId ?? null,
+      });
       if (!hit || (hit as QuestionPlaylistEntry).question_id === undefined) {
         clearActiveQuestion();
         return;
@@ -1025,7 +1033,7 @@ function App() {
   // маркеру-вопросу — карточка из текущей записи, а не залипание на первой
   // (кейс Beta v01: 28 ответов с question_id=mrg-01). Ввод бережём как
   // follow: недописанный ответ — блок + один тост, а не снос.
-  function switchCardToQuestion(path: string, questionId: string | null): void {
+  function switchCardToQuestion(path: string, questionId: string | null, entry?: unknown, entryIndex?: number | null): void {
     if (questionComment.trim() !== "" || questionChoice !== null) {
       if (questionId && followBlockedRef.current !== questionId) {
         followBlockedRef.current = questionId;
@@ -1034,7 +1042,7 @@ function App() {
       return;
     }
     followBlockedRef.current = null;
-    activateQuestionFor(path, questionId);
+    activateQuestionFor(path, questionId, entry, entryIndex);
   }
   function toggleInOutPlay(): void {
     const next = !inOutPlayOnRef.current;
@@ -4046,16 +4054,24 @@ function App() {
     if (!isTauriRuntimeSync()) return;
     let unlisten: (() => void) | null = null;
     void import("@tauri-apps/api/event").then(({ listen }) => {
-      listen<{ path: string; questionId?: string }>("playlist:play", (event) => {
+      listen<{ path: string; questionId?: string; entry?: Record<string, unknown>; entryIndex?: number }>("playlist:play", (event) => {
         const path = event.payload?.path;
         if (!path) return;
         autoplayOnLoadRef.current = true;
         const qid = event.payload?.questionId ?? null;
-        activateQuestionFor(path, qid);
-        currentEntryRef.current = { path, questionId: qid };
+        // tb_1791876286_57716_1: точная запись из панели (индекс/объект) —
+        // резолвим раз и везём вниз, иначе first-match поднимал сиблинга A.
+        const { entry: playEntry, index: playIndex } = resolveActiveEntry(loadPlaylist()?.entries, {
+          entryIndex: event.payload?.entryIndex ?? null,
+          entry: event.payload?.entry ?? null,
+          path,
+          questionId: qid,
+        });
+        activateQuestionFor(path, qid, playEntry, playIndex);
+        currentEntryRef.current = { path, questionId: qid, index: playIndex >= 0 ? playIndex : null };
         // tb_1791865804_84020_6: явный вопрос едет в открытие — успех
         // подтвердит его же, а не первую запись пути.
-        void handleOpenPath(path, { questionId: qid });
+        void handleOpenPath(path, { questionId: qid, entry: playEntry, entryIndex: playIndex });
         // tb_1791688104_1275_2: ножницы везде — ручной клик по записи тоже
         // стартует с первой [ (вопрос — штатный эффект; ножницы OFF — как
         // раньше, с 0/Resume). handleOpenPath выше флаг гасит, взводим после
@@ -4123,7 +4139,7 @@ function App() {
       return;
     }
     followBlockedRef.current = null;
-    activateQuestionFor(currentFilePath, hit.question_id);
+    activateQuestionFor(currentFilePath, hit.question_id, hit);
   }, [currentTime, currentFilePath, mediaKind, activeQuestion, questionComment, questionChoice]);
 
   // tb_1791686462_1275_1: авто-старт plain-записи со штатной [ скобки —
@@ -4198,9 +4214,15 @@ function App() {
       const request = parsePlayRequest(event.newValue);
       if (!request) return;
       autoplayOnLoadRef.current = true;
-      activateQuestionFor(request.path, request.questionId ?? null);
-      currentEntryRef.current = { path: request.path, questionId: request.questionId ?? null };
-      void handleOpenPath(request.path, { questionId: request.questionId ?? null });
+      const { entry: reqEntry, index: reqIndex } = resolveActiveEntry(loadPlaylist()?.entries, {
+        entryIndex: request.entryIndex ?? null,
+        entry: request.entry ?? null,
+        path: request.path,
+        questionId: request.questionId ?? null,
+      });
+      activateQuestionFor(request.path, request.questionId ?? null, reqEntry, reqIndex);
+      currentEntryRef.current = { path: request.path, questionId: request.questionId ?? null, index: reqIndex >= 0 ? reqIndex : null };
+      void handleOpenPath(request.path, { questionId: request.questionId ?? null, entry: reqEntry, entryIndex: reqIndex });
     };
     window.addEventListener("storage", onStoragePlay);
     return () => window.removeEventListener("storage", onStoragePlay);
@@ -4276,11 +4298,32 @@ function App() {
     const found = getNextEntryFromCursor(pl, cursor, loadPlaybackMode());
     if (!found) return false;
     const next = found.entry;
+    const nextQuestionId = (next as QuestionPlaylistEntry).question_id ?? null;
     if (next.path === currentFilePath) {
-      // loop one / единственная запись: src тот же — перезапуск на месте.
+      // tb_1791876286_57716_1: src тот же — перезагрузки и loadedmetadata
+      // нет, но запись ДРУГАЯ: карточка/окно/курсор — от next-записи, плюс
+      // ЯВНЫЙ сик на её in. Было: молчаливый перезапуск с нуля — B-стороны
+      // (trk-10: то же видео, другое окно) стартовали с начала.
+      // loop one / единственная plain-запись: окна нет — как раньше, с нуля.
+      activateQuestionFor(next.path, nextQuestionId, next, found.index);
+      currentEntryRef.current = { path: next.path, questionId: nextQuestionId, index: found.index };
       const video = videoRef.current;
+      const inT = normalizeQuestionEntry(next as unknown as Record<string, unknown>).in_sec;
       if (video) {
-        video.currentTime = 0;
+        if (typeof inT === "number" && Number.isFinite(inT) && inT >= 0 && inT < (duration || Infinity)) {
+          try {
+            video.currentTime = inT;
+          } catch {
+            // ignore — останется внешнее
+          }
+          setSeekTarget(inT);
+        } else {
+          try {
+            video.currentTime = 0;
+          } catch {
+            // ignore — останется внешнее
+          }
+        }
         void video.play().catch(() => {});
       }
       return true;
@@ -4303,9 +4346,10 @@ function App() {
       // tb_1791683106_1275_5: авто-старт с IN как ручной клик — поднимаем
       // вопрос next-записи; существующий эффект [activeQuestion, duration]
       // прыгнет на in_sec когда подтянется duration. Нет вопроса — clear.
-      const nextQuestionId = (next as QuestionPlaylistEntry).question_id ?? null;
-      activateQuestionFor(next.path, nextQuestionId);
-      currentEntryRef.current = { path: next.path, questionId: nextQuestionId };
+      // tb_1791876286_57716_1: поднимаем ТОЧНУЮ next-запись (не first-match
+      // по qid) + индекс в курсор, иначе B-стороны получали окно A.
+      activateQuestionFor(next.path, nextQuestionId, next, found.index);
+      currentEntryRef.current = { path: next.path, questionId: nextQuestionId, index: found.index };
       // tb_1791686462_1275_1: plain-запись без вопроса — авто-старт со
       // штатной [ скобки (разовый флаг, добьёт эффект выше). Ветвь
       // с вопросом — штатный эффект, флаг гасим.
@@ -4382,13 +4426,51 @@ function App() {
     );
   }, [contentHash, currentMediaKey, markers]);
 
-  async function handleOpenPath(path: string, opts?: { questionId?: string | null }) {
+  async function handleOpenPath(path: string, opts?: { questionId?: string | null; entry?: unknown; entryIndex?: number | null }) {
     // tb_1791686462_1275_1: ручное открытие — без авто-сика на [,
     // чужой взведённый флаг гасим (ручной тракт не меняем).
     advanceInSeekRef.current = null;
     if (isSameMediaPath(path, currentFilePathRef.current)) {
       // 0.10.22: клик по уже открытому файлу — src не меняется, loadedmetadata
       // не выстрелит, а сброс naturalSize схлопнул бы сцену до 1px. No-op + resume.
+      // tb_1791876286_57716_1: НО тот же файл — другая запись (trk-10 A→B
+      // кликом: то же видео, другое окно): карточка и окно — от новой записи,
+      // playhead — ЯВНО на её in (перезагрузки нет — сик руками).
+      const qid = opts?.questionId ?? null;
+      const { entry: sameEntry, index: sameIndex } = resolveActiveEntry(loadPlaylist()?.entries, {
+        entryIndex: opts?.entryIndex ?? null,
+        entry: opts?.entry && typeof opts.entry === "object"
+          ? (opts.entry as { path?: unknown; question_id?: unknown; in_sec?: unknown; out_sec?: unknown })
+          : null,
+        path,
+        questionId: qid,
+      });
+      const cur = currentEntryRef.current;
+      const sameAsCurrent = cur.path === path &&
+        (qid == null || cur.questionId === qid) &&
+        (sameIndex < 0 || cur.index == null || cur.index === sameIndex);
+      if (sameEntry && !sameAsCurrent) {
+        const sameQid = (sameEntry as QuestionEntry).question_id ?? qid;
+        switchCardToQuestion(path, sameQid, sameEntry, sameIndex);
+        currentEntryRef.current = { path, questionId: sameQid, index: sameIndex >= 0 ? sameIndex : null };
+        const inT = normalizeQuestionEntry(sameEntry as unknown as Record<string, unknown>).in_sec;
+        const current = videoRef.current;
+        if (current) {
+          if (typeof inT === "number" && Number.isFinite(inT) && inT >= 0 && inT < (duration || Infinity)) {
+            try {
+              current.currentTime = inT;
+            } catch {
+              // ignore — останется внешнее
+            }
+            setSeekTarget(inT);
+          }
+          if (current.paused) {
+            void current.play().catch(() => {});
+          }
+        }
+        autoplayOnLoadRef.current = false;
+        return;
+      }
       const current = videoRef.current;
       if (current && current.paused) {
         void current.play().catch(() => {});
@@ -4423,6 +4505,16 @@ function App() {
     }
     setProbeResult(null);
     probeFile(path, playerLabApiBase).then(setProbeResult);
+    // tb_1791876286_57716_1: точная запись из клика/перехода — резолвим раз
+    // (иначе first-match поднимал сиблинга A при открытии B).
+    const { entry: openedEntry, index: openedIndex } = resolveActiveEntry(loadPlaylist()?.entries, {
+      entryIndex: opts?.entryIndex ?? null,
+      entry: opts?.entry && typeof opts.entry === "object"
+        ? (opts.entry as { path?: unknown; question_id?: unknown; in_sec?: unknown; out_sec?: unknown })
+        : null,
+      path,
+      questionId: opts?.questionId ?? null,
+    });
     // tb_1791685802_1275_3: ручное открытие мёртвого пути раньше падало
     // молча (fetch rejection в void-пути playlist:play — оператор: «видео
     // перестали открываться»). Отказ видно, как в авто-пути 0.25.43.
@@ -4433,10 +4525,11 @@ function App() {
         rememberInPlaylist(path);
         // tb_1791865804_84020_6: смена носителя — карточка из текущей записи
         // (явный вопрос клика важнее, иначе первая запись пути, иначе гасим).
-        const openedQid = resolveQuestionForPath(loadPlaylist()?.entries, path, opts?.questionId);
-        switchCardToQuestion(path, openedQid);
+        const openedQid = (openedEntry as QuestionEntry | null)?.question_id ?? null;
+        switchCardToQuestion(path, openedQid, openedEntry, openedIndex);
         // tb_1791865711_84020_5: курсор записи для автоперехода (дубли path).
-        currentEntryRef.current = { path, questionId: openedQid };
+        // tb_1791876286_57716_1: + индекс (сиблинги делят path+qid).
+        currentEntryRef.current = { path, questionId: openedQid, index: openedIndex >= 0 ? openedIndex : null };
         return;
       }
       const response = await fetch(path);
@@ -4445,9 +4538,9 @@ function App() {
       const file = new File([blob], path.split("/").pop() || "media", { type: blob.type });
       attachFile(file);
       rememberInPlaylist(path);
-      const openedQid = resolveQuestionForPath(loadPlaylist()?.entries, path, opts?.questionId);
-      switchCardToQuestion(path, openedQid);
-      currentEntryRef.current = { path, questionId: openedQid };
+      const openedQid = (openedEntry as QuestionEntry | null)?.question_id ?? null;
+      switchCardToQuestion(path, openedQid, openedEntry, openedIndex);
+      currentEntryRef.current = { path, questionId: openedQid, index: openedIndex >= 0 ? openedIndex : null };
     } catch {
       autoplayOnLoadRef.current = false;
       setContextToast(`Cannot open ${path.split("/").pop() || "media"}.`);
@@ -4613,7 +4706,7 @@ function App() {
       const loadedLine = await materializePlaylistQuestions(parsed, fileLabel, {
         // tb_1791861762_84020_3: дедуп по паре id+медиа — тот же вопрос на
         // другом видео материализуется заново, а не режется как дубль.
-        readStoredKeys: () => new Set(markersRef.current.map((m) => markerDedupKey(m.marker_id, m.media_path))),
+        readStoredKeys: () => new Set(markersRef.current.map((m) => markerDedupKey(m.marker_id, m.media_path, m.anchor_sec))),
         appendMarkers: (fresh) => setMarkers((prev) => [...prev, ...(fresh as unknown as PlayerTimeMarker[])]),
         resolveMediaUrl: (p) => toAssetUrl(p),
         notifyChanged: () => notifyMarkersChanged(),
@@ -5220,7 +5313,17 @@ function App() {
                               // заворачивает на первый сегмент), tail без
                               // продолжения — автопереход плейлиста, а идти
                               // некуда — пауза на скобке (0.25.35).
-                              const action = outCrossAction(segments, prevT, t, video.loop);
+                              // tb_1791885959_77379_1: активная запись-вопрос владеет
+                              // проигрыванием — пересечение ЕЁ out уводит на
+                              // следующую запись (tail), а не jump'ом в чужое
+                              // окно того же файла (v07: 11 окон на одном
+                              // 50-минутном прокси шли подряд). Plain-тракт —
+                              // как раньше, через outCrossAction.
+                              const qTail = questionOutCrossed(activeQuestion, currentFilePathRef.current, questionPathRef.current, prevT, t);
+                              const qAt = qTail && typeof activeQuestion?.out_sec === "number" ? activeQuestion.out_sec : 0;
+                              const action = qTail
+                                ? { kind: "tail" as const, at: qAt }
+                                : outCrossAction(segments, prevT, t, video.loop);
                               if (action?.kind === "tail" && advanceToNextEntry()) {
                                 inOutPrevTRef.current = 0;
                               } else {

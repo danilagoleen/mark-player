@@ -180,10 +180,14 @@ function stepFromIndex(
   return { entry: entries[idx + 1], index: idx + 1 };
 }
 
-/** Курсор текущей записи: путь + вопрос (панель везёт оба). */
+/** Курсор текущей записи: путь + вопрос (панель везёт оба) + индекс. */
 export interface AdvanceCursor {
   path: string | null;
   questionId?: string | null;
+  // tb_1791876286_57716_1: сиблинги делят path+qid (trk-10 A/B — два окна
+  // в одном прокси) — first-match резолвился в A, B повторялась вечно.
+  // Индекс — точная identity; валидируем ниже, иначе старые правила.
+  index?: number | null;
 }
 
 // tb_1791865711_84020_5: фантом «плейлист возвращается назад». Корень:
@@ -193,6 +197,16 @@ export interface AdvanceCursor {
 // по пути; вопрос чужого пути не засчитываем.
 export function findCurrentEntryIndex(entries: unknown, cursor: AdvanceCursor): number {
   if (!Array.isArray(entries)) return -1;
+  // tb_1791876286_57716_1: индекс важнее first-match — но только
+  // валидированный (список мог переупорядочиться между кликом и открытием).
+  const ci = cursor.index;
+  if (typeof ci === "number" && Number.isInteger(ci) && ci >= 0 && ci < entries.length) {
+    const cand = entries[ci] as { path?: unknown; question_id?: unknown } | null;
+    if (cand && typeof cand === "object" && cand.path === cursor.path &&
+        (cursor.questionId == null || cand.question_id === cursor.questionId)) {
+      return ci;
+    }
+  }
   const path = cursor.path;
   const qid = cursor.questionId;
   if (typeof qid === "string" && qid) {

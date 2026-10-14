@@ -21,10 +21,11 @@ function readQueryPath(): string | null {
   }
 }
 
-function requestPlay(path: string, questionId?: string) {
+function requestPlay(path: string, questionId?: string, entry?: Record<string, unknown>, entryIndex?: number) {
   // tb_1791233039_7043_3: два транспорта (Tauri-событие / LS-мост) — в lib,
   // сам play() делает главное окно по флагу autoplay в onLoadedData.
-  requestPlaylistPlay(path, questionId);
+  // tb_1791876286_57716_1: везём точную запись + индекс (сиблинги делят qid).
+  requestPlaylistPlay(path, questionId, entry, entryIndex);
 }
 
 function PlaylistStandalone() {
@@ -63,7 +64,7 @@ function PlaylistStandalone() {
   return (
     <PlaylistPanel
       currentPath={currentPath}
-      onPlay={(entry) => requestPlay(entry.path, (entry as QuestionPlaylistEntry).question_id)}
+      onPlay={(entry, index) => requestPlay(entry.path, (entry as QuestionPlaylistEntry).question_id, entry as unknown as Record<string, unknown>, index)}
       onClose={() => { if (typeof window !== "undefined") window.close(); }}
       standalone
     />

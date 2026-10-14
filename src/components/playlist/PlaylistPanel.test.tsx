@@ -78,7 +78,7 @@ describe("PlaylistPanel", () => {
     const onPlay = vi.fn();
     render(<PlaylistPanel currentPath={null} onPlay={onPlay} onClose={vi.fn()} />);
     fireEvent.click(screen.getByText("Video 0"));
-    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ path: "/video0.mp4" }));
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ path: "/video0.mp4" }), 0);
   });
 
   it("removes entry when remove button is clicked", () => {
@@ -143,5 +143,28 @@ describe("PlaylistPanel", () => {
     fireEvent.click(btn);
     expect(btn.getAttribute("aria-pressed")).toBe("false");
     expect(localStorage.getItem("vetka_player_lab_inout_play_v1")).toBe("false");
+  });
+});
+
+describe("tb_1791876286_57716_1: сиблинги одного qid", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createLocalStorageMock());
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+  it("клик на B везёт индекс B, строки A/B не коллизируют", () => {
+    const entries = [
+      { path: "/v/a.mp4", name: "Капча trk-01 · трек A", duration: 3, addedAt: "x", question_id: "trk-01", in_sec: 0, out_sec: 3.02 },
+      { path: "/v/b.mov", name: "Капча trk-01 · трек B", duration: 22.6, addedAt: "x", question_id: "trk-01", in_sec: 4.75, out_sec: 7.75 },
+    ];
+    localStorage.setItem("vetka_player_lab_playlist_v1", JSON.stringify({ id: "t", name: "T", entries, createdAt: "x" }));
+    const onPlay = vi.fn();
+    render(<PlaylistPanel currentPath={null} onPlay={onPlay} onClose={vi.fn()} />);
+    expect(screen.getByText("Капча trk-01 · трек A")).toBeTruthy();
+    expect(screen.getByText("Капча trk-01 · трек B")).toBeTruthy();
+    fireEvent.click(screen.getByText("Капча trk-01 · трек B"));
+    expect(onPlay).toHaveBeenCalledWith(expect.objectContaining({ path: "/v/b.mov" }), 1);
   });
 });

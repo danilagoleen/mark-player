@@ -31,3 +31,18 @@ describe("parsePlayRequest", () => {
     expect(PLAYER_PLAY_REQUEST_KEY).toBe("vetka_player_lab_play_request_v1");
   });
 });
+
+describe("tb_1791876286_57716_1: play-запрос везёт точную запись", () => {
+  it("entry + entryIndex переживают roundtrip", () => {
+    const entry = { path: "/v/a.mov", question_id: "q", in_sec: 2919.75, out_sec: 2922.75 };
+    const raw = encodePlayRequest("/v/a.mov", 1000, "q", entry, 3);
+    expect(parsePlayRequest(raw, 1000)).toEqual({ path: "/v/a.mov", questionId: "q", entry, entryIndex: 3 });
+  });
+  it("без entry — как раньше", () => {
+    expect(parsePlayRequest(encodePlayRequest("/v/a.mov", 1000, "q"), 1000)).toEqual({ path: "/v/a.mov", questionId: "q" });
+  });
+  it("мусор в entry/index отбрасывается, путь живёт", () => {
+    const raw = JSON.stringify({ path: "/v/a.mov", at: 1000, entry: [1, 2], entryIndex: -5 });
+    expect(parsePlayRequest(raw, 1000)).toEqual({ path: "/v/a.mov" });
+  });
+});

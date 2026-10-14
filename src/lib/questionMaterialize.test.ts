@@ -52,7 +52,7 @@ describe("questionMaterialize (tb_1791586270_32802_2)", () => {
     const a = materializeQuestionEntry(entry, CTX);
     const b = materializeQuestionEntry(entry, CTX);
     expect(a.map((m) => m.marker_id)).toEqual(b.map((m) => m.marker_id));
-    expect(filterNewMarkers(new Set(a.map((m) => markerDedupKey(m.marker_id, m.media_path))), b)).toHaveLength(0);
+    expect(filterNewMarkers(new Set(a.map((m) => markerDedupKey(m.marker_id, m.media_path, m.anchor_sec))), b)).toHaveLength(0);
   });
 
   it("tb_1791861762_84020_3: те же question_id на другом видео — новые маркеры", () => {
@@ -61,7 +61,7 @@ describe("questionMaterialize (tb_1791586270_32802_2)", () => {
     const a = materializeQuestionEntry(entry, CTX);
     const b = materializeQuestionEntry(entry, otherCtx);
     expect(a.map((m) => m.marker_id)).toEqual(b.map((m) => m.marker_id));
-    expect(filterNewMarkers(new Set(a.map((m) => markerDedupKey(m.marker_id, m.media_path))), b)).toHaveLength(b.length);
+    expect(filterNewMarkers(new Set(a.map((m) => markerDedupKey(m.marker_id, m.media_path, m.anchor_sec))), b)).toHaveLength(b.length);
   });
 
   it("без question_id — пусто", () => {
@@ -152,7 +152,7 @@ describe("materializePlaylistQuestions", () => {
     ],
   };
   function fakeIO(stored: MaterializedMarker[] = []): QuestionMaterializeIO & { appended: MaterializedMarker[]; notified: number } {
-    const keys = new Set(stored.map((m) => markerDedupKey(m.marker_id, m.media_path)));
+    const keys = new Set(stored.map((m) => markerDedupKey(m.marker_id, m.media_path, m.anchor_sec)));
     const io = {
       appended: [] as MaterializedMarker[],
       notified: 0,
@@ -177,7 +177,7 @@ describe("materializePlaylistQuestions", () => {
     const io = fakeIO();
     await materializePlaylistQuestions(QP as never, "cap.json", io);
     const before = io.appended.length;
-    for (const m of io.appended) io.readStoredKeys().add(markerDedupKey(m.marker_id, m.media_path));
+    for (const m of io.appended) io.readStoredKeys().add(markerDedupKey(m.marker_id, m.media_path, m.anchor_sec));
     const line = await materializePlaylistQuestions(QP as never, "cap.json", io);
     expect(io.appended.length).toBe(before);
     expect(line).toContain("already in markers");
@@ -204,7 +204,7 @@ describe("materializePlaylistQuestions", () => {
     await materializePlaylistQuestions(QP as never, "first.json", io);
     const before = io.appended.length;
     expect(before).toBeGreaterThan(0);
-    for (const m of io.appended) io.readStoredKeys().add(markerDedupKey(m.marker_id, m.media_path));
+    for (const m of io.appended) io.readStoredKeys().add(markerDedupKey(m.marker_id, m.media_path, m.anchor_sec));
     const QP2 = {
       entries: [
         { question_id: "mrg-01", question: "Один?", in_sec: 1, out_sec: 2, path: "b.mp4" },
@@ -215,5 +215,46 @@ describe("materializePlaylistQuestions", () => {
     expect(io.appended.length).toBeGreaterThan(before);
     expect(line).toContain("2 questions →");
     for (const m of io.appended.slice(before)) expect(m.media_path).toBe("asset://b.mp4");
+  });
+});
+
+describe("tb_1791885959_77379_1: сиблинги одного path+qid не режутся дедупом", () => {
+  const io = (): QuestionMaterializeIO & { appended: MaterializedMarker[] } => {
+    const box: QuestionMaterializeIO & { appended: MaterializedMarker[] } = {
+      appended: [],
+      readStoredKeys: () => new Set(box.appended.map((m) => markerDedupKey(m.marker_id, m.media_path, m.anchor_sec))),
+      appendMarkers: (fresh) => { box.appended.push(...fresh); },
+      resolveMediaUrl: async (p) => `asset://${p}`,
+      notifyChanged: () => {},
+    };
+    return box;
+  };
+  it("trk-10 A/B (один qid, один файл, разные окна) — оба окна + оба коммента", async () => {
+    const qp = {
+      schema: "vetka.cut.question_playlist/1",
+      entries: [
+        { path: "/v/big.mov", question_id: "trk-10", in_sec: 104.75, out_sec: 107.75, markers: [{ kind: "comment", t_sec: 106.25, text: "A" }] },
+        { path: "/v/big.mov", question_id: "trk-10", in_sec: 2919.75, out_sec: 2922.75, markers: [{ kind: "comment", t_sec: 2921.25, text: "B" }] },
+      ],
+    };
+    const store = io();
+    const line = await materializePlaylistQuestions(qp as never, "cap.json", store, "2026-10-13T00:00:00Z");
+    expect(line).toMatch(/6 markers/);
+    const anchors = store.appended.map((m) => m.anchor_sec).sort((a, b) => (a as number) - (b as number));
+    expect(anchors).toEqual([104.75, 106.25, 107.75, 2919.75, 2921.25, 2922.75]);
+  });
+  it("повторный импорт того же — ноль свежих (якорь в ключе работает)", async () => {
+    const qp = {
+      schema: "vetka.cut.question_playlist/1",
+      entries: [
+        { path: "/v/big.mov", question_id: "trk-10", in_sec: 104.75, out_sec: 107.75, markers: [] },
+      ],
+    };
+    const store = io();
+    await materializePlaylistQuestions(qp as never, "cap.json", store, "2026-10-13T00:00:00Z");
+    expect(store.appended).toHaveLength(2);
+    const line2 = await materializePlaylistQuestions(qp as never, "cap.json", store, "2026-10-13T00:00:00Z");
+    expect(line2).toMatch(/already in markers/);
+    expect(store.appended).toHaveLength(2);
   });
 });

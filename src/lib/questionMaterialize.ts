@@ -58,8 +58,8 @@ export interface MaterializeContext {
 // id детерминированы, но дедуп — НЕ по голому id: один и тот же вопрос на
 // ДРУГОМ видео — это новые маркеры, а не дубли (кейс оператора 13.10:
 // новый плейлист поверх открытого с теми же question_id — всё резалось,
-// видео уже новое — Markers пуст). Ключ дедупа — пара id + media_path
-// (см. markerDedupKey / filterNewMarkers).
+// видео уже новое — Markers пуст). Ключ дедупа — тройка id + media_path +
+// anchor (сиблинги одного path+qid различаются якорем, см. markerDedupKey).
 function sanitizeIdPart(raw: string): string {
   const clean = String(raw ?? "").trim().replace(/[^A-Za-z0-9_-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
   return (clean || "q").slice(0, 48);
@@ -204,9 +204,18 @@ export function countMaterializable(entries: unknown): number {
   ).length;
 }
 
-/** Ключ дедупа импорта: id + медиа. Тот же вопрос на другом видео — новый маркер. */
-export function markerDedupKey(markerId: string, mediaPath: string | null | undefined): string {
-  return markerId + "\u0000" + (mediaPath ?? "");
+/** Ключ дедупа импорта: id + медиа + якорь. Тот же вопрос на другом видео —
+ * новый маркер; сиблинги одного path+qid (v07: пара A/B, trk-10 — два окна
+ * в одном прокси) различаются якорем, иначе окно B резалось как дубль
+ * (tb_1791885959_77379_1). Старые ключи вычислимы из лежащих полей —
+ * сирот и дублей при переходе нет. */
+export function markerDedupKey(
+  markerId: string,
+  mediaPath: string | null | undefined,
+  anchorSec: number | null | undefined,
+): string {
+  const anchor = typeof anchorSec === "number" && Number.isFinite(anchorSec) ? String(anchorSec) : "";
+  return markerId + "\u0000" + (mediaPath ?? "") + "\u0000" + anchor;
 }
 
 /** Вычесть уже существующие (повторный импорт того же файла — без дублей). */
@@ -214,7 +223,7 @@ export function filterNewMarkers(
   existingKeys: Set<string>,
   markers: MaterializedMarker[],
 ): MaterializedMarker[] {
-  return markers.filter((m) => !existingKeys.has(markerDedupKey(m.marker_id, m.media_path)));
+  return markers.filter((m) => !existingKeys.has(markerDedupKey(m.marker_id, m.media_path, m.anchor_sec)));
 }
 
 /** Ввод-вывод материализации: панель Playlist и меню File дают свои реализации. */
@@ -265,7 +274,7 @@ export async function materializePlaylistQuestions(
     });
     for (const m of filterNewMarkers(existingKeys, built)) {
       fresh.push(m);
-      existingKeys.add(markerDedupKey(m.marker_id, m.media_path));
+      existingKeys.add(markerDedupKey(m.marker_id, m.media_path, m.anchor_sec));
     }
   }
   if (fresh.length > 0) {

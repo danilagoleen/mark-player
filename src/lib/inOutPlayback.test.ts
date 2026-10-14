@@ -7,6 +7,7 @@ import {
   MANUAL_SEEK_SUPPRESS_MS,
   outCrossAction,
   pauseAtOutOnCross,
+  questionOutCrossed,
   resolveSkipTarget,
   wouldNestInPair,
   readInOutPlayEnabled,
@@ -241,5 +242,28 @@ describe("ручной сик (tb_1791843935_63972_2: навигация без 
   it("без меток подавления нет (естественное проигрывание — ножницы целы)", () => {
     markManualSeek(0);
     expect(isManualSeekSuppressed(MANUAL_SEEK_SUPPRESS_MS + 1)).toBe(false);
+  });
+});
+
+describe("questionOutCrossed (tb_1791885959_77379_1: out активной записи → advance)", () => {
+  const active = { question_id: "trk-02", in_sec: 2828.75, out_sec: 2831.75 };
+  it("пересечение out своей записи на своём файле — true", () => {
+    expect(questionOutCrossed(active, "/v/big.mov", "/v/big.mov", 2831.5, 2831.75)).toBe(true);
+    expect(questionOutCrossed(active, "/v/big.mov", "/v/big.mov", 2831, 2832)).toBe(true);
+  });
+  it("до out / после out без пересечения — false", () => {
+    expect(questionOutCrossed(active, "/v/big.mov", "/v/big.mov", 2829, 2830)).toBe(false);
+    expect(questionOutCrossed(active, "/v/big.mov", "/v/big.mov", 2832, 2833)).toBe(false);
+  });
+  it("чужой файл (карточка не отсюда) — false", () => {
+    expect(questionOutCrossed(active, "/v/other.mov", "/v/big.mov", 2831.5, 2831.75)).toBe(false);
+  });
+  it("нет активной / нет out — false (plain-тракт без изменений)", () => {
+    expect(questionOutCrossed(null, "/v/big.mov", "/v/big.mov", 2831.5, 2831.75)).toBe(false);
+    expect(questionOutCrossed({ question_id: "q" }, "/v/big.mov", "/v/big.mov", 2831.5, 2831.75)).toBe(false);
+    expect(questionOutCrossed({ out_sec: NaN }, "/v/big.mov", "/v/big.mov", 2831.5, 2831.75)).toBe(false);
+  });
+  it("скраб (>1.5с за тик) — false", () => {
+    expect(questionOutCrossed(active, "/v/big.mov", "/v/big.mov", 2800, 2835)).toBe(false);
   });
 });

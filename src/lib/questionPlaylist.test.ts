@@ -13,7 +13,10 @@ import {
   normalizeQuestionEntry,
   parseAnswerReplyText,
   parseAnswersFile,
+  resolveActiveEntry,
+  resolveExportAnswersText,
   resolveAnswers,
+  resolveEntryIndex,
   resolveQuestionSnapTime,
   serializeAnswersFile,
   answersPathFor,
@@ -349,5 +352,72 @@ describe("resolveQuestionSnapTime (tb_1791848907_63972_2: рывок тольк�
     expect(resolveQuestionSnapTime(entries9, "/v/c.mp4", 25, m9, true)).toBe(30);
     expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 25, m1, false)).toBe(0);
     expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 25, m1)).toBe(0);
+  });
+});
+
+describe("tb_1791876286_57716_1: сиблинги A/B делят question_id — активация по точной записи", () => {
+  // v07: пара = два entry с одним qid; trk-10 A/B делят и path (два окна).
+  const v07like = [
+    { path: "/v/trk-01A.mp4", name: "A", duration: 3, question_id: "trk-01", in_sec: 0, out_sec: 3.02 },
+    { path: "/v/P1755043.MOV", name: "B", duration: 22.6, question_id: "trk-01", in_sec: 4.75, out_sec: 7.75 },
+    { path: "/v/P1755050.mov", name: "trk-10 A", duration: 3426, question_id: "trk-10", in_sec: 104.75, out_sec: 107.75 },
+    { path: "/v/P1755050.mov", name: "trk-10 B", duration: 3426, question_id: "trk-10", in_sec: 2919.75, out_sec: 2922.75 },
+  ];
+  const pl = { entries: v07like };
+  it("findQuestionEntry: пара path+qid бьёт first-match по qid (клик на B — запись B)", () => {
+    expect(findQuestionEntry(pl as never, { questionId: "trk-01", path: "/v/P1755043.MOV" })?.name).toBe("B");
+    expect(findQuestionEntry(pl as never, { questionId: "trk-01", path: "/v/trk-01A.mp4" })?.name).toBe("A");
+  });
+  it("findQuestionEntry: только qid — как раньше, первая (совместимость)", () => {
+    expect(findQuestionEntry(pl as never, { questionId: "trk-01", path: null })?.name).toBe("A");
+  });
+  it("findQuestionEntry: entryIndex валидный — точная запись trk-10 B", () => {
+    expect(findQuestionEntry(pl as never, { questionId: "trk-10", path: "/v/P1755050.mov", entryIndex: 3 })?.in_sec).toBe(2919.75);
+  });
+  it("findQuestionEntry: entryIndex чужой (путь не сошёлся) — fallback на пару", () => {
+    expect(findQuestionEntry(pl as never, { questionId: "trk-01", path: "/v/P1755043.MOV", entryIndex: 0 })?.name).toBe("B");
+  });
+  it("resolveEntryIndex: поля entry различают сиблингов одного path+qid", () => {
+    expect(resolveEntryIndex(v07like, { path: "/v/P1755050.mov", questionId: "trk-10", entry: { path: "/v/P1755050.mov", question_id: "trk-10", in_sec: 2919.75, out_sec: 2922.75 } })).toBe(3);
+    expect(resolveEntryIndex(v07like, { path: "/v/P1755050.mov", questionId: "trk-10", entry: { path: "/v/P1755050.mov", question_id: "trk-10", in_sec: 104.75, out_sec: 107.75 } })).toBe(2);
+  });
+  it("resolveEntryIndex: entryIndex валидный — сразу он; мусор — -1", () => {
+    expect(resolveEntryIndex(v07like, { path: "/v/P1755050.mov", questionId: "trk-10", entryIndex: 3 })).toBe(3);
+    expect(resolveEntryIndex(v07like, { path: "/v/P1755050.mov", questionId: "trk-10", entryIndex: 99 })).toBe(-1);
+    expect(resolveEntryIndex(v07like, { path: "/v/P1755050.mov", questionId: "trk-10" })).toBe(-1);
+  });
+  it("resolveActiveEntry: клик на B даёт окно B (in=4.75, не 0.0 записи A)", () => {
+    const { entry, index } = resolveActiveEntry(v07like, { path: "/v/P1755043.MOV", questionId: "trk-01" });
+    expect(index).toBe(1);
+    expect((entry as { in_sec: number }).in_sec).toBe(4.75);
+  });
+  it("commander-acceptance: 3 записи, один путь, разные окна — каждая резолвится в своё", () => {
+    const same = [
+      { path: "/v/same.mov", question_id: "q", in_sec: 10, out_sec: 12 },
+      { path: "/v/same.mov", question_id: "q", in_sec: 100, out_sec: 102 },
+      { path: "/v/same.mov", question_id: "q", in_sec: 1000, out_sec: 1002 },
+    ];
+    for (const [i, w] of [[0, 10], [1, 100], [2, 1000]] as const) {
+      const r = resolveActiveEntry(same, { path: "/v/same.mov", questionId: "q", entryIndex: i });
+      expect(r.index).toBe(i);
+      expect((r.entry as { in_sec: number }).in_sec).toBe(w);
+      // и снап с нуля ведёт на СВОЙ in, а не на окно сиблинга
+      expect(resolveQuestionSnapTime(same, "/v/same.mov", 0, r.entry as never)).toBe(w);
+    }
+  });
+});
+
+describe("tb_1791885959_77379_1: экспорт везёт ответы (resolveExportAnswersText)", () => {
+  it("файл у исходника важнее аутбокса", () => {
+    expect(resolveExportAnswersText('{"answers":[]}', [{ question_id: "q" } as never])).toBe('{"answers":[]}');
+  });
+  it("файла нет — сериализованный аутбокс", () => {
+    const text = resolveExportAnswersText(null, [{ question_id: "q1", answered_at: "t", verdict: "comment" } as never]);
+    expect(typeof text).toBe("string");
+    expect(parseAnswersFile(text).map((r) => r.question_id)).toEqual(["q1"]);
+  });
+  it("пусто везде — null (уезжают голые entries)", () => {
+    expect(resolveExportAnswersText(null, [])).toBeNull();
+    expect(resolveExportAnswersText("   ", [])).toBeNull();
   });
 });

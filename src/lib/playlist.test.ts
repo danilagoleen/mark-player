@@ -319,3 +319,28 @@ describe("trackOpenedFile", () => {
     expect(trackOpenedFile(byEntry, { path: "/v/b.mp4", name: "b", duration: 0 })?.entries).toHaveLength(1);
   });
 });
+
+describe("tb_1791876286_57716_1: курсор несёт индекс (сиблинги одного path+qid)", () => {
+  const entries = [
+    { path: "/v/a.mov", question_id: "q", in_sec: 104.75 },
+    { path: "/v/a.mov", question_id: "q", in_sec: 2919.75 },
+    { path: "/v/b.mov", question_id: "q2", in_sec: 0 },
+  ];
+  it("валидный индекс бьёт first-match (курсор на B — индекс B)", () => {
+    expect(findCurrentEntryIndex(entries, { path: "/v/a.mov", questionId: "q", index: 1 })).toBe(1);
+    expect(findCurrentEntryIndex(entries, { path: "/v/a.mov", questionId: "q", index: 0 })).toBe(0);
+  });
+  it("протухший индекс (переупорядочили) — fallback на старые правила", () => {
+    expect(findCurrentEntryIndex(entries, { path: "/v/a.mov", questionId: "q", index: 9 })).toBe(0);
+    expect(findCurrentEntryIndex(entries, { path: "/v/b.mov", questionId: "q2", index: 0 })).toBe(2);
+  });
+  it("без индекса — как раньше (first-match пары)", () => {
+    expect(findCurrentEntryIndex(entries, { path: "/v/a.mov", questionId: "q" })).toBe(0);
+  });
+  it("getNextEntryFromCursor от B идёт дальше, а не возвращается на B", () => {
+    const pl = createEmptyPlaylist("t");
+    const full = { ...pl, entries: entries as never };
+    const next = getNextEntryFromCursor(full, { path: "/v/a.mov", questionId: "q", index: 1 }, { loop: "off", shuffle: false });
+    expect(next?.index).toBe(2);
+  });
+});
