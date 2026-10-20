@@ -11,8 +11,6 @@ import { configurePlayerWindow, inspectMediaContainer, isTauriRuntimeSync, openF
 import type { SaveResult } from "./lib/nativeWindow";
 import {
   mediaLoadProblemReason,
-  mediaRiskNotice,
-  shouldWarnBeforePlayback,
   type MediaContainerInfo,
 } from "./lib/mediaDiagnostics";
 import { resolveExportToast, VETKA_PROMO_MS, type ExportKind } from "./lib/exportFeedback";
@@ -4156,10 +4154,11 @@ function App() {
     currentFilePathRef.current = currentFilePath;
   }, [currentFilePath]);
 
-  // tb_1792438559_20717_1: инспекция контейнера при смене файла. Два seek в
-  // Rust, файл не читается. Знаем причину — предупреждаем сразу: >4 ГБ с
-  // moov-at-end на macOS asset-протоколе не стартует, и молчать об этом
-  // оператор запретил (чёрный экран = «видимо ни к чему не залинкован»).
+  // tb_1792438559_20717_1 / 0.26: инспекция контейнера при смене файла. Два
+  // seek в Rust, файл не читается. С 0.26 файлы выше порога asset-транспорта
+  // уходят на loopback Range-сервер (toAssetUrl), поэтому упреждающего
+  // предупреждения нет: причина устранена на транспорте. Инспекция остаётся
+  // уликой для onError/сторожа тишины — там назовём транспорт, а не размер.
   useEffect(() => {
     if (!currentFilePath || !isTauriRuntimeSync()) {
       setMediaContainerInfo(null);
@@ -4170,9 +4169,6 @@ function App() {
     void inspectMediaContainer(currentFilePath).then((info) => {
       if (cancelled) return;
       setMediaContainerInfo(info);
-      if (info && shouldWarnBeforePlayback(info) && (videoRef.current?.readyState ?? 0) < 3) {
-        setMediaProblem(mediaRiskNotice(currentFilePath, info));
-      }
     });
     return () => {
       cancelled = true;
@@ -5492,8 +5488,8 @@ function App() {
                             // 0.10.22: ошибки видео были немыми — чёрный экран без улик.
                             const code = videoRef.current?.error?.code ?? 0;
                             const label = currentFilePath ?? fileName ?? "media";
-                            // tb_1792438559_20717_1: контейнер уже известен —
-                            // называем причину громко (размер/moov/faststart),
+                            // tb_1792438559_20717_1 / 0.26: контейнер уже
+                            // известен — называем причину громко (транспорт),
                             // а не сухой код ошибки.
                             if (mediaContainerInfo && !src.startsWith("blob:")) {
                               setMediaProblem(mediaLoadProblemReason(label, mediaContainerInfo));

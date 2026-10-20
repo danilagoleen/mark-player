@@ -1,11 +1,17 @@
-// tb_1792438559_20717_1: почему большой proxy молчит.
+// tb_1792528229_79489_1: почему большой proxy молчал и что мы с этим сделали.
 //
 // Tauri asset protocol кормит <video> через WKWebView custom scheme. На macOS
-// он ломается на файлах > ~3.5-4 ГиБ (tauri#6375, tauri#7355) — файл либо
-// висит без кадра, либо падает без onError, то есть «не играет» молча.
-// moov-at-end усугубляет: декодеру нужен индекс в конце (сик к 2015с из
-// 3426с — это ~4 ГБ от начала), и запрос уходит за границу, где протокол
-// врёт. Знаем контейнер — говорим оператору причину вслух, а не чёрным экраном.
+// он перестаёт запрашивать данные медиа у файлов примерно от 5.2e9 Б: moov
+// (индекс) ещё читается — длительность приходит, — а mdat не читается вовсе.
+// Ни ошибки, ни onError: чёрный кадр, таймкод идёт. Порог замерен на реальном
+// материале: 5 247 132 270 Б играет, 5 290 106 592 Б — нет; moov в конце,
+// co64 и кодек ни при чём, +faststart не помогает (RAW-отчёт:
+// docs/217_ph_cut-player/RECON_MARK_PLAYER_LARGE_MEDIA_2026-10-20.md).
+//
+// С 0.26 такие файлы уходят на loopback Range-сервер (src-tauri/range_server.rs)
+// по http://127.0.0.1 — тот же файл там играет и сикается. Диагностика ниже
+// осталась для случая, когда файл всё-таки не стартовал: она называет
+// транспорт, а не размер, и больше не советует перепаковывать материал.
 
 export interface MediaContainerInfo {
   size: number;
@@ -14,8 +20,9 @@ export interface MediaContainerInfo {
   moov_at_end: boolean;
 }
 
-// Порог из upstream-репортов: ~3.5 GiB уже роняло asset-протокол при сике.
-export const BIG_MEDIA_BYTES = 3.5 * 1024 ** 3;
+// Ниже этого порога asset:// работает; выше — включается loopback-транспорт.
+// Держать в согласии с LOOPBACK_MIN_BYTES в src-tauri/src/range_server.rs.
+export const BIG_MEDIA_BYTES = 5.25e9;
 
 export function formatFileSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -32,35 +39,17 @@ function baseName(pathOrName: string): string {
   return pathOrName.split("/").pop() || pathOrName || "media";
 }
 
-/** Точная связка, из-за которой молчит именно этот файл: >4 GB + индекс в конце. */
-export function isLargeNonFaststart(info: MediaContainerInfo): boolean {
-  return info.size >= BIG_MEDIA_BYTES && info.moov_at_end;
-}
-
-/** Стоит ли предупредить ДО попытки (причина уже известна, прятать её незачем). */
-export function shouldWarnBeforePlayback(info: MediaContainerInfo | null): boolean {
-  return info != null && isLargeNonFaststart(info);
-}
-
-/** Упреждающее уведомление на открытии: ещё не упало, но причина почти наверняка сработает. */
-export function mediaRiskNotice(pathOrName: string, info: MediaContainerInfo): string {
-  const name = baseName(pathOrName);
-  const size = formatFileSize(info.size);
-  return `"${name}" (${size}) is unlikely to play: its index (moov) sits at the end of a file over the ~4 GB desktop media-bridge limit (Tauri/WebKit #6375/#7355). If it stays black, rewrap with -movflags +faststart or open the smaller proxy.`;
+/** Файл выше порога asset-транспорта — такой должен идти через loopback. */
+export function isBeyondAssetTransport(info: MediaContainerInfo): boolean {
+  return info.size >= BIG_MEDIA_BYTES;
 }
 
 /** Человекочитаемая причина, почему файл не проигрывается (EN, тон — факт, не warning). */
 export function mediaLoadProblemReason(pathOrName: string, info: MediaContainerInfo): string {
   const name = baseName(pathOrName);
   const size = formatFileSize(info.size);
-  if (isLargeNonFaststart(info)) {
-    return `"${name}" (${size}) can't be streamed: its index (moov) sits at the end and the desktop media bridge fails on files this large (Tauri/WebKit #6375/#7355). Rewrap with -movflags +faststart, or open the smaller proxy — playback will not start here.`;
+  if (isBeyondAssetTransport(info)) {
+    return `"${name}" (${size}) is above the size where WebKit stops reading media over the desktop asset bridge (Tauri/WebKit #6375/#7355). Mark Player 0.26 streams such files through a local http Range server; it did not start here, so the file stayed black. Restart the app — if it repeats, the loopback transport could not bind (see console) and the file itself is fine.`;
   }
-  if (info.moov_at_end) {
-    return `"${name}" keeps its index (moov) at the end; seeking may stall. Rewrap with -movflags +faststart if playback freezes.`;
-  }
-  if (info.size >= BIG_MEDIA_BYTES) {
-    return `"${name}" (${size}) is above the ~4 GB desktop playback limit — it may stay black. Use a faststart proxy if it does.`;
-  }
-  return `"${name}" did not start: the desktop media bridge returned no decodable stream. Try a faststart proxy.`;
+  return `"${name}" did not start: the desktop media bridge returned no decodable stream. The file may be damaged or use a codec the system cannot decode.`;
 }

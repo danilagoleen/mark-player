@@ -129,8 +129,25 @@ export async function toggleFullscreen(): Promise<boolean | null> {
   }
 }
 
+// 0.26: asset:// молча умирает на macOS у файлов ≳5.2e9 Б (см.
+// mediaDiagnostics.ts и src-tauri/src/range_server.rs). Rust решает по
+// размеру файла и отдаёт готовый адрес loopback-сервера с токеном; None —
+// файл маленький, остаёмся на asset:// (быстрый, проверенный путь).
+export async function loopbackMediaUrl(filePath: string): Promise<string | null> {
+  if (!isTauriRuntimeSync()) return null;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string | null>("loopback_media_url", { path: filePath });
+  } catch (error) {
+    console.warn("[Mark Player] loopback_media_url failed:", error);
+    return null;
+  }
+}
+
 export async function toAssetUrl(filePath: string): Promise<string | null> {
   if (!(await isTauriRuntime())) return null;
+  const loopback = await loopbackMediaUrl(filePath);
+  if (loopback) return loopback;
   const core = await import("@tauri-apps/api/core");
   return core.convertFileSrc(filePath);
 }

@@ -8,6 +8,13 @@ function clearTauriInternals() {
   delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__;
 }
 
+const loopbackState = vi.hoisted(() => ({ url: null as string | null }));
+
+vi.mock("@tauri-apps/api/core", () => ({
+  convertFileSrc: (p: string) => `http://asset.localhost/${encodeURIComponent(p)}`,
+  invoke: async (cmd: string) => (cmd === "loopback_media_url" ? loopbackState.url : null),
+}));
+
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
   save: vi.fn(),
@@ -239,6 +246,7 @@ describe("toAssetUrl", () => {
   beforeEach(() => {
     vi.resetModules();
     clearTauriInternals();
+    loopbackState.url = null;
   });
 
   it("returns null when not in Tauri runtime", async () => {
@@ -247,15 +255,21 @@ describe("toAssetUrl", () => {
     expect(result).toBeNull();
   });
 
-  it("returns asset protocol URL in Tauri runtime", async () => {
-    vi.mock("@tauri-apps/api/core", () => ({
-      convertFileSrc: (p: string) => `http://asset.localhost/${encodeURIComponent(p)}`,
-    }));
+  it("returns asset protocol URL for files below the loopback threshold", async () => {
     mockTauriInternals();
 
     const { toAssetUrl } = await import("./nativeWindow");
     const result = await toAssetUrl("/path/to/video.mp4");
     expect(result).toMatch(/^http:\/\/asset\.localhost\//);
+  });
+
+  it("uses the loopback Range URL when Rust reports one", async () => {
+    const loopback = "http://127.0.0.1:52111/media?t=deadbeef&p=%2Fbig.MOV";
+    loopbackState.url = loopback;
+    mockTauriInternals();
+
+    const { toAssetUrl } = await import("./nativeWindow");
+    expect(await toAssetUrl("/Volumes/tempwork/big.MOV")).toBe(loopback);
   });
 });
 

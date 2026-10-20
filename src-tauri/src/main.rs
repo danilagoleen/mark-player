@@ -1,7 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod range_server;
+
 use serde::Serialize;
-use tauri::{Emitter, LogicalSize, PhysicalSize, Size, WebviewWindow};
+use tauri::{Emitter, LogicalSize, Manager, PhysicalSize, Size, WebviewWindow};
 
 #[derive(Debug, Clone, Serialize)]
 struct PlayerWindowTrace {
@@ -513,9 +515,34 @@ fn sample_file_bytes(path: String, sample_len: Option<u64>) -> Result<FileConten
     })
 }
 
+// 0.26: переключатель транспорта. На macOS WKWebView по asset:// перестаёт
+// читать mdat у файлов ≳5.2e9 Б (чёрный кадр без onError, см. range_server.rs).
+// Таким файлам отдаём адрес loopback-сервера; остальным — None, и фронт
+// остаётся на asset://.
+#[tauri::command]
+fn loopback_media_url(
+    path: String,
+    server: tauri::State<'_, range_server::RangeServer>,
+) -> Result<Option<String>, String> {
+    server.url_for(std::path::Path::new(&path))
+}
+
 fn main() {
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
+        .setup(|app| {
+            match range_server::RangeServer::start() {
+                Ok(server) => {
+                    app.manage(server);
+                }
+                Err(err) => {
+                    // Медиа останется на asset:// — большой файл промолчит,
+                    // но приложение не падает.
+                    eprintln!("[Mark Player] media range server unavailable: {err}");
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             configure_player_window,
             toggle_player_fullscreen,
@@ -524,6 +551,7 @@ fn main() {
             emit_menu_event,
             inspect_media_container,
             sample_file_bytes,
+            loopback_media_url,
             os_username,
         ]);
 

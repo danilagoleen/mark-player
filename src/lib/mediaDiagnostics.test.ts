@@ -2,10 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   BIG_MEDIA_BYTES,
   formatFileSize,
-  isLargeNonFaststart,
+  isBeyondAssetTransport,
   mediaLoadProblemReason,
-  mediaRiskNotice,
-  shouldWarnBeforePlayback,
   type MediaContainerInfo,
 } from "./mediaDiagnostics";
 
@@ -25,43 +23,32 @@ describe("formatFileSize", () => {
   });
 });
 
-describe("isLargeNonFaststart", () => {
-  it("is true only for big files with the index at the end", () => {
-    expect(isLargeNonFaststart(info({ size: BIG_MEDIA_BYTES, moov_at_end: true }))).toBe(true);
-    expect(isLargeNonFaststart(info({ size: BIG_MEDIA_BYTES, moov_at_end: false }))).toBe(false);
-    expect(isLargeNonFaststart(info({ size: BIG_MEDIA_BYTES - 1, moov_at_end: true }))).toBe(false);
+describe("isBeyondAssetTransport", () => {
+  it("depends on size only, not on where moov sits", () => {
+    expect(isBeyondAssetTransport(info({ size: BIG_MEDIA_BYTES, moov_at_end: true }))).toBe(true);
+    expect(isBeyondAssetTransport(info({ size: BIG_MEDIA_BYTES, moov_at_end: false }))).toBe(true);
+    expect(isBeyondAssetTransport(info({ size: BIG_MEDIA_BYTES - 1, moov_at_end: true }))).toBe(false);
   });
-});
 
-describe("shouldWarnBeforePlayback", () => {
-  it("warns only when the cause is already known", () => {
-    expect(shouldWarnBeforePlayback(null)).toBe(false);
-    expect(shouldWarnBeforePlayback(info({ moov_at_end: true }))).toBe(false);
-    expect(shouldWarnBeforePlayback(info({ size: BIG_MEDIA_BYTES, moov_at_end: true }))).toBe(true);
+  it("keeps the measured playable proxy on the asset transport", () => {
+    expect(isBeyondAssetTransport(info({ size: 5_247_132_270 }))).toBe(false);
+    expect(isBeyondAssetTransport(info({ size: 5_290_106_592 }))).toBe(true);
   });
 });
 
 describe("mediaLoadProblemReason", () => {
-  it("names size, moov-at-end and the upstream limitation", () => {
+  it("names size and the transport, not the file layout", () => {
     const text = mediaLoadProblemReason("/idx/Proxies/P1755050.MOV", info({ size: 6_776_854_168, moov_at_end: true }));
     expect(text).toContain("P1755050.MOV");
     expect(text).toContain("6.3 GB");
-    expect(text).toContain("moov");
-    expect(text).toContain("faststart");
+    expect(text).toContain("Range server");
     expect(text).toContain("#6375/#7355");
+    expect(text).not.toContain("faststart");
   });
 
-  it("still gives a reason for an unknown container", () => {
-    expect(mediaLoadProblemReason("clip.mov", info())).toContain("faststart");
-  });
-});
-
-describe("mediaRiskNotice", () => {
-  it("warns before playback without claiming it already failed", () => {
-    const text = mediaRiskNotice("/idx/Proxies/P1755050.MOV", info({ size: 6_776_854_168, moov_at_end: true }));
-    expect(text).toContain("P1755050.MOV");
-    expect(text).toContain("6.3 GB");
-    expect(text).toContain("unlikely to play");
-    expect(text).toContain("#6375/#7355");
+  it("does not blame the layout for a small file either", () => {
+    const text = mediaLoadProblemReason("clip.mov", info({ moov_at_end: true }));
+    expect(text).not.toContain("faststart");
+    expect(text).toContain("did not start");
   });
 });
