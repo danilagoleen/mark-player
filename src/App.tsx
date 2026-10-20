@@ -7,8 +7,14 @@ import {
   ShellVariant,
   suggestShellSize,
 } from "./lib/geometry";
-import { configurePlayerWindow, isTauriRuntimeSync, openFileDialog, openFilesDialog, probeFile, saveFileDialog, saveFileDialogResult, openPanelWindow, shouldShowProbeOffline, toggleFullscreen, toAssetUrl } from "./lib/nativeWindow";
+import { configurePlayerWindow, inspectMediaContainer, isTauriRuntimeSync, openFileDialog, openFilesDialog, probeFile, saveFileDialog, saveFileDialogResult, openPanelWindow, shouldShowProbeOffline, toggleFullscreen, toAssetUrl } from "./lib/nativeWindow";
 import type { SaveResult } from "./lib/nativeWindow";
+import {
+  mediaLoadProblemReason,
+  mediaRiskNotice,
+  shouldWarnBeforePlayback,
+  type MediaContainerInfo,
+} from "./lib/mediaDiagnostics";
 import { resolveExportToast, VETKA_PROMO_MS, type ExportKind } from "./lib/exportFeedback";
 import { tooltipFor } from "./lib/transportTooltips";
 import { FEEDBACK_MAILTO, GITHUB_RELEASES_URL, GITHUB_REPO_URL } from "./lib/aboutLinks";
@@ -34,6 +40,7 @@ import {
   INOUT_PLAY_STORAGE_KEY,
 } from "./lib/inOutPlayback";
 import { pushTransportTrace, shouldHideTransport, type TransportTraceEntry } from "./lib/transportVisibility";
+import { SCRUB_PREVIEW_TIMEOUT_MS, isScrubSettled } from "./lib/scrubSeek";
 import { PLAYER_SEEK_REQUEST_KEY, parseSeekRequest } from "./lib/markerSeek";
 import { parseCutsheet, resolveCutsheetForMedia, type CutsheetSegment } from "./lib/cutsheet";
 import { PLAYER_PLAY_REQUEST_KEY, PLAYLIST_RELOAD_EVENT, notifyPlaylistReloaded, parsePlayRequest } from "./lib/playlistPlay";
@@ -41,9 +48,9 @@ import { buildUIManifest, type UIManifest } from "./lib/uiManifest";
 import { DOOR_IDS, checkModuleDoor, doorClickTransition, doorEndpoint, doorLabel, type DoorId, type ModuleDoor } from "./lib/moduleDoors";
 import type { ProbeResult } from "./lib/nativeWindow";
 import { createEmptyPlaylist, savePlaylist, loadPlaylist, addEntry, getNextEntryFromCursor, loadPlaybackMode, sanitizePlaylistFilename, trackOpenedFile, type QuestionPlaylistEntry } from "./lib/playlist";
-import { answersFromMarkers, findQuestionEntryAtTime, formatAnswerReplyText, lerpQuestionBox, mergeAnswerRecords, normalizeQuestionEntry, readAnswersOutbox, readQuestionPlaylistPath, rememberQuestionPlaylistPath, resolveActiveEntry, resolveQuestionSnapTime, serializeAnswersFile, writeAnswersOutbox, isQuestionPlaylist, type AnswerRecord, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
+import { answersFromMarkers, filterAnswersToPlaylist, findQuestionEntryAtTime, formatAnswerReplyText, lerpQuestionBox, mergeAnswerRecords, normalizeQuestionEntry, readAnswersOutbox, readQuestionPlaylistPath, rememberQuestionPlaylistPath, resolveActiveEntry, resolveQuestionSnapTime, serializeAnswersFile, writeAnswersOutbox, isQuestionPlaylist, type AnswerRecord, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
 import { isSameMediaPath, resolveMediaContentHash } from "./lib/mediaOpen";
-import { mediaPlayability, mediaRefusalReason } from "./lib/mediaPlayability";
+import { isAudioMedia, mediaPlayability, mediaRefusalReason } from "./lib/mediaPlayability";
 import { markerBelongsToMedia, notifyMarkersChanged, notifyMediaChanged, resolveExternalMarkers, MARKERS_CHANGED_EVENT, MARKERS_RELOAD_EVENT, type MediaIdentity } from "./lib/markersSync";
 import { isSameImportedMarker, matchGroupToPath, parseXmemlMarkers, type ImportedMarker } from "./lib/xmemlImport";
 import type { CutPlayerMenuAction } from "./lib/cutPlayerMenu";
@@ -137,7 +144,7 @@ import {
 } from "./lib/lastOpen";
 
 type PreviewQualityKey = "full" | "half" | "quarter" | "eighth" | "sixteenth" | "thirtysecond";
-type PlayerMediaKind = "video" | "image" | null;
+type PlayerMediaKind = "video" | "audio" | "image" | null;
 
 const PREVIEW_QUALITY_OPTIONS: { key: PreviewQualityKey; label: string; scale: number }[] = [
   { key: "full", label: "1x", scale: 1 },
@@ -335,10 +342,13 @@ function inferMediaKind(fileName: string, mimeType = ""): PlayerMediaKind {
   const lowerMime = mimeType.toLowerCase();
   if (lowerMime.startsWith("video/")) return "video";
   if (lowerMime.startsWith("image/")) return "image";
+  if (lowerMime.startsWith("audio/")) return "audio";
 
   const lowerName = fileName.toLowerCase();
   if (/\.(png|jpe?g|webp|gif|bmp|tiff?|avif|heic|heif)$/.test(lowerName)) return "image";
   if (/\.(mp4|mov|m4v|webm|avi|mkv|mpeg|mpg|wmv)$/.test(lowerName)) return "video";
+  // Аудио (P3 tb_1791571305_29299_2): тот же <video>, тот же транспорт.
+  if (isAudioMedia(lowerName)) return "audio";
   return null;
 }
 
@@ -627,6 +637,16 @@ function App() {
   // не догнал. Пока seekTarget != null транспорт показывает ФАКТИЧЕСКУЮ
   // позицию (currentTime) + честный бейдж «seeking…». Чистит onSeeked.
   const [seekTarget, setSeekTarget] = useState<number | null>(null);
+  // tb_1792441299_49541_7 + tb_1792443862_5828_1: scrub-preview. Пока тянем
+  // плейхед, UI ведёт его за курсором, не дожидаясь медленного seek аудио
+  // через asset-протокол. Промежуточных сиков НЕТ вообще: каждый
+  // currentTime во время drag заново праймил аудио-пайплайн и звук рвался —
+  // единственный seek уходит на отпускании кнопки.
+  const [scrubPreview, setScrubPreview] = useState<number | null>(null);
+  const scrubPreviewRef = useRef<number | null>(null);
+  const scrubbingRef = useRef(false);
+  const scrubClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrubDisplayTime = scrubPreview ?? currentTime;
   // tb_1791689190_1275_1: бейдж seeking… стробил при скрабе (тик ставит,
   // seeked тут же гасит). Честный сигнал остался: показываем только
   // зависший сик (>300мс), скраб идёт мимо бейджа.
@@ -703,6 +723,13 @@ function App() {
   // цепочки. Грузится асинхронно при смене src, открытию не мешает.
   const [containerFps, setContainerFps] = useState<number | null>(null);
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
+  // tb_1792438559_20717_1: контейнер текущего файла (moov/mdat, размер) —
+  // по нему называем причину молчащего >4 ГБ proxy, вместо чёрного экрана.
+  const [mediaContainerInfo, setMediaContainerInfo] = useState<MediaContainerInfo | null>(null);
+  // Провал загрузки/тишина — не 6-секундный тост: оператор смотрит в чёрный
+  // кадр и не должен ловить сообщение в углу. Живёт до следующего файла,
+  // успешного play или явного закрытия.
+  const [mediaProblem, setMediaProblem] = useState("");
   // 0.10.22: ref-зеркало currentFilePath — playlist:play-listener живёт в
   // useEffect([]) и видит только mount-замыкание, стейт там всегда stale.
   const currentFilePathRef = useRef<string | null>(null);
@@ -789,10 +816,16 @@ function App() {
         ? "image"
         : "video"
       : "synthetic";
-  const footerReserve = sourceKind !== "synthetic" && !isDebugVisible ? 0 : LAB_FOOTER_HEIGHT;
+  // tb_1792435439_49541_1: у аудио кадра нет — нижняя полоса с именем файла
+  // и жёлтым probe-offline не нужна вовсе (слово оператора 19.10).
+  const footerReserve =
+    mediaKind === "audio" ? 0 : sourceKind !== "synthetic" && !isDebugVisible ? 0 : LAB_FOOTER_HEIGHT;
   const isPureMode = !isDebugVisible;
   const previewQualityOption = PREVIEW_QUALITY_OPTIONS.find((option) => option.key === previewQuality) || PREVIEW_QUALITY_OPTIONS[0];
   const effectivePreviewScale = sourceKind === "video" ? previewQualityOption.scale : 1;
+  // tb_1791571305_29299_2: видео и аудио — один носитель времени: транспорт,
+  // шкала, плейхед и маркеры одинаковы (у аудио просто нет кадра).
+  const isTimeMedia = mediaKind === "video" || mediaKind === "audio";
   const currentMediaKey = src && !src.startsWith("blob:") ? src : fileName;
   // Слайс 5.2: имя медиа — в заголовок окна (Soia-стиль), media-label удалён.
   // 0.22: identity текущего медиа — сначала content-hash, затем путь (fallback).
@@ -860,6 +893,11 @@ function App() {
   const lastAnswerRef = useRef<{ qid: string; verdict: AnswerVerdict; at: number }>({ qid: "", verdict: "comment", at: 0 });
   const questionRangeRef = useRef<{ start: number; end: number } | null>(null);
   const questionPathRef = useRef<string | null>(null);
+  // tb_1792439791_49541_5: ручной сик за пределы скобок вопроса — это намерение
+  // оператора, а не проигрывание. Снап к IN молчит, пока плейхед не вернётся
+  // в окно вопроса (или пока не активируют другой вопрос).
+  const questionSnapSuspendedRef = useRef(false);
+  const questionSnapKeyRef = useRef<string | null>(null);
   const [questionChoice, setQuestionChoice] = useState<string | null>(null);
   const [questionComment, setQuestionComment] = useState("");
   function clearActiveQuestion(): void {
@@ -973,6 +1011,14 @@ function App() {
           } catch {
             // файла ещё нет — выжимка первая
           }
+          // tb_1792431205_48582_4: в файле могли остаться чужие ответы
+          // (до правки outbox был общим на браузер) — держим только вопросы
+          // этого плейлиста и то, что пришло прямо сейчас.
+          const ownIds = new Set<string>([
+            ...entries.map((e) => e.question_id).filter((x): x is string => !!x),
+            ...records.map((r) => r.question_id),
+          ]);
+          existing = filterAnswersToPlaylist(existing, ownIds);
           await fs.writeTextFile(answersPath, serializeAnswersFile(mergeAnswerRecords(existing, records)));
           recordAnswer();
           setContextToast(`Saved ${ANSWER_BUTTON_LABEL[verdict]} (${verdict}) → ${qid} + reply in Comments.`);
@@ -985,7 +1031,13 @@ function App() {
       }
     }
     // Пути плейлиста нет — слияние целиком в аутбокс (та же семантика).
-    writeAnswersOutbox(mergeAnswerRecords(readAnswersOutbox(), records));
+    // tb_1792431205_48582_4: и здесь не тащим чужие плейлисты из старого
+    // общего аутбокса — только вопросы этого плейлиста.
+    const ownIds = new Set<string>([
+      ...entries.map((e) => e.question_id).filter((x): x is string => !!x),
+      ...records.map((r) => r.question_id),
+    ]);
+    writeAnswersOutbox(mergeAnswerRecords(filterAnswersToPlaylist(readAnswersOutbox(), ownIds), records));
     recordAnswer();
     setContextToast(
       isTauriRuntimeSync()
@@ -2344,8 +2396,51 @@ function App() {
   // tb_1791844731_63972_4: плейхед-вертикаль — единый слой указателя (§3.2).
   // Сик одним трактом: факт в video + setSeekTarget; ручной — с меткой
   // markManualSeek (ножницы молчат 800мс, как мосты markers:seek).
-  function seekTransportTo(sec: number, manual: boolean): void {
+  // tb_1792441299_49541_7: scrub-preview снимаем, когда декодер догнал
+  // запрошенную точку (onSeeked), либо страховочным таймаутом.
+  function clearScrubPreview(): void {
+    if (scrubClearTimerRef.current !== null) {
+      clearTimeout(scrubClearTimerRef.current);
+      scrubClearTimerRef.current = null;
+    }
+    scrubbingRef.current = false;
+    scrubPreviewRef.current = null;
+    setScrubPreview(null);
+  }
+  function showScrubPreview(target: number): void {
+    // Новая протяжка отменяет страховочный таймаут прошлой — иначе он
+    // погасил бы preview прямо посреди drag.
+    if (scrubClearTimerRef.current !== null) {
+      clearTimeout(scrubClearTimerRef.current);
+      scrubClearTimerRef.current = null;
+    }
+    scrubPreviewRef.current = target;
+    setScrubPreview(target);
+  }
+  function issueScrubSeek(target: number): void {
+    // tb_1792443862_5828_1: ровно один сик — на отпускании. Если цель уже
+    // совпала с фактической позицией (клик по шкале в текущей точке),
+    // не дёргаем декодер зря.
+    const video = videoRef.current;
+    const actual = video && Number.isFinite(video.currentTime) ? video.currentTime : null;
+    if (actual !== null && Math.abs(target - actual) < 0.02) return;
+    seekTransportTo(target, true, true);
+  }
+  function finishScrubPreview(target: number): void {
+    issueScrubSeek(target);
+    scrubbingRef.current = false;
+    showScrubPreview(target);
+    if (scrubClearTimerRef.current !== null) clearTimeout(scrubClearTimerRef.current);
+    scrubClearTimerRef.current = setTimeout(() => {
+      scrubClearTimerRef.current = null;
+      scrubPreviewRef.current = null;
+      setScrubPreview(null);
+    }, SCRUB_PREVIEW_TIMEOUT_MS);
+  }
+  function seekTransportTo(sec: number, manual: boolean, scrub = false): void {
     if (!Number.isFinite(sec) || sec < 0) return;
+    // Любой не-скрабовый сик (клавиши, маркер, плейлист) отменяет preview.
+    if (!scrub && !scrubbingRef.current) clearScrubPreview();
     const video = videoRef.current;
     if (video) {
       try {
@@ -2426,11 +2521,22 @@ function App() {
       return;
     }
     // playhead/scrub (§3.2 п.1/п.2/п.5): прыжок в точку + протяжка.
-    seekTransportTo(timeAt(e.clientX - rect.left), true);
-    const onMove = (ev: MouseEvent): void => seekTransportTo(timeAt(ev.clientX - rect.left), true);
-    const onUp = (): void => {
+    // tb_1792441299_49541_7: плейхед ведём за курсором (preview), не дожидаясь
+    // отстающего currentTime.
+    // tb_1792443862_5828_1: во время drag currentTime НЕ трогаем вовсе —
+    // каждый seek заново праймит аудио-пайплайн (звук рвётся, плейхед
+    // откатывается к отстающему факту). Один seek — на отпускании.
+    const pointAt = (clientX: number): number => timeAt(clientX - rect.left);
+    const first = pointAt(e.clientX);
+    scrubbingRef.current = true;
+    showScrubPreview(first);
+    const onMove = (ev: MouseEvent): void => {
+      showScrubPreview(pointAt(ev.clientX));
+    };
+    const onUp = (ev: MouseEvent): void => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      finishScrubPreview(pointAt(ev.clientX));
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -4050,6 +4156,45 @@ function App() {
     currentFilePathRef.current = currentFilePath;
   }, [currentFilePath]);
 
+  // tb_1792438559_20717_1: инспекция контейнера при смене файла. Два seek в
+  // Rust, файл не читается. Знаем причину — предупреждаем сразу: >4 ГБ с
+  // moov-at-end на macOS asset-протоколе не стартует, и молчать об этом
+  // оператор запретил (чёрный экран = «видимо ни к чему не залинкован»).
+  useEffect(() => {
+    if (!currentFilePath || !isTauriRuntimeSync()) {
+      setMediaContainerInfo(null);
+      return;
+    }
+    let cancelled = false;
+    setMediaContainerInfo(null);
+    void inspectMediaContainer(currentFilePath).then((info) => {
+      if (cancelled) return;
+      setMediaContainerInfo(info);
+      if (info && shouldWarnBeforePlayback(info) && (videoRef.current?.readyState ?? 0) < 3) {
+        setMediaProblem(mediaRiskNotice(currentFilePath, info));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentFilePath]);
+
+  // tb_1792438559_20717_1: сторож тишины. onError у asset-протокола не
+  // выстреливает — файл просто висит без кадра. Если через 15с метаданных
+  // нет (readyState < HAVE_METADATA) или поток не готов (HAVE_FUTURE_DATA) —
+  // это тот самый молчащий случай: говорим причину вслух.
+  useEffect(() => {
+    if (!src || !mediaContainerInfo) return;
+    if (mediaKind !== "video" && mediaKind !== "audio") return;
+    const timer = window.setTimeout(() => {
+      const video = videoRef.current;
+      if (video && video.readyState >= 3) return;
+      if (src.startsWith("blob:")) return;
+      setMediaProblem(mediaLoadProblemReason(currentFilePathRef.current ?? fileName ?? "media", mediaContainerInfo));
+    }, 15000);
+    return () => window.clearTimeout(timer);
+  }, [src, mediaContainerInfo, mediaKind, fileName]);
+
   useEffect(() => {
     if (!isTauriRuntimeSync()) return;
     let unlisten: (() => void) | null = null;
@@ -4091,12 +4236,34 @@ function App() {
   // приземление внутри ЛЮБОГО вопроса — без рывка (карточку подхватит
   // follow), рывок только из щели.
   useEffect(() => {
-    if (!activeQuestion || duration <= 0) return;
+    if (!activeQuestion) {
+      questionSnapSuspendedRef.current = false;
+      questionSnapKeyRef.current = null;
+      return;
+    }
     if (questionPathRef.current !== currentFilePathRef.current) return;
+    const questionKey = `${questionPathRef.current ?? ""}|${activeQuestion.question_id ?? ""}|${activeQuestion.in_sec ?? ""}|${activeQuestion.out_sec ?? ""}`;
+    if (questionSnapKeyRef.current !== questionKey) {
+      questionSnapKeyRef.current = questionKey;
+      questionSnapSuspendedRef.current = false;
+    }
     const t = activeQuestion.in_sec;
     if (t === undefined || !(t >= 0) || !(t < duration)) return;
     const nowT = Number(videoRef.current?.currentTime ?? currentTime);
     if (!Number.isFinite(nowT)) return;
+    const inT = Number(activeQuestion.in_sec);
+    const outT = Number(activeQuestion.out_sec);
+    const insideWindow = Number.isFinite(inT) && Number.isFinite(outT) && nowT >= inT && nowT <= outT;
+    if (insideWindow) questionSnapSuspendedRef.current = false;
+    // tb_1792439791_49541_5: во время play перетаскивание плейхеда за скобки
+    // возвращалось к IN (и выглядело как «прыгнул назад и остановился»).
+    // Ручной сик уважаем и после 800-мс окна ножниц; снап снова включается,
+    // только когда плейхед сам вошёл в окно вопроса.
+    if (isManualSeekSuppressed()) {
+      if (!insideWindow) questionSnapSuspendedRef.current = true;
+      return;
+    }
+    if (questionSnapSuspendedRef.current) return;
     // tb_1791871361_84020_1: ножницы ON — выход за OUT ведёт tail-advance
     // (следующее видео едет async-аттачем); снап назад гонялся с аттачем
     // и давал 3-5 повторов одной записи. Ножницы OFF — как раньше.
@@ -4247,6 +4414,7 @@ function App() {
   });
 
   function attachSource(nextUrl: string, name: string) {
+    setMediaProblem("");
     setSrc((prev) => {
       if (prev.startsWith("blob:")) URL.revokeObjectURL(prev);
       return nextUrl;
@@ -4261,7 +4429,9 @@ function App() {
     autoSizedKeyRef.current = "";
     // tb_1791233039_7043_3: autoplay ждёт <video> — картинки его не дождутся,
     // протухший флаг гасим сразу, а не на следующем видео.
-    if (inferMediaKind(name) !== "video") autoplayOnLoadRef.current = false;
+    // tb_1791571305_29299_2: аудио играется тем же <video> — флаг живёт.
+    const attachedKind = inferMediaKind(name);
+    if (attachedKind !== "video" && attachedKind !== "audio") autoplayOnLoadRef.current = false;
   }
 
   function attachFile(file: File) {
@@ -4275,6 +4445,9 @@ function App() {
     }
     refreshContentHash({ file });
     const nextUrl = URL.createObjectURL(file);
+    // tb_1792438559_20717_1: blob — не путь, контейнерная улика прежнего
+    // файла к нему не относится.
+    setMediaContainerInfo(null);
     attachSource(nextUrl, file.name);
   }
 
@@ -4373,6 +4546,10 @@ function App() {
     };
     void toAssetUrl(next.path).then((assetUrl) => {
       if (assetUrl) {
+        // tb_1792025130_97848_4: attachSource сам хеш не считает (только
+        // handleOpenPath/attachFile) — окно комментов и бар фильтровали по
+        // старому хешу прошлого видео. Считаем, как ручное открытие.
+        refreshContentHash({ path: next.path });
         commitAdvance(() => attachSource(assetUrl, nextName));
         return;
       }
@@ -4711,6 +4888,20 @@ function App() {
         resolveMediaUrl: (p) => toAssetUrl(p),
         notifyChanged: () => notifyMarkersChanged(),
       });
+      // tb_1792025130_97848_4: импорт обычного мульти-видео листа раньше
+      // визуально ничего не делал (видео не открывалось — только тост).
+      // Слово оператора 15.10: сразу показывать первое playable-видео
+      // на СТОПЕ (без автоплея); окно плейлиста открывается ниже, как раньше.
+      if (!openedBase && Array.isArray(parsed.entries) && parsed.entries.length > 0) {
+        const first = parsed.entries.find(
+          (e) => e && typeof e.path === "string" && mediaPlayability(e.path) === "native",
+        );
+        if (first) {
+          autoplayOnLoadRef.current = false;
+          await handleOpenPath(first.path);
+          openedBase = first.path.split(/[\\/]/).pop() || first.path;
+        }
+      }
       setContextToast(openedBase ? `Opened ${openedBase}. ${loadedLine}` : loadedLine);
       await openPanelWindow("panel-playlist", "playlist", "Playlist", 360, 500);
     } catch {
@@ -5146,7 +5337,7 @@ function App() {
         <input
           ref={fileInputRef}
           type="file"
-          accept="video/*,image/*"
+          accept="video/*,image/*,audio/*"
           style={{ display: "none" }}
           onChange={(event) => {
             const file = event.target.files?.[0];
@@ -5172,6 +5363,28 @@ function App() {
               ) : null}
               {src ? (
                 <>
+                  {/* tb_1791571305_29299_2: у аудио нет кадра — вместо
+                      чёрной сцены честная плашка, транспорт/шкала/маркеры
+                      работают как у видео. */}
+                  {mediaKind === "audio" ? (
+                    <div
+                      className="audio-stage"
+                      data-testid="audio-stage"
+                      onClick={() => videoClickCtlRef.current?.click()}
+                      onMouseMove={() => setShowTransport(true)}
+                    >
+                      {/* tb_1792441325_49541_8: оператор оставил один ключ —
+                          только скрипичный, по центру, без новых цветов. */}
+                      <div className="audio-stage-clefs" data-testid="audio-stage-clefs" aria-hidden="true">
+                        <span className="audio-stage-clef">𝄞</span>
+                      </div>
+                      <span className="audio-stage-title">Audio</span>
+                      <span className="audio-stage-name">{fileName || "Audio"}</span>
+                      <span className="audio-stage-time">
+                        {formatTimecode(duration, resolveXmlFps(containerFps, probeResult?.fps, estimatedFps))}
+                      </span>
+                    </div>
+                  ) : null}
                   <div className={`video-stage ${effectivePreviewScale < 1 ? "preview-scaled" : ""}`}>
                     <div
                       className="video-raster"
@@ -5242,6 +5455,12 @@ function App() {
                             }
                           }}
                           onLoadedData={(event) => {
+                            // tb_1792441299_49541_7: новый источник — preview
+                            // от прошлого файла не должен залипать.
+                            clearScrubPreview();
+                            // tb_1792438559_20717_1: кадр пришёл — упреждающее
+                            // «может не играть» больше не нужно.
+                            setMediaProblem("");
                             const video = event.currentTarget;
                             if (firstFramePrimedRef.current) return;
                             firstFramePrimedRef.current = true;
@@ -5260,16 +5479,27 @@ function App() {
                               void video.play().catch(() => {});
                             }
                           }}
-                          onPlay={() => setIsPlaying(true)}
+                          onPlay={() => { setIsPlaying(true); setMediaProblem(""); }}
                           onPause={(event) => {
                             setIsPlaying(false);
                             // tb_1791233024_7043_1: пауза — точная запись позиции для Resume.
                             recordPlaybackPositionExact(currentFilePathRef.current, Number(event.currentTarget.currentTime || 0));
                           }}
                           onError={() => {
+                            // tb_1792441299_49541_7: сик не удался — не врём
+                            // плейхедом, возвращаемся к фактической позиции.
+                            clearScrubPreview();
                             // 0.10.22: ошибки видео были немыми — чёрный экран без улик.
                             const code = videoRef.current?.error?.code ?? 0;
-                            setContextToast(`Cannot play ${currentFilePath ?? fileName ?? "media"} (video error ${code})`);
+                            const label = currentFilePath ?? fileName ?? "media";
+                            // tb_1792438559_20717_1: контейнер уже известен —
+                            // называем причину громко (размер/moov/faststart),
+                            // а не сухой код ошибки.
+                            if (mediaContainerInfo && !src.startsWith("blob:")) {
+                              setMediaProblem(mediaLoadProblemReason(label, mediaContainerInfo));
+                            } else {
+                              setContextToast(`Cannot play ${label} (video error ${code})`);
+                            }
                             // tb_1791233039_7043_3: битый файл — autoplay-флаг
                             // не должен пережить и выстрелить на следующем.
                             autoplayOnLoadRef.current = false;
@@ -5290,7 +5520,7 @@ function App() {
                             inOutPrevTRef.current = t;
                             if (
                               inOutPlayOn &&
-                              mediaKind === "video" &&
+                              isTimeMedia &&
                               !video.paused &&
                               !video.seeking &&
                               !video.ended &&
@@ -5363,8 +5593,15 @@ function App() {
                           // п.3: декодер догнал запрошенную позицию — цифра
                           // фактическая, честный статус снимаем.
                           onSeeked={(event) => {
-                            setCurrentTime(Number(event.currentTarget.currentTime || 0));
+                            const t = Number(event.currentTarget.currentTime || 0);
+                            setCurrentTime(t);
                             setSeekTarget(null);
+                            // tb_1792441299_49541_7: preview живёт до момента,
+                            // когда декодер реально догнал точку.
+                            const preview = scrubPreviewRef.current;
+                            if (preview !== null && !scrubbingRef.current && isScrubSettled(preview, t)) {
+                              clearScrubPreview();
+                            }
                           }}
                           onDurationChange={(event) => setDuration(Number(event.currentTarget.duration || 0))}
                           onVolumeChange={(event) => {
@@ -5469,8 +5706,18 @@ function App() {
                     </div>
                   ) : null}
                   {refusalToast ? <div className="context-toast refusal-toast" data-testid="refusal-toast">{refusalToast}</div> : null}
+                  {/* tb_1792438559_20717_1: молчащий файл — причина висит,
+                      пока её не снимут: чёрный кадр сам ничего не объяснит. */}
+                  {mediaProblem ? (
+                    <div className="context-toast refusal-toast media-problem-toast" data-testid="media-problem-toast">
+                      <span>{mediaProblem}</span>
+                      <button className="ghost-button subtle" type="button" onClick={() => setMediaProblem("")} aria-label="Dismiss">
+                        ✕
+                      </button>
+                    </div>
+                  ) : null}
                   {vetkaToast ? <div className="context-toast vetka-promo-toast" data-testid="vetka-promo-toast">{vetkaToast}</div> : null}
-                  {mediaKind === "video" ? (
+                  {isTimeMedia ? (
                     <>
                       <div
                         className={`transport-overlay ${showTransport ? "transport-visible" : "transport-hidden"}`}
@@ -5486,7 +5733,7 @@ function App() {
                               {isMoving ? <IconPause /> : <IconPlay />}
                             </button>
                             <span className="transport-time-col">
-                              <span className="transport-time">{formatTimecode(currentTime, resolveXmlFps(containerFps, probeResult?.fps, estimatedFps))}
+                              <span className="transport-time">{formatTimecode(scrubDisplayTime, resolveXmlFps(containerFps, probeResult?.fps, estimatedFps))}
                                 {/* tb_1791689890_1275_2: сумма живёт ВНУТРИ строки
                                     таймкода (absolute под ней) — таймкод плейхеда
                                     стабилен всегда, пилюля не раздвигается. */}
@@ -5588,11 +5835,20 @@ function App() {
                                 min={0}
                                 max={Math.max(duration, 0.001)}
                                 step={0.01}
-                                value={Math.min(currentTime, duration || 0)}
+                                value={Math.min(scrubDisplayTime, duration || 0)}
                                 onChange={(event) => {
                                   const nextTime = Number(event.target.value || 0);
+                                  // tb_1792443862_5828_1: нативный range тоже
+                                  // тянет value во время drag — не даём ему
+                                  // сделать второй, невидимый поток seek'ов
+                                  // (именно он заново праймил аудио и рвал звук).
+                                  if (scrubbingRef.current) {
+                                    showScrubPreview(nextTime);
+                                    return;
+                                  }
                                   // п.3: без оптимизма — показываем факт + seeking…,
                                   // цифра догонит по onSeeked/timeupdate.
+                                  if (videoRef.current && Math.abs(videoRef.current.currentTime - nextTime) < 0.02) return;
                                   setSeekTarget(nextTime);
                                   if (videoRef.current) videoRef.current.currentTime = nextTime;
                                 }}
@@ -5600,13 +5856,13 @@ function App() {
                               />
                               <div
                                 className="transport-playhead"
-                                style={{ left: `${(currentTime / Math.max(duration, 0.001)) * 100}%` }}
+                                style={{ left: `${(scrubDisplayTime / Math.max(duration, 0.001)) * 100}%` }}
                               />
                               {/* tb_1791844731_63972_4: линия вертикали 1px через
                                   все ряды — от верхнего шарика к нижнему. */}
                               <div
                                 className="transport-playhead-line"
-                                style={{ left: `${(currentTime / Math.max(duration, 0.001)) * 100}%` }}
+                                style={{ left: `${(scrubDisplayTime / Math.max(duration, 0.001)) * 100}%` }}
                               />
                             </div>
                             <span className="transport-time">{formatTimecode(duration, resolveXmlFps(containerFps, probeResult?.fps, estimatedFps))}</span>

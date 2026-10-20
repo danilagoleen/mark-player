@@ -456,3 +456,58 @@ describe("CommentOverlay active-row", () => {
     expect((rows[1] as HTMLElement).style.background).not.toBe(ACTIVE_BG);
   });
 });
+
+// tb_1792023428_97848_1: кегль 13 + зум CmdOrCtrl +/−/0 как в браузере.
+describe("CommentOverlay zoom", () => {
+  const ZOOM_KEY = "markplayer.comments.zoom";
+  afterEach(() => {
+    try {
+      window.localStorage?.removeItem(ZOOM_KEY);
+    } catch {
+      // jsdom без localStorage — нечего чистить
+    }
+  });
+  function renderZoomable() {
+    return render(
+      <CommentOverlay
+        marker={MARKERS[0]}
+        markers={MARKERS}
+        onClose={() => {}}
+        onUpdateText={() => {}}
+        onDeleteMarker={() => {}}
+        standalone
+      />,
+    );
+  }
+  function firstText(container: HTMLElement): HTMLElement {
+    const p = Array.from(container.querySelectorAll("p")).find((el) => el.textContent === "first");
+    if (!p) throw new Error("comment text not found");
+    return p as HTMLElement;
+  }
+  it("дефолтный кегль текста — 12px, киношный (был 15, потом 13)", () => {
+    const { container, unmount } = renderZoomable();
+    expect(container.querySelector('[data-testid="comment-zoom-root"]')?.getAttribute("data-zoom")).toBe("0");
+    expect(firstText(container).style.fontSize).toBe("12px");
+    unmount();
+  });
+  it("Cmd+= увеличивает, Cmd+- уменьшает, Cmd+0 сбрасывает", () => {
+    const { container, unmount } = renderZoomable();
+    fireEvent.keyDown(window, { key: "=", metaKey: true });
+    expect(firstText(container).style.fontSize).toBe("13px");
+    fireEvent.keyDown(window, { key: "-", metaKey: true });
+    expect(firstText(container).style.fontSize).toBe("12px");
+    fireEvent.keyDown(window, { key: "=", metaKey: true });
+    fireEvent.keyDown(window, { key: "=", metaKey: true });
+    expect(firstText(container).style.fontSize).toBe("14px");
+    fireEvent.keyDown(window, { key: "0", metaKey: true });
+    expect(firstText(container).style.fontSize).toBe("12px");
+    unmount();
+  });
+  it("голые +/= без Cmd кегль не трогают (не ломаем набор текста)", () => {
+    const { container, unmount } = renderZoomable();
+    fireEvent.keyDown(window, { key: "=" });
+    fireEvent.keyDown(window, { key: "-" });
+    expect(firstText(container).style.fontSize).toBe("12px");
+    unmount();
+  });
+});

@@ -184,6 +184,7 @@ describe("openFileDialog", () => {
       multiple: false,
       filters: [
         { name: "Video", extensions: ["mp4", "m4v", "mov", "webm", "ogv", "ogg", "m3u8"] },
+        { name: "Audio", extensions: ["wav", "m4a", "mp3", "aac", "flac", "oga", "opus", "aif", "aiff", "aifc", "caf"] },
         { name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff", "avif", "heic", "heif", "svg"] },
         { name: "All Files", extensions: ["*"] },
       ],

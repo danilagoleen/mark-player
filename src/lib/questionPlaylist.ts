@@ -368,13 +368,69 @@ export function mergeAnswerRecords(existing: AnswerRecord[], fresh: AnswerRecord
   return out;
 }
 
-/** Аутбокс — снимок слияния (та же семантика, что файл). */
-export function writeAnswersOutbox(records: AnswerRecord[]): void {
+/**
+ * tb_1792431205_48582_4: аутбокс ключуется путём плейлиста.
+ *
+ * Раньше аутбокс был один на браузер: ответы всех плейлистов лежали в одном
+ * массиве, и экспорт без sibling-файла вываливал их в `<playlist>.answers.json`
+ * (earcheck: 71 ответ, только 13 своих). Теперь у каждого плейлиста свой ключ;
+ * легаси-массив (без ключа) принадлежит только путям без плейлиста и не
+ * наследуется плейлистом с путём — иначе чужие ответы вернулись бы.
+ */
+const EMPTY_OUTBOX_PATH = "";
+
+type AnswersOutboxStore = {
+  version: 2;
+  byPlaylist: Record<string, AnswerRecord[]>;
+};
+
+function isOutboxStore(value: unknown): value is AnswersOutboxStore {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const v = value as AnswersOutboxStore;
+  return v.version === 2 && !!v.byPlaylist && typeof v.byPlaylist === "object";
+}
+
+function outboxKey(playlistPath?: string | null): string {
+  if (typeof playlistPath === "string") return playlistPath;
+  return readQuestionPlaylistPath() ?? EMPTY_OUTBOX_PATH;
+}
+
+function readOutboxStore(): AnswersOutboxStore | null {
   try {
-    localStorage.setItem(QUESTION_ANSWERS_OUTBOX_KEY, JSON.stringify(records));
+    const raw = localStorage.getItem(QUESTION_ANSWERS_OUTBOX_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    return isOutboxStore(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Аутбокс — снимок слияния (та же семантика, что файл), по плейлисту. */
+export function writeAnswersOutbox(records: AnswerRecord[], playlistPath?: string | null): void {
+  try {
+    const key = outboxKey(playlistPath);
+    const store = readOutboxStore() ?? { version: 2, byPlaylist: {} };
+    store.byPlaylist[key] = Array.isArray(records) ? records : [];
+    localStorage.setItem(QUESTION_ANSWERS_OUTBOX_KEY, JSON.stringify(store));
   } catch {
     // ignore — ответ потерян только в web без LS
   }
+}
+
+/**
+ * Ответы этого плейлиста оставляет только те, что относятся к его вопросам.
+ * Чужое (другие плейлисты/сессии, старьё 12–13.10) отбрасывается.
+ */
+export function filterAnswersToPlaylist(
+  records: AnswerRecord[],
+  questionIds: Iterable<string>,
+): AnswerRecord[] {
+  const ids = new Set<string>();
+  for (const id of questionIds) if (id) ids.add(String(id));
+  return (Array.isArray(records) ? records : []).filter(
+    (r) => !!r && typeof r === "object" && ids.has(String((r as AnswerRecord).question_id)),
+  );
 }
 
 /** Мягкая нормализация одной записи: чужое отбрасывается, своё чистится. */
@@ -628,7 +684,15 @@ export function rememberQuestionPlaylistPath(path: string | null): void {
   }
 }
 
-export function readAnswersOutbox(): AnswerRecord[] {
+export function readAnswersOutbox(playlistPath?: string | null): AnswerRecord[] {
+  const key = outboxKey(playlistPath);
+  const store = readOutboxStore();
+  if (store) {
+    const list = store.byPlaylist[key];
+    return Array.isArray(list) ? list : [];
+  }
+  // Легаси-массив ключа не имел: он принадлежит только путям без плейлиста.
+  if (key !== EMPTY_OUTBOX_PATH) return [];
   try {
     return parseAnswersFile(localStorage.getItem(QUESTION_ANSWERS_OUTBOX_KEY));
   } catch {
@@ -636,20 +700,10 @@ export function readAnswersOutbox(): AnswerRecord[] {
   }
 }
 
-export function appendAnswersOutbox(next: AnswerRecord): void {
+export function appendAnswersOutbox(next: AnswerRecord, playlistPath?: string | null): void {
   try {
-    // outbox — сырой массив (parseAnswersFile понимает и его, и {answers})
-    const raw = localStorage.getItem(QUESTION_ANSWERS_OUTBOX_KEY);
-    let list: AnswerRecord[] = [];
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw) as unknown;
-        if (Array.isArray(parsed)) list = parsed.filter((a): a is AnswerRecord => !!a && typeof a === "object");
-      } catch {
-        // ignore
-      }
-    }
-    localStorage.setItem(QUESTION_ANSWERS_OUTBOX_KEY, JSON.stringify([...list, next]));
+    const key = outboxKey(playlistPath);
+    writeAnswersOutbox([...readAnswersOutbox(key), next], key);
   } catch {
     // ignore — ответ потерян только в web без LS
   }

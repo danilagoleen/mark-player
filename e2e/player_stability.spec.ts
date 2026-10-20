@@ -122,7 +122,7 @@ test("video shows a real first frame preview before playback", async ({ page }) 
 test("image files load as media and keep geometry stable under suggested shell", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 860 });
   await page.goto("/?debug=1");
-  await page.locator('input[accept="video/*,image/*"]').setInputFiles(IMAGE_FIXTURE);
+  await page.locator('input[accept*="video/*"]').setInputFiles(IMAGE_FIXTURE);
 
   await page.waitForFunction(() => {
     const snapshot = window.vetkaPlayerLab?.snapshot();
@@ -141,7 +141,7 @@ test("image files load as media and keep geometry stable under suggested shell",
 test("portrait images request a portrait-oriented shell", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 860 });
   await page.goto("/?debug=1");
-  await page.locator('input[accept="video/*,image/*"]').setInputFiles(PORTRAIT_IMAGE_FIXTURE);
+  await page.locator('input[accept*="video/*"]').setInputFiles(PORTRAIT_IMAGE_FIXTURE);
 
   await page.waitForFunction(() => {
     const snapshot = window.vetkaPlayerLab?.snapshot();
@@ -159,7 +159,7 @@ test("portrait images request a portrait-oriented shell", async ({ page }) => {
 test("seek через шкалу сходится к фактическому времени, seeking-бейдж гаснет (tb_1791172090_2308_6 п.3)", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 840 });
   await page.goto("/");
-  await page.locator('input[accept="video/*,image/*"]').setInputFiles(VIDEO_FIXTURE);
+  await page.locator('input[accept*="video/*"]').setInputFiles(VIDEO_FIXTURE);
   await page.waitForFunction(() => {
     const snapshot = window.vetkaPlayerLab?.snapshot();
     return Boolean(snapshot?.ok && snapshot.sourceKind === "video");

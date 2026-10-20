@@ -13,7 +13,7 @@ const VIDEO_FIXTURE = path.resolve(
 
 async function openVideo(page) {
   await page.goto("/");
-  await page.locator('input[accept="video/*,image/*"]').setInputFiles(VIDEO_FIXTURE);
+  await page.locator('input[accept*="video/*"]').setInputFiles(VIDEO_FIXTURE);
   await page.waitForFunction(() => {
     const snapshot = window.vetkaPlayerLab?.snapshot();
     return Boolean(snapshot?.ok && snapshot.viewerWidth > 0 && snapshot.sourceKind === "video");

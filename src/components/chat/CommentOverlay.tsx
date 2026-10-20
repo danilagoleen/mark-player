@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MessageSquare, Pencil, Reply, Trash2 } from "lucide-react";
 import { formatTimecode } from "../../srtUtils";
 import { pairInOutRanges } from "../../lib/selectionDuration";
@@ -55,6 +55,34 @@ const SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,s
 // желтоватого rgb(30,30,30). Замер для архдоков: rgb(18,20,22).
 const GLASS_BG = "rgba(18,20,22,0.94)";
 const HAIRLINE = "1px solid rgba(255,255,255,0.10)";
+
+// tb_1792023428_97848_1: кегль окна комментов — дефолт 13 (был 15, оператор
+// 15.10: слишком крупный) + зум CmdOrCtrl +/−/0 как в браузере, персист.
+// tb_1792024771_97848_3: дефолт 12 — голливудский стандарт сценариев.
+const COMMENT_BASE_FONT = 12;
+const COMMENT_ZOOM_KEY = "markplayer.comments.zoom";
+const COMMENT_ZOOM_MIN = -3;
+const COMMENT_ZOOM_MAX = 8;
+
+function loadCommentZoom(): number {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return 0;
+    const n = parseInt(window.localStorage.getItem(COMMENT_ZOOM_KEY) ?? "0", 10);
+    if (!Number.isFinite(n)) return 0;
+    return Math.min(COMMENT_ZOOM_MAX, Math.max(COMMENT_ZOOM_MIN, n));
+  } catch {
+    return 0;
+  }
+}
+
+function saveCommentZoom(n: number): void {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    window.localStorage.setItem(COMMENT_ZOOM_KEY, String(n));
+  } catch {
+    // приватный режим / нет localStorage (jsdom) — зум живёт до перезагрузки
+  }
+}
 
 // tb_1791146301_70644_18: глифы видов в строках (та же азбука, что транспорт).
 const KIND_GLYPH: Record<string, string> = {
@@ -114,8 +142,8 @@ const CSS = `
 `;
 
 const S = {
-  overlay: { display: "flex", flexDirection: "column" as const, height: "100%", fontSize: 15, color: "#fff", fontFamily: SANS },
-  empty: { padding: "24px 16px", color: "rgba(255,255,255,0.6)", fontSize: 13 },
+  overlay: { display: "flex", flexDirection: "column" as const, height: "100%", fontSize: COMMENT_BASE_FONT, color: "#fff", fontFamily: SANS },
+  empty: { padding: "24px 16px", color: "rgba(255,255,255,0.6)", fontSize: COMMENT_BASE_FONT },
   list: { listStyle: "none" as const, margin: 0, padding: 0, overflowY: "auto" as const, flex: 1 },
   item: (active: boolean) => ({
     padding: "12px 16px",
@@ -127,10 +155,10 @@ const S = {
   author: { fontSize: 12, opacity: 0.55, marginBottom: 4, overflow: "hidden" as const, textOverflow: "ellipsis" as const, whiteSpace: "nowrap" as const },
   authorAi: { fontSize: 10, fontWeight: 700, opacity: 0.8, border: "1px solid rgba(255,255,255,0.25)", borderRadius: 4, padding: "0 4px", marginLeft: 6, verticalAlign: "1px" },
   // tb_1791585558_31907_1: строка ответа под родителем (плоско, без дерева).
-  reply: { display: "flex" as const, alignItems: "flex-start" as const, gap: 6, marginTop: 8, paddingTop: 8, borderTop: HAIRLINE, fontSize: 13, lineHeight: 1.4 },
-  replyText: { margin: 0, flex: 1, wordBreak: "break-word" as const, color: "rgba(255,255,255,0.92)" },
+  reply: { display: "flex" as const, alignItems: "flex-start" as const, gap: 6, marginTop: 8, paddingTop: 8, borderTop: HAIRLINE, fontSize: COMMENT_BASE_FONT, lineHeight: 1.4 },
+  replyText: { margin: 0, flex: 1, wordBreak: "break-word" as const, color: "rgba(255,255,255,0.92)", fontSize: COMMENT_BASE_FONT },
   body: { display: "flex" as const, alignItems: "flex-start" as const, justifyContent: "space-between" as const, gap: 8 },
-  textContent: { margin: 0, fontSize: 15, fontWeight: 400, lineHeight: 1.4, flex: 1, color: "#fff", wordBreak: "break-word" as const },
+  textContent: { margin: 0, fontSize: COMMENT_BASE_FONT, fontWeight: 400, lineHeight: 1.4, flex: 1, color: "#fff", wordBreak: "break-word" as const },
   icons: { display: "flex" as const, gap: 2, flexShrink: 0 },
   clearAllBtn: {
     background: "none", border: "1px solid rgba(255,255,255,0.20)", color: "rgba(255,255,255,0.7)", fontSize: 11,
@@ -140,7 +168,7 @@ const S = {
   edit: { display: "flex" as const, flexDirection: "column" as const, gap: 8, flex: 1 },
   textarea: {
     background: "rgba(0,0,0,0.35)", border: "1px solid rgba(255,255,255,0.14)",
-    borderRadius: 8, color: "#fff", fontSize: 15, padding: 8,
+    borderRadius: 8, color: "#fff", fontSize: COMMENT_BASE_FONT, padding: 8,
     resize: "vertical" as const, minHeight: 56, fontFamily: "inherit", width: "100%", boxSizing: "border-box" as const,
     outline: "none",
   },
@@ -180,6 +208,38 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
   // этого id — подсветка гаснет сама (см. activeShown ниже).
   const [activeId, setActiveId] = useState<string | null>(null);
   const activeShown = activeId && markers.some((m) => m.marker_id === activeId) ? activeId : null;
+
+  // tb_1792023428_97848_1: зум кегля (CmdOrCtrl +/−/0, дефолт 13). Cmd-комбо
+  // безопасны в textarea (как браузерный зум), typing-guard не нужен.
+  const [zoom, setZoom] = useState(loadCommentZoom);
+  const bodyFont = COMMENT_BASE_FONT + zoom;
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        setZoom((z) => {
+          const n = Math.min(COMMENT_ZOOM_MAX, z + 1);
+          saveCommentZoom(n);
+          return n;
+        });
+      } else if (e.key === "-" || e.key === "_") {
+        e.preventDefault();
+        setZoom((z) => {
+          const n = Math.max(COMMENT_ZOOM_MIN, z - 1);
+          saveCommentZoom(n);
+          return n;
+        });
+      } else if (e.key === "0") {
+        e.preventDefault();
+        saveCommentZoom(0);
+        setZoom(0);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // tb_1791843894_63972_1: семантика фильтра — selectVisibleRows выше.
   const allRows = useMemo(
@@ -226,12 +286,12 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
   }, [allRows]);
 
   const expandedContent = (
-    <div style={S.overlay}>
+    <div style={{ ...S.overlay, fontSize: bodyFont }} data-testid="comment-zoom-root" data-zoom={zoom}>
       {!standalone && <style>{CSS}</style>}
       {onCreate ? (
         <div style={{ padding: "10px 16px", borderBottom: HAIRLINE }} data-testid="comment-new-form" onClick={(e) => e.stopPropagation()}>
           <textarea
-            style={{ ...S.textarea, minHeight: 40 }}
+            style={{ ...S.textarea, minHeight: 40, fontSize: bodyFont }}
             data-testid="comment-new-input"
             aria-label="New comment"
             placeholder="Add a comment…"
@@ -251,7 +311,7 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
         </div>
       ) : null}
       {allRows.length === 0 ? (
-        <div style={S.empty}>No markers yet.</div>
+        <div style={{ ...S.empty, fontSize: bodyFont }}>No markers yet.</div>
       ) : (
         <ul style={S.list}>
           {roots.map((row) => {
@@ -285,7 +345,7 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
               {editingId === row.marker_id && isComment ? (
                 <div style={S.edit} onClick={(e) => e.stopPropagation()}>
                   <textarea
-                    style={S.textarea}
+                    style={{ ...S.textarea, fontSize: bodyFont }}
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
                     rows={3}
@@ -298,7 +358,7 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
                 </div>
               ) : (
                 <div style={S.body}>
-                  <p style={S.textContent}>{rowText || "No comment text."}</p>
+                  <p style={{ ...S.textContent, fontSize: bodyFont }}>{rowText || "No comment text."}</p>
                   <div style={S.icons} onClick={(e) => e.stopPropagation()}>
                     {onReply ? (
                     <button className="cm-ghost" type="button" data-testid="comment-reply-btn" aria-label="Reply to comment" title="Reply" onClick={() => { setEditingId(null); setReplyToId(row.marker_id); setReplyDraft(""); }}>
@@ -319,7 +379,7 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
               {onReply && replyToId === row.marker_id ? (
                 <div style={S.edit} data-testid="comment-reply-form" onClick={(e) => e.stopPropagation()}>
                   <textarea
-                    style={S.textarea}
+                    style={{ ...S.textarea, fontSize: bodyFont }}
                     data-testid="comment-reply-input"
                     aria-label="Reply text"
                     value={replyDraft}
@@ -348,12 +408,12 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
                 return (
                   <div
                     key={rep.marker_id}
-                    style={{ ...S.reply, background: activeShown === rep.marker_id ? "rgba(255,255,255,0.04)" : "transparent" }}
+                    style={{ ...S.reply, fontSize: bodyFont, background: activeShown === rep.marker_id ? "rgba(255,255,255,0.04)" : "transparent" }}
                     data-testid="comment-reply"
                     onClick={(e) => { e.stopPropagation(); jumpTo(rep); }}
                     title={`Jump to ${formatTimecode(Number(rep.anchor_sec ?? rep.start_sec ?? 0), fps)}`}
                   >
-                    <p style={S.replyText}>
+                    <p style={{ ...S.replyText, fontSize: bodyFont }}>
                       ↳ {repGlyph}{repAuthor ? `${repAuthor}: ` : ""}{repText}
                       {repAuthor.startsWith("agent:") && repAuthor.length > 6 ? <span style={S.authorAi}>AI</span> : null}
                     </p>
@@ -372,7 +432,7 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
     return (
       <div style={{
         display: "flex", flexDirection: "column", height: "100vh", boxSizing: "border-box",
-        background: GLASS_BG, color: "#fff", fontSize: 15, fontFamily: SANS,
+        background: GLASS_BG, color: "#fff", fontSize: bodyFont, fontFamily: SANS,
         overflow: "hidden",
         backdropFilter: "blur(20px) saturate(140%)", WebkitBackdropFilter: "blur(20px) saturate(140%)",
       }}>

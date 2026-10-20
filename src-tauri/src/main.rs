@@ -302,15 +302,34 @@ fn open_panel_window(
     let url = url::Url::parse(&url_str)
         .map_err(|e| format!("Invalid panel URL: {}", e))?;
 
-    let win = tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::External(url))
-        .title(title)
-        .inner_size(width, height)
-        .focused(true)
+    // tb_1792023845_97848_2: панели — дочерние к main (parent): всегда выше
+    // плеера (macOS addChildWindow / Windows owned / Linux transient-for),
+    // но НЕ системный always-on-top. Родитель цепляется только при создании;
+    // повторное открытие существующего окна — фокус, как раньше.
+    let main = app.get_webview_window("main");
+    let fresh_builder = || {
+        tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::External(url.clone()))
+            .title(title.clone())
+            .inner_size(width, height)
+            .focused(true)
+    };
+    let builder = match &main {
+        Some(m) => match fresh_builder().parent(m) {
+            Ok(b) => b,
+            Err(e) => {
+                // Только Windows (нет hwnd): панель без родителя, как раньше.
+                eprintln!("[Mark Player] panel '{}' without parent: {}", label, e);
+                fresh_builder()
+            }
+        },
+        None => fresh_builder(),
+    };
+    let win = builder
         .build()
         .map_err(|e| format!("Failed to create window: {}", e))?;
     // Косметика 2026-09-25: панели справа от главного окна, а не поверх видео.
     // Кламп в монитор: если справа нет места — втискиваем в видимую область.
-    if let Some(main) = app.get_webview_window("main") {
+    if let Some(main) = &main {
         if let (Ok(pos), Ok(size), Ok(scale)) =
             (main.outer_position(), main.outer_size(), main.scale_factor())
         {
@@ -371,6 +390,97 @@ struct FileContentSample {
     tail: Vec<u8>,
 }
 
+// tb_1792438559_20717_1: почему 6.7 ГБ proxy молчит. Tauri asset protocol
+// отдаёт файл в WKWebView через custom scheme, а на macOS он ломается на
+// файлах больше ~3.5-4 ГиБ (tauri#6375, tauri#7355). Для moov-at-end это
+// ещё и дальний сик: 2015с из 3426с — это ~4 ГБ от начала. Читаем только
+// заголовки top-level атомов (пара seek), чтобы плеер мог громко назвать
+// причину вместо чёрного экрана.
+#[derive(Debug, Clone, Serialize)]
+struct MediaContainerInfo {
+    size: u64,
+    moov_offset: Option<u64>,
+    mdat_offset: Option<u64>,
+    moov_at_end: bool,
+}
+
+fn inspect_atom_header(
+    file: &mut std::fs::File,
+    offset: u64,
+    file_size: u64,
+) -> Result<Option<(String, u64)>, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    if offset.saturating_add(8) > file_size {
+        return Ok(None);
+    }
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|e| format!("seek failed: {e}"))?;
+    let mut head = [0u8; 8];
+    file.read_exact(&mut head)
+        .map_err(|e| format!("read atom header failed: {e}"))?;
+    let size32 = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as u64;
+    let kind = String::from_utf8_lossy(&head[4..8]).to_string();
+    let (size, header_len) = match size32 {
+        0 => (file_size.saturating_sub(offset), 8u64),
+        1 => {
+            let mut ext = [0u8; 8];
+            file.read_exact(&mut ext)
+                .map_err(|e| format!("read largesize failed: {e}"))?;
+            (u64::from_be_bytes(ext), 16u64)
+        }
+        n => (n, 8u64),
+    };
+    if size < header_len
+        || offset
+            .checked_add(size)
+            .map_or(true, |end| end > file_size)
+    {
+        return Ok(None);
+    }
+    Ok(Some((kind, size)))
+}
+
+fn inspect_media_container_at(path: &std::path::Path) -> Result<MediaContainerInfo, String> {
+    let mut file = std::fs::File::open(path).map_err(|e| format!("open failed: {e}"))?;
+    let size = file
+        .metadata()
+        .map_err(|e| format!("stat failed: {e}"))?
+        .len();
+    let mut offset = 0u64;
+    let mut moov_offset = None;
+    let mut mdat_offset = None;
+    // 64 top-level атомов хватает любому нормальному контейнеру; счётчик
+    // защищает от битого size, который не двигает offset.
+    for _ in 0..64 {
+        let Some((kind, atom_size)) = inspect_atom_header(&mut file, offset, size)? else {
+            break;
+        };
+        match kind.as_str() {
+            "moov" => {
+                moov_offset = Some(offset);
+                break;
+            }
+            "mdat" => mdat_offset = Some(offset),
+            _ => {}
+        }
+        offset = offset.saturating_add(atom_size);
+        if offset >= size {
+            break;
+        }
+    }
+    Ok(MediaContainerInfo {
+        size,
+        moov_offset,
+        mdat_offset,
+        moov_at_end: matches!((mdat_offset, moov_offset), (Some(m), Some(v)) if m < v),
+    })
+}
+
+#[tauri::command]
+fn inspect_media_container(path: String) -> Result<MediaContainerInfo, String> {
+    inspect_media_container_at(std::path::Path::new(&path))
+}
+
 #[tauri::command]
 fn sample_file_bytes(path: String, sample_len: Option<u64>) -> Result<FileContentSample, String> {
     use std::io::{Read, Seek, SeekFrom};
@@ -412,6 +522,7 @@ fn main() {
             trace_player_window,
             open_panel_window,
             emit_menu_event,
+            inspect_media_container,
             sample_file_bytes,
             os_username,
         ]);
@@ -443,4 +554,61 @@ fn main() {
     builder
         .run(tauri::generate_context!())
         .expect("error while running Mark Player");
+}
+
+#[cfg(test)]
+mod container_tests {
+    use super::inspect_media_container_at;
+
+    fn atom(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(8 + body.len());
+        out.extend_from_slice(&((8 + body.len()) as u32).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn write_sample(name: &str, atoms: Vec<Vec<u8>>) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("mark-container-{}-{name}", std::process::id()));
+        let mut bytes = Vec::new();
+        for a in atoms {
+            bytes.extend_from_slice(&a);
+        }
+        std::fs::write(&path, bytes).expect("write sample");
+        path
+    }
+
+    #[test]
+    fn detects_moov_at_end() {
+        let path = write_sample("moov-end", vec![atom(b"ftyp", &[0; 12]), atom(b"mdat", &[0; 100]), atom(b"moov", &[0; 40])]);
+        let info = inspect_media_container_at(&path).expect("inspect");
+        assert_eq!(info.moov_offset, Some(128));
+        assert_eq!(info.mdat_offset, Some(20));
+        assert!(info.moov_at_end);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn detects_faststart() {
+        let path = write_sample("faststart", vec![atom(b"ftyp", &[0; 12]), atom(b"moov", &[0; 40]), atom(b"mdat", &[0; 100])]);
+        let info = inspect_media_container_at(&path).expect("inspect");
+        assert_eq!(info.moov_offset, Some(20));
+        assert!(!info.moov_at_end);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn handles_64bit_largesize() {
+        let mut mdat = Vec::new();
+        mdat.extend_from_slice(&1u32.to_be_bytes());
+        mdat.extend_from_slice(b"mdat");
+        mdat.extend_from_slice(&(16u64 + 100).to_be_bytes());
+        mdat.extend_from_slice(&[0u8; 100]);
+        let path = write_sample("largesize", vec![atom(b"ftyp", &[0; 12]), mdat, atom(b"moov", &[0; 40])]);
+        let info = inspect_media_container_at(&path).expect("inspect");
+        assert_eq!(info.mdat_offset, Some(20));
+        assert_eq!(info.moov_offset, Some(136));
+        assert!(info.moov_at_end);
+        let _ = std::fs::remove_file(&path);
+    }
 }

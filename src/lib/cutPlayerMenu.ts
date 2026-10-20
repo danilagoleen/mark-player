@@ -171,7 +171,10 @@ export function buildCutPlayerMenuSpec(opts?: { subtitlesVisible?: boolean; inOu
           { id: "file_export_playlist", label: "Playlist", kind: "submenu", items: [
             { id: "file_export_playlist_xml", label: "Timeline (XML)…", action: "export_playlist_xml" },
             { id: "file_export_playlist_srt", label: "Subtitles (SRT)…", action: "export_playlist_srt" },
-            { id: "file_export_playlist_json", label: "Markers (JSON/SOS)…", action: "export_playlist_json" },
+            // tb_1792019846_26789_1: «Markers (JSON/SOS)…» врал — непонятно, что это
+            // экспорт ПЛЕЙЛИСТА, а не маркеров текущего видео (оператор 14.10 на 0.25.74).
+            // Исключение из правила «без слова Playlist»: только подпись, action/id/файлы те же.
+            { id: "file_export_playlist_json", label: "Playlist (JSON)…", action: "export_playlist_json" },
             { id: "file_export_playlist_review_notes", label: "Review Notes (.txt)…", action: "export_playlist_review_notes" },
             { id: "file_export_playlist_visual_notes", label: "Visual Review Notes (frames)…", action: "export_playlist_visual_notes" },
             { id: "file_export_playlist_editor", label: "Send to editor…", action: "send_playlist_editor_package" },

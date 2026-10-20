@@ -1,8 +1,12 @@
 // tb_1791521998_11250_5: схема плейлиста-вопроса + answers.json.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   answersFromMarkers,
   appendAnswerRecord,
+  filterAnswersToPlaylist,
+  readAnswersOutbox,
+  writeAnswersOutbox,
+  QUESTION_ANSWERS_OUTBOX_KEY,
   findQuestionEntry,
   findQuestionEntryAtTime,
   formatAnswerReplyText,
@@ -419,5 +423,64 @@ describe("tb_1791885959_77379_1: экспорт везёт ответы (resolve
   it("пусто везде — null (уезжают голые entries)", () => {
     expect(resolveExportAnswersText(null, [])).toBeNull();
     expect(resolveExportAnswersText("   ", [])).toBeNull();
+  });
+});
+
+
+describe("answers outbox keyed by playlist (tb_1792431205_48582_4)", () => {
+  const rec = (id: string): AnswerRecord => ({
+    question_id: id,
+    verdict: "favorite",
+    confirmed_by: "operator",
+    answered_at: "2026-10-19T21:00:00.000Z",
+  });
+
+  function memoryStorage(): Storage {
+    const data = new Map<string, string>();
+    return {
+      getItem: (k: string) => (data.has(k) ? data.get(k)! : null),
+      setItem: (k: string, v: string) => { data.set(k, String(v)); },
+      removeItem: (k: string) => { data.delete(k); },
+      clear: () => { data.clear(); },
+      key: (i: number) => Array.from(data.keys())[i] ?? null,
+      get length() { return data.size; },
+    } as Storage;
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", memoryStorage());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("у каждого плейлиста свой ключ: чужие ответы не видны", () => {
+    const own = rec("ear-q01");
+    const foreign = rec("scn-02");
+    writeAnswersOutbox([own], "/idx/earcheck.question_playlist.json");
+    writeAnswersOutbox([foreign], "/idx/scene.question_playlist.json");
+    expect(readAnswersOutbox("/idx/earcheck.question_playlist.json")).toEqual([own]);
+    expect(readAnswersOutbox("/idx/scene.question_playlist.json")).toEqual([foreign]);
+    expect(readAnswersOutbox("/idx/other.question_playlist.json")).toEqual([]);
+  });
+
+  it("легаси-массив без ключа не достаётся плейлисту с путём", () => {
+    localStorage.setItem(QUESTION_ANSWERS_OUTBOX_KEY, JSON.stringify([rec("rot-5304")]));
+    expect(readAnswersOutbox("/idx/earcheck.question_playlist.json")).toEqual([]);
+    expect(readAnswersOutbox(null).map((r) => r.question_id)).toEqual(["rot-5304"]);
+  });
+
+  it("файл-пример: из чужого в ответы плейлиста не проходит ничего", () => {
+    const own = Array.from({ length: 13 }, (_, i) => rec(`ear-q${String(i + 1).padStart(2, "0")}`));
+    const foreign = [
+      rec("rot-5304"), rec("rot-5089"), rec("scn-02"), rec("scn-03"), rec("scn-04"),
+      ...Array.from({ length: 20 }, (_, i) => rec(`scv2-${String(i + 1).padStart(2, "0")}`)),
+      ...Array.from({ length: 20 }, (_, i) => rec(`trk-${String(i + 1).padStart(2, "0")}`)),
+    ];
+    const ids = own.map((r) => r.question_id);
+    const kept = filterAnswersToPlaylist([...foreign, ...own], ids);
+    expect(kept.map((r) => r.question_id).sort()).toEqual(ids.slice().sort());
+    expect(parseAnswersFile(resolveExportAnswersText(null, kept))).toHaveLength(13);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mediaExtension, mediaPlayability, mediaRefusalReason } from "./mediaPlayability";
+import { isAudioMedia, mediaExtension, mediaPlayability, mediaRefusalReason } from "./mediaPlayability";
 
 // Open-gate (E2E 2026-09-24): диалог Finder честно серит неиграемое,
 // а стартовый open files / drop / плейлист / ?src= пропускали всё в
@@ -18,6 +18,14 @@ describe("mediaPlayability", () => {
     for (const name of ["shot.png", "photo.JPG", "a.webp", "b.gif", "c.avif", "d.heic"]) {
       expect(mediaPlayability(name), name).toBe("native");
     }
+  });
+
+  it("аудио → native: тот же <video>, та же шкала и маркеры [signal: audio-track] [project: cut-player]", () => {
+    for (const name of ["take.wav", "voice.m4a", "clip.MP3", "a.flac", "b.oga", "c.opus", "d.aiff", "e.caf"]) {
+      expect(mediaPlayability(name), name).toBe("native");
+    }
+    expect(mediaPlayability("blob:http://localhost/uuid", "audio/wav")).toBe("native");
+    expect(mediaPlayability("wav-сниппет", "audio/x-wav")).toBe("native");
   });
 
   it("proxy-контейнеры → proxy", () => {
@@ -49,6 +57,18 @@ describe("mediaExtension", () => {
     expect(mediaExtension("film.MKV")).toBe("mkv");
     expect(mediaExtension("movie.mp4?token=1")).toBe("mp4");
     expect(mediaExtension("noext")).toBe("");
+  });
+});
+
+describe("isAudioMedia", () => {
+  it("узнаёт аудио по расширению и MIME, не путает с видео [signal: audio-track] [project: cut-player]", () => {
+    expect(isAudioMedia("take.wav")).toBe(true);
+    expect(isAudioMedia("voice.M4A")).toBe(true);
+    expect(isAudioMedia("clip.mp3?x=1")).toBe(true);
+    expect(isAudioMedia("blob:http://localhost/uuid", "audio/wav")).toBe(true);
+    expect(isAudioMedia("clip.mp4")).toBe(false);
+    expect(isAudioMedia("shot.png")).toBe(false);
+    expect(isAudioMedia("notes.txt", "text/plain")).toBe(false);
   });
 });
 

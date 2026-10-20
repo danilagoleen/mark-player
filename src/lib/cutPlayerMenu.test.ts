@@ -122,11 +122,15 @@ describe("cutPlayerMenu", () => {
     expect(byId.file_export_srt.action).toBe("export_srt");
     expect(byId.file_export_srt.accelerator).toBe("CmdOrCtrl+S");
     expect(byId.file_export_xml.action).toBe("export_xml");
-    // Живой пункт плейлиста — только Timeline XML; в подписях нет «Playlist».
+    // Живой пункт плейлиста — только Timeline XML; в подписях нет «Playlist»,
+    // кроме tb_1792019846_26789_1: file_export_playlist_json врёт «Markers (JSON/SOS)…» —
+    // оператор 14.10 не понял, что это экспорт ПЛЕЙЛИСТА. Только подпись, action/id те же.
     expect(byId.file_export_playlist_xml.action).toBe("export_playlist_xml");
     expect(byId.file_export_playlist_xml.enabled ?? true).toBe(true);
+    expect(byId.file_export_playlist_json.action).toBe("export_playlist_json");
+    expect(byId.file_export_playlist_json.label).toBe("Playlist (JSON)…");
     for (const item of Object.values(byId) as CutPlayerMenuItemSpec[]) {
-      if (item.id.startsWith("file_export_playlist_")) {
+      if (item.id.startsWith("file_export_playlist_") && item.id !== "file_export_playlist_json") {
         expect(item.label, `лишнее слово в ${item.id}`).not.toMatch(/playlist/i);
       }
     }

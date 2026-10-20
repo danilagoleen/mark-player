@@ -1,4 +1,5 @@
 import { LAB_MIN_SHELL_HEIGHT, LAB_MIN_SHELL_WIDTH } from "./geometry";
+import type { MediaContainerInfo } from "./mediaDiagnostics";
 
 export function isTauriRuntimeSync() {
   try {
@@ -149,7 +150,7 @@ export interface SaveDialogOptions {
   filters?: DialogFilter[];
 }
 
-import { NATIVE_IMAGE_EXT, NATIVE_VIDEO_EXT } from "./mediaPlayability";
+import { NATIVE_AUDIO_EXT, NATIVE_IMAGE_EXT, NATIVE_VIDEO_EXT } from "./mediaPlayability";
 
 // Open-gate 1.1: Finder серит всё, что <video>/<img> не переварят.
 // Источник — mediaPlayability (единый с гейтом). All Files оставлен как
@@ -157,6 +158,7 @@ import { NATIVE_IMAGE_EXT, NATIVE_VIDEO_EXT } from "./mediaPlayability";
 // а не молчаливый чёрный экран.
 const DEFAULT_MEDIA_FILTERS: DialogFilter[] = [
   { name: "Video", extensions: [...NATIVE_VIDEO_EXT] },
+  { name: "Audio", extensions: [...NATIVE_AUDIO_EXT] },
   { name: "Images", extensions: [...NATIVE_IMAGE_EXT] },
   { name: "All Files", extensions: ["*"] },
 ];
@@ -323,5 +325,19 @@ export async function openPanelWindow(label: string, route: string, title: strin
   } catch (error) {
     console.warn("[Mark Player] open_panel_window failed:", error);
     return false;
+  }
+}
+
+// tb_1792438559_20717_1: top-level атомы контейнера (moov/mdat) без чтения
+// файла целиком — нужны, чтобы громко назвать причину молчащего >4 ГБ proxy.
+// Вне Tauri или при ошибке — null: диагностика не должна мешать открытию.
+export async function inspectMediaContainer(path: string): Promise<MediaContainerInfo | null> {
+  if (!isTauriRuntimeSync()) return null;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<MediaContainerInfo>("inspect_media_container", { path });
+  } catch (error) {
+    console.warn("[Mark Player] inspect_media_container failed:", error);
+    return null;
   }
 }

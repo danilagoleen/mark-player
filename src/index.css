@@ -220,6 +220,61 @@ select {
   position: relative;
 }
 
+/* tb_1791571305_29299_2: аудио-носитель без кадра — плашка вместо сцены.
+   Транспорт и шкала живут поверх (идут позже в DOM). */
+.audio-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  /* tb_1792435439_49541_1: ч/б фир-тон окон Comments/Playlist (#121416),
+     без синих акцентов — волна и статусы не кричат цветом. */
+  background: #121416;
+  color: #e8eaed;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* tb_1792441325_49541_8: один скрипичный ключ вместо пустого серого,
+   тихо, тем же фир-тоном, без новых цветов. */
+.audio-stage-clefs {
+  display: flex;
+  align-items: flex-end;
+  margin-bottom: 2px;
+  color: #e8eaed;
+  opacity: 0.35;
+  font-family: "Apple Symbols", "Segoe UI Symbol", "Noto Music", serif;
+  line-height: 1;
+}
+.audio-stage-clef {
+  font-size: 58px;
+}
+
+.audio-stage-title {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  opacity: 0.45;
+}
+
+.audio-stage-name {
+  max-width: 80%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.audio-stage-time {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+  font-variant-numeric: tabular-nums;
+}
+
 /* tb_1791156671_82609_1: дорожка субтитров — низ кадра, safe-area 8%. */
 .subtitle-overlay {
   position: absolute;
@@ -510,6 +565,21 @@ select {
   font-size: 12px;
   line-height: 1.35;
   backdrop-filter: blur(20px);
+}
+
+/* tb_1792438559_20717_1: молчащий файл — причина не в 6-секундном тосте, а
+   в постоянной плате у кадра. Тон нейтральный (без жёлтого/красного). */
+.media-problem-toast {
+  top: 100px;
+  z-index: 3;
+  max-width: min(46vw, 420px);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.media-problem-toast > span {
+  flex: 1 1 auto;
 }
 
 /* VETKA-промо: тост vetka-add — 10с, плавное появление и затухание
@@ -1386,8 +1456,10 @@ select {
 
 /* 0.10.23: dead-probe placeholder — file loaded, backend silent. */
 .probe-badge.probe-offline {
-  color: #fbbf24;
-  border: 1px dashed rgba(251, 191, 36, 0.55);
+  /* tb_1792435439_49541_1: жёлтый цвет в этой зоне запрещён оператором
+     (19.10) — статус остаётся нейтральным, без цветового сигнала. */
+  color: rgba(255, 255, 255, 0.55);
+  border: 1px dashed rgba(255, 255, 255, 0.22);
   border-radius: 999px;
   padding: 0 8px;
 }

@@ -18,7 +18,16 @@ export const NATIVE_IMAGE_EXT = [
   "avif", "heic", "heif", "svg",
 ];
 
-const NATIVE_EXT = new Set([...NATIVE_VIDEO_EXT, ...NATIVE_IMAGE_EXT]);
+// Аудио-носители (P3 tb_1791571305_29299_2): <video> играет их не хуже
+// видео — есть звук, длительность, шкала и маркеры, нет только картинки.
+// Без них wav/m4a из плейлиста заминок уходили в unsupported по MIME и
+// молча не открывались (оператору нечем было ставить маркеры).
+export const NATIVE_AUDIO_EXT = [
+  "wav", "m4a", "mp3", "aac", "flac", "oga", "opus",
+  "aif", "aiff", "aifc", "caf",
+];
+
+const NATIVE_EXT = new Set([...NATIVE_VIDEO_EXT, ...NATIVE_IMAGE_EXT, ...NATIVE_AUDIO_EXT]);
 
 const PROXY_EXT = new Set([
   "mkv", "avi", "ts", "m2ts", "mts", "wmv", "flv",
@@ -42,10 +51,18 @@ export function mediaPlayability(pathOrName: string, mimeType = ""): MediaPlayab
     if (PROXY_EXT.has(ext)) return "proxy";
   }
   const mime = mimeType.toLowerCase();
-  if (mime.startsWith("video/") || mime.startsWith("image/")) return "native";
+  if (mime.startsWith("video/") || mime.startsWith("image/") || mime.startsWith("audio/")) return "native";
   if (mime && mime !== "application/octet-stream") return "unsupported";
   // Нет хромых улик (нет расширения, нет MIME) — не судим.
   return "native";
+}
+
+/** Аудио-носитель (по расширению или MIME): играется тем же <video>,
+ *  что и видео, — шкала, плейхед и маркеры работают как у видео. */
+export function isAudioMedia(pathOrName: string, mimeType = ""): boolean {
+  const ext = mediaExtension(pathOrName);
+  if (ext && NATIVE_AUDIO_EXT.includes(ext)) return true;
+  return mimeType.toLowerCase().startsWith("audio/");
 }
 
 /** Человекочитаемая причина отказа для тоста.
