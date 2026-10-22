@@ -418,10 +418,17 @@ select {
   backdrop-filter: blur(20px);
   font-size: 12px;
 }
+/* tb_1792634247_72740_2: шапка — ручка перетаскивания карточки. */
 .question-card-side-head {
   display: flex;
   align-items: center;
   gap: 8px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.question-card-side-head:active {
+  cursor: grabbing;
 }
 .question-card-side-text {
   flex: 1 1 auto;
@@ -444,6 +451,12 @@ select {
 .question-card-side-row {
   display: flex;
   gap: 6px;
+}
+/* tb_1792634443_73606_2: на одном файле может быть несколько вопросов —
+   оператор должен видеть, что он ответил не на все. */
+.question-card-side-progress {
+  font-size: 11px;
+  opacity: 0.75;
 }
 .question-card-side-choice,
 .question-card-side-verdict {

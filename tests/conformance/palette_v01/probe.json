@@ -1,0 +1,9 @@
+{
+  "schema": "vetka.cut.probe/1",
+  "items": {
+    "/fixture/palette_v01/P1755160.MOV": { "durationSec": 60.0, "width": 3840, "height": 2160, "hasAudio": true },
+    "/fixture/palette_v01/P1755144.MOV": { "durationSec": 55.0, "width": 3840, "height": 2160, "hasAudio": true },
+    "/fixture/palette_v01/P1755162.MOV": { "durationSec": 70.0, "width": 3840, "height": 2160, "hasAudio": true },
+    "/fixture/palette_v01/P1755146.MOV": { "durationSec": 30.0, "width": 3840, "height": 2160, "hasAudio": true }
+  }
+}

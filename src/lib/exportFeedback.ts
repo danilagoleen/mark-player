@@ -17,19 +17,16 @@ export function resolveExportToast(
   if (result === null) return "No markers to export.";
   switch (result.status) {
     case "saved":
+      // tb_1792634443_73606_2: путь целиком, а не только имя — оператор
+      // должен видеть, в какую папку реально уехал экспорт.
       return kind === "xml" && fpsNote
-        ? `Saved: ${basename(result.path)} — ${fpsNote}.`
-        : `Saved: ${basename(result.path)}`;
+        ? `Saved: ${result.path} — ${fpsNote}.`
+        : `Saved: ${result.path}`;
     case "cancelled":
       return null;
     case "failed":
       return `Export failed: ${result.error}`;
   }
-}
-
-function basename(path: string): string {
-  const parts = path.split(/[/\\]/);
-  return parts[parts.length - 1] || path;
 }
 
 // VETKA-промо: тост vetka-add (плеер работает на нас). 10 секунд с плавным

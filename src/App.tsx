@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
   computeDreamScore,
   computeDisplayedBox,
@@ -40,13 +40,35 @@ import {
 import { pushTransportTrace, shouldHideTransport, type TransportTraceEntry } from "./lib/transportVisibility";
 import { SCRUB_PREVIEW_TIMEOUT_MS, isScrubSettled } from "./lib/scrubSeek";
 import { PLAYER_SEEK_REQUEST_KEY, parseSeekRequest } from "./lib/markerSeek";
+import { clampCardPosition, loadCardPosition, saveCardPosition, type CardPoint } from "./lib/questionCard";
 import { parseCutsheet, resolveCutsheetForMedia, type CutsheetSegment } from "./lib/cutsheet";
 import { PLAYER_PLAY_REQUEST_KEY, PLAYLIST_RELOAD_EVENT, notifyPlaylistReloaded, parsePlayRequest } from "./lib/playlistPlay";
 import { buildUIManifest, type UIManifest } from "./lib/uiManifest";
+import {
+  QUEUE_EVENT_NAME,
+  buildAck,
+  cachedAckFor,
+  commandIdForPlaylistId,
+  describeAck,
+  inlinePlaylistForCommand,
+  isAgentCommandExpired,
+  numericArg,
+  parseAgentCommand,
+  readQuestionCommandId,
+  rememberAck,
+  rememberQuestionCommandId,
+  serializeAck,
+  type AgentAck,
+  type AgentCommand,
+  type AgentCommandEvent,
+} from "./lib/agentQueue";
 import { DOOR_IDS, checkModuleDoor, doorClickTransition, doorEndpoint, doorLabel, type DoorId, type ModuleDoor } from "./lib/moduleDoors";
 import type { ProbeResult } from "./lib/nativeWindow";
+import { dirOfPath, joinForDialog } from "./lib/exportPaths";
 import { createEmptyPlaylist, savePlaylist, loadPlaylist, addEntry, getNextEntryFromCursor, loadPlaybackMode, sanitizePlaylistFilename, trackOpenedFile, type QuestionPlaylistEntry } from "./lib/playlist";
-import { answersFromMarkers, filterAnswersToPlaylist, findQuestionEntryAtTime, formatAnswerReplyText, lerpQuestionBox, mergeAnswerRecords, normalizeQuestionEntry, readAnswersOutbox, readQuestionPlaylistPath, rememberQuestionPlaylistPath, resolveActiveEntry, resolveQuestionSnapTime, serializeAnswersFile, writeAnswersOutbox, isQuestionPlaylist, type AnswerRecord, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
+import { answersFromMarkers, buildAnswersDocument, filterAnswersToPlaylist, findQuestionEntryAtTime, formatAnswerReplyText, lerpQuestionBox, mergeAnswerRecords, normalizeQuestionEntry, parseAnswersDocument, questionFilePosition, readAnswersOutbox, readQuestionPlaylistPath, rememberQuestionPlaylistPath, resolveActiveEntry, resolveAnswers, resolveQuestionSnapTime, writeAnswersOutbox, isQuestionPlaylist, type AnswerRecord, type AnswersDocument, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
+import { writeAnswersAckFile, writeAnswersDocumentFile, sanitizeAnswersFileOnDisk } from "./lib/questionAnswersFile";
+import { createSessionReporter, type SessionReporter } from "./lib/sessionReporter";
 import { isSameMediaPath, resolveMediaContentHash } from "./lib/mediaOpen";
 import { isAudioMedia, mediaPlayability, mediaRefusalReason } from "./lib/mediaPlayability";
 import { markerBelongsToMedia, notifyMarkersChanged, notifyMediaChanged, resolveExternalMarkers, MARKERS_CHANGED_EVENT, MARKERS_RELOAD_EVENT, type MediaIdentity } from "./lib/markersSync";
@@ -94,6 +116,7 @@ import {
   resolveSubtitleTrackKey,
   saveSubtitleTrack,
   removeSubtitleTrack,
+  type SubtitleCue,
   type SubtitleStore,
 } from "./lib/subtitles";
 import { SubtitleOverlay } from "./components/subtitles/SubtitleOverlay";
@@ -863,6 +886,10 @@ function App() {
   const [inOutPlayOn, setInOutPlayOn] = useState<boolean>(() => readInOutPlayEnabled());
   const inOutPlayOnRef = useRef(inOutPlayOn);
   const inOutPrevTRef = useRef(0);
+  // tb_1792536109_79489_5: play_range из очереди команд — окно, которое
+  // играет ровно до out и встаёт на паузу (не зависит от маркеров-ножниц,
+  // чтобы агент показывал фрагмент, даже если скобок в файле нет).
+  const playRangeRef = useRef<{ in: number; out: number } | null>(null);
   // tb_1791686462_1275_1: разовый авто-старт plain-записи с первой [
   // скобки (взводит commitAdvance, гасят failAdvance и ручной путь,
   // срабатывает эффектом ниже, одноразовый).
@@ -898,6 +925,45 @@ function App() {
   const questionSnapKeyRef = useRef<string | null>(null);
   const [questionChoice, setQuestionChoice] = useState<string | null>(null);
   const [questionComment, setQuestionComment] = useState("");
+  // tb_1792634443_73606_2: прогресс ответов этого плейлиста — источник
+  // answers.json (санитайз при открытии). Нужен карточке для «Вопрос 1/2».
+  const [answeredQuestionIds, setAnsweredQuestionIds] = useState<Set<string>>(() => new Set());
+  const answersDocRef = useRef<AnswersDocument | null>(null);
+  const answersCompleteRef = useRef(false);
+  const questionFilePos = useMemo(() => {
+    if (!activeQuestion?.question_id || !currentFilePath) return null;
+    try {
+      return questionFilePosition(
+        loadPlaylist()?.entries,
+        currentFilePath,
+        activeQuestion.question_id,
+        answeredQuestionIds,
+      );
+    } catch {
+      return null;
+    }
+  }, [activeQuestion, currentFilePath, answeredQuestionIds]);
+  // tb_1792634247_72740_2: карточку можно двигать за шапку. Позиция — px
+  // относительно positioned-родителя, персист в LS, кламп по кадру.
+  const [questionCardPos, setQuestionCardPos] = useState<CardPoint | null>(() => loadCardPosition());
+  const questionCardPosRef = useRef<CardPoint | null>(questionCardPos);
+  questionCardPosRef.current = questionCardPos;
+  const questionCardRef = useRef<HTMLDivElement | null>(null);
+  const questionCardDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+    bounds: { width: number; height: number };
+    card: { width: number; height: number };
+  } | null>(null);
+  // tb_1792634247_72740_2: X не должен «отскакивать» — follow-эффект
+  // реактивировал карточку на следующем тике, пока плейхед в скобках.
+  // Флаг живёт в памяти сессии: рестарт снова показывает карточку.
+  const questionCardDismissedRef = useRef(false);
+  const lastDismissedQuestionRef = useRef<QuestionEntry | null>(null);
+  const reopenQuestionCardAtRef = useRef<(sec: number) => void>(() => {});
   function clearActiveQuestion(): void {
     questionRangeRef.current = null;
     questionPathRef.current = null;
@@ -906,6 +972,124 @@ function App() {
     setQuestionChoice(null);
     setQuestionComment("");
   }
+  function dismissQuestionCard(): void {
+    lastDismissedQuestionRef.current = activeQuestionRef.current;
+    questionCardDismissedRef.current = true;
+    clearActiveQuestion();
+  }
+  // Клик по строке комментария в Comments уже шлёт seek (lib/markerSeek.ts).
+  // На этом же событии возвращаем закрытую карточку: вопрос по времени клика,
+  // иначе последний закрытый, иначе первая запись текущего файла.
+  function reopenQuestionCardAt(sec: number): void {
+    if (!questionCardDismissedRef.current) return;
+    const path = currentFilePathRef.current;
+    if (!path) return;
+    questionCardDismissedRef.current = false;
+    let hit: QuestionEntry | null = null;
+    try {
+      hit = findQuestionEntryAtTime(loadPlaylist()?.entries, path, sec);
+    } catch {
+      hit = null;
+    }
+    if (!hit?.question_id) {
+      const last = lastDismissedQuestionRef.current;
+      if (last?.question_id && last.path === path) hit = last;
+    }
+    if (hit?.question_id) {
+      lastDismissedQuestionRef.current = null;
+      activateQuestionFor(path, hit.question_id, hit);
+      return;
+    }
+    try {
+      const { entry, index } = resolveActiveEntry(loadPlaylist()?.entries, { path });
+      if (entry?.question_id) activateQuestionFor(path, entry.question_id, entry, index);
+    } catch {
+      // плейлиста нет — карточку вернуть нечем
+    }
+  }
+  reopenQuestionCardAtRef.current = reopenQuestionCardAt;
+  function questionCardGeometry(): {
+    card: { width: number; height: number };
+    bounds: { width: number; height: number };
+    offset: { x: number; y: number };
+    rect: DOMRect;
+  } | null {
+    const card = questionCardRef.current;
+    if (!card) return null;
+    const rect = card.getBoundingClientRect();
+    const parent = card.offsetParent as HTMLElement | null;
+    const parentRect = parent?.getBoundingClientRect();
+    return {
+      rect,
+      card: { width: rect.width, height: rect.height },
+      bounds: parentRect
+        ? { width: parentRect.width, height: parentRect.height }
+        : { width: window.innerWidth, height: window.innerHeight },
+      offset: parentRect ? { x: parentRect.left, y: parentRect.top } : { x: 0, y: 0 },
+    };
+  }
+  function beginQuestionCardDrag(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("button, input, textarea, select, a")) return;
+    const geo = questionCardGeometry();
+    if (!geo) return;
+    const origin = questionCardPosRef.current ?? {
+      x: geo.rect.left - geo.offset.x,
+      y: geo.rect.top - geo.offset.y,
+    };
+    questionCardDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: origin.x,
+      originY: origin.y,
+      bounds: geo.bounds,
+      card: geo.card,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  }
+  function moveQuestionCard(event: ReactPointerEvent<HTMLDivElement>): void {
+    const drag = questionCardDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setQuestionCardPos(clampCardPosition(
+      { x: drag.originX + event.clientX - drag.startX, y: drag.originY + event.clientY - drag.startY },
+      drag.bounds,
+      drag.card,
+    ));
+  }
+  function endQuestionCardDrag(event: ReactPointerEvent<HTMLDivElement>): void {
+    const drag = questionCardDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    questionCardDragRef.current = null;
+    if (questionCardPosRef.current) saveCardPosition(questionCardPosRef.current);
+  }
+  useEffect(() => {
+    const onResize = () => {
+      if (!questionCardPosRef.current) return;
+      const geo = questionCardGeometry();
+      if (!geo) return;
+      const clamped = clampCardPosition(questionCardPosRef.current, geo.bounds, geo.card);
+      setQuestionCardPos(clamped);
+      saveCardPosition(clamped);
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  // Позиция из LS могла сохраниться при большем окне — на первом показе
+  // карточки подтягиваем её внутрь кадра.
+  useEffect(() => {
+    const pos = questionCardPosRef.current;
+    if (!activeQuestion || !pos) return;
+    const geo = questionCardGeometry();
+    if (!geo) return;
+    const clamped = clampCardPosition(pos, geo.bounds, geo.card);
+    if (clamped.x !== pos.x || clamped.y !== pos.y) {
+      setQuestionCardPos(clamped);
+      saveCardPosition(clamped);
+    }
+  }, [activeQuestion]);
   // tb_1791819024_26192_2: плейлист пересобрали (Clear/импорт в панели) —
   // карточки мёртвой записи не держим. Зовут слушатели reload (refs свежие).
   function revalidateActiveQuestion(): void {
@@ -995,6 +1179,10 @@ function App() {
       },
     });
     setQuestionComment("");
+    const questionIds = entries
+      .map((e) => e.question_id)
+      .filter((x): x is string => typeof x === "string" && x.length > 0);
+    const playlistId = typeof playlist?.id === "string" && playlist.id ? playlist.id : "playlist";
     if (isTauriRuntimeSync()) {
       const playlistPath = readQuestionPlaylistPath();
       if (playlistPath) {
@@ -1009,15 +1197,24 @@ function App() {
           } catch {
             // файла ещё нет — выжимка первая
           }
-          // tb_1792431205_48582_4: в файле могли остаться чужие ответы
-          // (до правки outbox был общим на браузер) — держим только вопросы
-          // этого плейлиста и то, что пришло прямо сейчас.
-          const ownIds = new Set<string>([
-            ...entries.map((e) => e.question_id).filter((x): x is string => !!x),
-            ...records.map((r) => r.question_id),
-          ]);
-          existing = filterAnswersToPlaylist(existing, ownIds);
-          await fs.writeTextFile(answersPath, serializeAnswersFile(mergeAnswerRecords(existing, records)));
+          // tb_1792634443_73606_2: документ с прогрессом, только свои
+          // question_id (buildAnswersDocument фильтрует). Агент читает файл
+          // как источник истины — чужих ответов там больше нет.
+          const doc = buildAnswersDocument(mergeAnswerRecords(existing, records), {
+            playlistId,
+            questionIds,
+          });
+          await writeAnswersDocumentFile(playlistPath, doc);
+          answersDocRef.current = doc;
+          setAnsweredQuestionIds(new Set(doc.answered_question_ids));
+          // complete стал true — автоматический сигнал агенту (один раз).
+          if (doc.complete && !answersCompleteRef.current) {
+            const commandId = readQuestionCommandId(playlistPath) ?? commandIdForPlaylistId(doc.playlist_id);
+            void writeAnswersAckFile(doc, commandId, "auto").catch(() => {});
+          }
+          answersCompleteRef.current = doc.complete;
+          // tb_1792532431_93509_9: ответ — событие отчёта (answers из маркеров).
+          void sessionReporter.answered();
           recordAnswer();
           setContextToast(`Saved ${ANSWER_BUTTON_LABEL[verdict]} (${verdict}) → ${qid} + reply in Comments.`);
           return;
@@ -1036,12 +1233,47 @@ function App() {
       ...records.map((r) => r.question_id),
     ]);
     writeAnswersOutbox(mergeAnswerRecords(filterAnswersToPlaylist(readAnswersOutbox(), ownIds), records));
+    void sessionReporter.answered();
     recordAnswer();
     setContextToast(
       isTauriRuntimeSync()
         ? `Saved ${ANSWER_BUTTON_LABEL[verdict]} (${verdict}) → ${qid} locally (open the question playlist from file for answers.json) + reply in Comments.`
         : `Saved ${ANSWER_BUTTON_LABEL[verdict]} (${verdict}) → ${qid} (web outbox) + reply in Comments.`,
     );
+  }
+  // tb_1792634443_73606_2: явный сигнал агенту даже при неполных ответах
+  // (контракт Commander 22.10, кнопка в карточке).
+  async function sendAnswersToAgent(): Promise<void> {
+    const playlistPath = readQuestionPlaylistPath();
+    const doc = answersDocRef.current;
+    if (!playlistPath || !doc) {
+      setContextToast("Send to agent: open a question playlist and answer first.");
+      return;
+    }
+    try {
+      const commandId = readQuestionCommandId(playlistPath) ?? commandIdForPlaylistId(doc.playlist_id);
+      const target = await writeAnswersAckFile(doc, commandId, "operator");
+      setContextToast(`Sent to agent: ${target}`);
+    } catch {
+      setContextToast("Send to agent: could not write ack file.");
+    }
+  }
+  // tb_1792634443_73606_2: панель плейлиста импортировала/пересобрала
+  // плейлист — перечитываем answers.json, чтобы бейдж и кнопка не врали.
+  async function refreshAnswersProgress(): Promise<void> {
+    const playlistPath = readQuestionPlaylistPath();
+    if (!playlistPath || !isTauriRuntimeSync()) return;
+    try {
+      const fs = await import("@tauri-apps/plugin-fs");
+      const { answersPathFor } = await import("./lib/questionPlaylist");
+      const doc = parseAnswersDocument(await fs.readTextFile(answersPathFor(playlistPath)));
+      if (!doc) return;
+      answersDocRef.current = doc;
+      answersCompleteRef.current = doc.complete;
+      setAnsweredQuestionIds(new Set(doc.answered_question_ids));
+    } catch {
+      // файла ещё нет — состояние прежнее
+    }
   }
   // tb_1791839608_26192_1: гард карточки — ответу нужен маркер-родитель.
   // Без qmat кнопки гаснут (кейс 0.25.57: Confirm молча ничего не создал).
@@ -1067,6 +1299,11 @@ function App() {
         return;
       }
       const norm = { ...(hit as QuestionEntry), ...normalizeQuestionEntry(hit) } as QuestionEntry;
+      // tb_1792634247_72740_2: явная активация (открытие записи, клик из
+      // панели, возврат по комментарию) снимает «оператор закрыл карточку».
+      // Follow сюда не доходит, пока флаг стоит (см. эффект ниже).
+      questionCardDismissedRef.current = false;
+      lastDismissedQuestionRef.current = null;
       setActiveQuestion(norm);
       setQuestionChoice(null);
       setQuestionComment("");
@@ -1447,6 +1684,7 @@ function App() {
         }).then((fn) => { unlistenChanged = fn; }).catch(() => {});
         listen(PLAYLIST_RELOAD_EVENT, () => {
           revalidateActiveQuestion();
+          void refreshAnswersProgress();
         }).then((fn) => { unlistenPlaylist = fn; }).catch(() => {});
       }).catch(() => {});
     }
@@ -1551,14 +1789,95 @@ function App() {
   // позицию берём из живого video.currentTime.
   const markersRef = useRef(markers);
   markersRef.current = markers;
+  // tb_1792532431_93509_9: отчёт о показе <плейлист>.session.json — одна
+  // правда для агента о том, где человек остановился (разведка §5).
+  // answers.json НЕ трогаем: его пишет answerQuestion, писатель там один.
+  // tb_1792532431_93509_9: четыре события отчёта (пауза, смена записи, ответ,
+  // закрытие окна) проводит sessionReporter — он тестируется без App.
+  // answers.json НЕ трогаем: его пишет answerQuestion, писатель там один.
+  const currentMediaKeyRef = useRef(currentMediaKey);
+  currentMediaKeyRef.current = currentMediaKey;
+  const sessionReporterRef = useRef<SessionReporter | null>(null);
+  if (!sessionReporterRef.current) {
+    sessionReporterRef.current = createSessionReporter({
+      snapshot: () => {
+        if (!isTauriRuntimeSync()) return null;
+        const playlistPath = readQuestionPlaylistPath();
+        if (!playlistPath) return null;
+        let entries: QuestionEntry[] = [];
+        try {
+          const pl = loadPlaylist();
+          entries = Array.isArray(pl?.entries) ? (pl.entries as unknown as QuestionEntry[]) : [];
+        } catch {
+          entries = [];
+        }
+        const path = currentFilePathRef.current;
+        const entry = currentEntryRef.current;
+        let answers = 0;
+        try {
+          const records = answersFromMarkers(markersRef.current, {
+            resolveLegacyQuestionId: (parentId) =>
+              entries.find((e) => e.question_id && parentId.startsWith(materializedMarkerPrefix(e.question_id)))?.question_id,
+            choicesOf: (questionId) => {
+              const hit = entries.find((e) => e.question_id === questionId);
+              return Array.isArray(hit?.choices) ? (hit.choices as string[]) : undefined;
+            },
+          });
+          answers = resolveAnswers(records).size;
+        } catch {
+          answers = 0;
+        }
+        return {
+          playlist: playlistPath,
+          entries,
+          entryIndex: entry.index ?? -1,
+          questionId: entry.questionId ?? null,
+          path,
+          mediaKey: currentMediaKeyRef.current,
+          tSec: Number(videoRef.current?.currentTime ?? 0),
+          playing: !(videoRef.current?.paused ?? true),
+          answers,
+          marks: markersRef.current,
+        };
+      },
+    });
+  }
+  const sessionReporter = sessionReporterRef.current;
+  // tb_1792532431_93509_9: закрытие окна — последнее событие отчёта: сначала
+  // пишем, потом закрываем (preventDefault → await → destroy). beforeunload —
+  // для веба, где Tauri-хука нет.
+  useEffect(() => {
+    if (!isTauriRuntimeSync()) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
+      const win = getCurrentWindow();
+      win.onCloseRequested(async (event) => {
+        event.preventDefault();
+        await sessionReporter.close(Number(videoRef.current?.currentTime ?? 0));
+        void win.destroy();
+      }).then((off) => {
+        if (disposed) off();
+        else unlisten = off;
+      }).catch(() => {});
+    }).catch(() => {});
+    const onBeforeUnload = () => {
+      void sessionReporter.close(Number(videoRef.current?.currentTime ?? 0));
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      disposed = true;
+      if (unlisten) unlisten();
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // 0.20: undo/redo истории маркеров. Стек живёт в ref (не в state —
   // перерендер на каждый push не нужен); "текущим" для future служит
   // markersRef. Чужие записи из storage-событий стек не пушат: last-writer-wins.
   const markerHistoryRef = useRef(createMarkerHistory<PlayerTimeMarker>());
   const performUndoRef = useRef(() => {});
   const performRedoRef = useRef(() => {});
-  const currentMediaKeyRef = useRef(currentMediaKey);
-  currentMediaKeyRef.current = currentMediaKey;
   // 0.22: зеркало хеша + токен stale-защиты: хеш считается асинхронно,
   // открытие второго файла до готовности первого — чужой хеш не садится.
   const contentHashRef = useRef<string | null>(null);
@@ -2584,8 +2903,10 @@ function App() {
 
   async function performExportSrt(): Promise<void> {
     if (!srtContent) { announceExport("srt", true, null); return; }
-    const result = await saveFileDialogResult(srtContent, `${fileName || "markers"}.srt`, {
+    const name = `${fileName || "markers"}.srt`;
+    const result = await saveFileDialogResult(srtContent, name, {
       filters: [{ name: "SubRip", extensions: ["srt"] }],
+      defaultPath: joinForDialog(dirOfPath(currentFilePathRef.current), name),
     });
     announceExport("srt", false, result);
   }
@@ -2595,8 +2916,10 @@ function App() {
     const mediaEvents = provisionalEvents.filter((e) => e.media_path === currentMediaKey);
     if (!mediaMarkers.length && !mediaEvents.length) { announceExport("json", true, null); return; }
     const json = exportToSidecar(mediaMarkers, mediaEvents, currentMediaKey || "", contentHash);
-    const result = await saveFileDialogResult(json, `${fileName || "markers"}.sos.json`, {
+    const name = `${fileName || "markers"}.sos.json`;
+    const result = await saveFileDialogResult(json, name, {
       filters: [{ name: "JSON", extensions: ["json"] }],
+      defaultPath: joinForDialog(dirOfPath(currentFilePathRef.current), name),
     });
     announceExport("json", false, result);
   }
@@ -2633,6 +2956,7 @@ function App() {
       hasAudio: resolveXmlHasAudio(videoEl?.audioTracks?.length, Boolean(probeResult?.ok), Boolean(probeResult?.audio_codec)),
     }), `${fileName || "markers"}.xml`, {
       filters: [{ name: "XML", extensions: ["xml"] }],
+      defaultPath: joinForDialog(dirOfPath(currentFilePathRef.current), `${fileName || "markers"}.xml`),
     });
     announceExport("xml", false, result, combinedNote);
   }
@@ -3187,24 +3511,37 @@ function App() {
   async function performExportPlaylistJson(): Promise<void> {
     const col = await collectPlaylistExportItems();
     if (!col) { announceExport("json", true, null); return; }
-    const files = col.items.map((it) => ({
-      file: it.name,
-      markers: it.markerList.map((m) => ({
-        marker_id: m.marker_id, kind: m.kind, start_sec: m.start_sec, end_sec: m.end_sec,
-        anchor_sec: m.anchor_sec, label: m.label, text: m.text, author: m.author, reply_to: m.reply_to,
-        created_at: m.created_at,
-      })),
-      provisional_events: provisionalEvents
-        .filter((e) => it.assetUrl && e.media_path === it.assetUrl)
-        .map((e) => ({
-          provisional_event_id: e.provisional_event_id, event_type: e.event_type,
-          start_sec: e.start_sec, end_sec: e.end_sec, text: e.text, created_at: e.created_at,
+    // tb_1792634443_73606_2: два вопроса на один файл — это ДВЕ записи
+    // плейлиста, но ОДИН файл. Секция markers_playlist.json одна: иначе
+    // каждый маркер/ответ дублируется. Дедуп по пути, порядок — первый.
+    const seenFiles = new Set<string>();
+    const files: Parameters<typeof buildPlaylistMarkersJson>[1] = [];
+    for (const it of col.items) {
+      const key = it.path || it.name;
+      if (seenFiles.has(key)) continue;
+      seenFiles.add(key);
+      files.push({
+        file: it.name,
+        markers: it.markerList.map((m) => ({
+          marker_id: m.marker_id, kind: m.kind, start_sec: m.start_sec, end_sec: m.end_sec,
+          anchor_sec: m.anchor_sec, label: m.label, text: m.text, author: m.author, reply_to: m.reply_to,
+          created_at: m.created_at,
         })),
-    }));
+        provisional_events: provisionalEvents
+          .filter((e) => it.assetUrl && e.media_path === it.assetUrl)
+          .map((e) => ({
+            provisional_event_id: e.provisional_event_id, event_type: e.event_type,
+            start_sec: e.start_sec, end_sec: e.end_sec, text: e.text, created_at: e.created_at,
+          })),
+      });
+    }
     if (!files.some((f) => f.markers.length || f.provisional_events.length)) { announceExport("json", true, null); return; }
     const json = buildPlaylistMarkersJson(col.playlistName, files);
-    const result = await saveFileDialogResult(json, `${sanitizePlaylistFilename(col.playlistName)}.markers.json`, {
+    const name = `${sanitizePlaylistFilename(col.playlistName)}.markers.json`;
+    const playlistDir = dirOfPath(readQuestionPlaylistPath()) || dirOfPath(col.items[0]?.path);
+    const result = await saveFileDialogResult(json, name, {
       filters: [{ name: "JSON", extensions: ["json"] }],
+      defaultPath: joinForDialog(playlistDir, name),
     });
     announceExport("json", false, result);
   }
@@ -3671,6 +4008,19 @@ function App() {
   const activeSubtitleCues = subtitlesVisible && activeSubtitleTrack
     ? findCuesAt(activeSubtitleTrack.cues, subtitleClock)
     : [];
+  // tb_1792547382_5133_1: подпись записи (caption) поверх кадра на in..out.
+  // Это данные агента, а не дорожка субтитров: гаснет по out_sec и не
+  // подчиняется переключателю Subtitle Show. В Premiere не уезжает.
+  const captionCues: SubtitleCue[] = (() => {
+    const text = activeQuestion?.caption;
+    if (!text) return [];
+    const start = typeof activeQuestion.in_sec === "number" ? activeQuestion.in_sec : 0;
+    const end = typeof activeQuestion.out_sec === "number" ? activeQuestion.out_sec : Number.POSITIVE_INFINITY;
+    // currentTime, а не subtitleClock: при выключенных субтитрах rVFC-цикл
+    // не пишет subtitleTime, и подпись замерла бы на последней реплике.
+    if (currentTime < start || currentTime > end) return [];
+    return [{ start, end, text }];
+  })();
 
   menuHandlersRef.current.onImportSrt = () => {
     const input = document.createElement("input");
@@ -4131,6 +4481,15 @@ function App() {
         fsTransitionTimerRef.current = null;
       }
       setFsTransition(false);
+      // tb_1792631872_72740_1: панели Comments/Playlist остаются выше плеера
+      // в оконном режиме, но в fullscreen они закрывают кадр. Rust прячет
+      // дочерние окна на входе и возвращает на выходе; панель, открытая во
+      // время fullscreen, создаётся скрытой самим open_panel_window.
+      if (isTauriRuntimeSync()) {
+        void import("@tauri-apps/api/core")
+          .then(({ invoke }) => invoke("set_panel_windows_visible", { visible: !next }))
+          .catch(() => {});
+      }
       settleAfterFlip(next);
     };
     void syncFullscreen();
@@ -4282,6 +4641,9 @@ function App() {
   // мигания); ввод не теряем (dirty-guard + один тост на вопрос).
   useEffect(() => {
     if (mediaKind !== "video" || !currentFilePath) return;
+    // tb_1792634247_72740_2: оператор закрыл карточку X — follow молчит,
+    // пока её не вернут кликом по комментарию (или новой записью).
+    if (questionCardDismissedRef.current) return;
     // tb_1791865804_84020_6: транзит на другой файл — карточкой владеет
     // открывающий тракт (playlist:play/handleOpenPath уже активировали
     // нужную); follow здесь видел СТАРЫЙ файл и откатывал карточку назад.
@@ -4304,6 +4666,19 @@ function App() {
     followBlockedRef.current = null;
     activateQuestionFor(currentFilePath, hit.question_id, hit);
   }, [currentTime, currentFilePath, mediaKind, activeQuestion, questionComment, questionChoice]);
+
+  // tb_1792634247_72740_2: первый запуск/открытие записи — карточка видна
+  // сразу, не дожидаясь тика follow внутри скобок. Закрытую X не воскрешаем.
+  useEffect(() => {
+    if (mediaKind !== "video" || !currentFilePath) return;
+    if (questionCardDismissedRef.current || activeQuestionRef.current) return;
+    try {
+      const { entry, index } = resolveActiveEntry(loadPlaylist()?.entries, { path: currentFilePath });
+      if (entry?.question_id) activateQuestionFor(currentFilePath, entry.question_id, entry, index);
+    } catch {
+      // плейлиста нет — показывать нечего
+    }
+  }, [currentFilePath, mediaKind]);
 
   // tb_1791686462_1275_1: авто-старт plain-записи со штатной [ скобки —
   // вопроса нет (activeQuestion пуст), а скобки на шкале есть. Разовый флаг
@@ -4344,6 +4719,9 @@ function App() {
         // tb_1791843935_63972_2: клик-сик из панели — навигация.
         markManualSeek();
       }
+      // tb_1792634247_72740_2: клик по строке в Comments возвращает
+      // закрытую карточку вопроса.
+      reopenQuestionCardAtRef.current(sec);
     };
     window.addEventListener("storage", onStorageSeek);
     return () => window.removeEventListener("storage", onStorageSeek);
@@ -4364,6 +4742,9 @@ function App() {
           // tb_1791843935_63972_2: клик-сик из панели — навигация.
           markManualSeek();
         }
+        // tb_1792634247_72740_2: клик по строке в Comments возвращает
+        // закрытую карточку вопроса.
+        reopenQuestionCardAtRef.current(sec);
       }).then((fn) => { unlisten = fn; });
     }).catch(() => {});
     return () => { unlisten?.(); };
@@ -4476,6 +4857,8 @@ function App() {
       // loop one / единственная plain-запись: окна нет — как раньше, с нуля.
       activateQuestionFor(next.path, nextQuestionId, next, found.index);
       currentEntryRef.current = { path: next.path, questionId: nextQuestionId, index: found.index };
+      // tb_1792532431_93509_9: смена записи — событие отчёта.
+      void sessionReporter.entryChange();
       const video = videoRef.current;
       const inT = normalizeQuestionEntry(next as unknown as Record<string, unknown>).in_sec;
       if (video) {
@@ -4519,6 +4902,7 @@ function App() {
       // по qid) + индекс в курсор, иначе B-стороны получали окно A.
       activateQuestionFor(next.path, nextQuestionId, next, found.index);
       currentEntryRef.current = { path: next.path, questionId: nextQuestionId, index: found.index };
+      void sessionReporter.entryChange();
       // tb_1791686462_1275_1: plain-запись без вопроса — авто-старт со
       // штатной [ скобки (разовый флаг, добьёт эффект выше). Ветвь
       // с вопросом — штатный эффект, флаг гасим.
@@ -4626,6 +5010,7 @@ function App() {
         const sameQid = (sameEntry as QuestionEntry).question_id ?? qid;
         switchCardToQuestion(path, sameQid, sameEntry, sameIndex);
         currentEntryRef.current = { path, questionId: sameQid, index: sameIndex >= 0 ? sameIndex : null };
+        void sessionReporter.answered();
         const inT = normalizeQuestionEntry(sameEntry as unknown as Record<string, unknown>).in_sec;
         const current = videoRef.current;
         if (current) {
@@ -4703,6 +5088,8 @@ function App() {
         // tb_1791865711_84020_5: курсор записи для автоперехода (дубли path).
         // tb_1791876286_57716_1: + индекс (сиблинги делят path+qid).
         currentEntryRef.current = { path, questionId: openedQid, index: openedIndex >= 0 ? openedIndex : null };
+        // tb_1792532431_93509_9: новая запись — событие отчёта.
+        void sessionReporter.entryChange();
         return;
       }
       const response = await fetch(path);
@@ -4714,6 +5101,7 @@ function App() {
       const openedQid = (openedEntry as QuestionEntry | null)?.question_id ?? null;
       switchCardToQuestion(path, openedQid, openedEntry, openedIndex);
       currentEntryRef.current = { path, questionId: openedQid, index: openedIndex >= 0 ? openedIndex : null };
+      void sessionReporter.entryChange();
     } catch {
       autoplayOnLoadRef.current = false;
       setContextToast(`Cannot open ${path.split("/").pop() || "media"}.`);
@@ -4832,78 +5220,256 @@ function App() {
     try {
       const path = await openFileDialog({ filters: [{ name: "Playlist JSON", extensions: ["json"] }] });
       if (!path) return;
-      const { readTextFile } = await import("@tauri-apps/plugin-fs");
-      const { deserializePlaylist } = await import("./lib/playlist");
-      const text = await readTextFile(path);
-      const fileLabel = path.split(/[\\/]/).pop() || path;
-      let parsed = deserializePlaylist(text);
-      if (!parsed) {
-        // tb_1791685802_1275_3: меню тоже ест рабочие форматы Беты —
-        // раньше их знала только панель (оператор: File → Open Playlist
-        // молча ничего не делал, а импорт из окна — работал).
-        const { importBetaBundleText } = await import("./lib/betaBundles");
-        parsed = await importBetaBundleText(text, path);
-      }
-      if (!parsed) {
-        setContextToast(`Not a playlist: ${fileLabel} (needs {entries: [...]} or a Beta bundle).`);
-        return;
-      }
-      savePlaylist(parsed);
-      // tb_1791521998_11250_5: ответы лягут рядом с этим файлом
-      rememberQuestionPlaylistPath(isQuestionPlaylist(parsed) ? path : null);
-      // tb_1791563210_29299_4: уже открытая панель сама не узнает — будим событием
-      notifyPlaylistReloaded();
-      // tb_1791854416_63972_5: меню открывает видео файла (один path записей) —
-      // раньше маркеры материализовались мимо currentMediaKey: Markers пуст,
-      // гард гасил Confirm (окно плейлиста работает, т.к. оператор открывает
-      // видео сам). Несколько разных — не гадаем, оператор выберет записью.
-      let openedBase: string | null = null;
-      if (isTauriRuntimeSync() && isQuestionPlaylist(parsed)) {
-        const single = singlePlaylistMediaPath(parsed.entries);
-        if (single) {
-          const target = decideMarkersImportTarget(
-            { mediaPath: single, contentHash: null },
-            currentFilePathRef.current,
-            true,
-          );
-          if (target.mode === "open") {
-            await handleOpenPath(target.path);
-            openedBase = target.path.split(/[\\/]/).pop() || target.path;
-          }
-        }
-      }
-      // tb_1791840835_63972_1: меню материализует вопросы так же, как панель
-      // (раньше клало записи без маркеров — карточка молчала по гарду;
-      // имя — fileLabel, поля name у файла Беты нет). Персист — эффектом
-      // markers→LS, чужие окна — событием.
-      const loadedLine = await materializePlaylistQuestions(parsed, fileLabel, {
-        // tb_1791861762_84020_3: дедуп по паре id+медиа — тот же вопрос на
-        // другом видео материализуется заново, а не режется как дубль.
-        readStoredKeys: () => new Set(markersRef.current.map((m) => markerDedupKey(m.marker_id, m.media_path, m.anchor_sec))),
-        appendMarkers: (fresh) => setMarkers((prev) => [...prev, ...(fresh as unknown as PlayerTimeMarker[])]),
-        resolveMediaUrl: (p) => toAssetUrl(p),
-        notifyChanged: () => notifyMarkersChanged(),
-      });
-      // tb_1792025130_97848_4: импорт обычного мульти-видео листа раньше
-      // визуально ничего не делал (видео не открывалось — только тост).
-      // Слово оператора 15.10: сразу показывать первое playable-видео
-      // на СТОПЕ (без автоплея); окно плейлиста открывается ниже, как раньше.
-      if (!openedBase && Array.isArray(parsed.entries) && parsed.entries.length > 0) {
-        const first = parsed.entries.find(
-          (e) => e && typeof e.path === "string" && mediaPlayability(e.path) === "native",
-        );
-        if (first) {
-          autoplayOnLoadRef.current = false;
-          await handleOpenPath(first.path);
-          openedBase = first.path.split(/[\\/]/).pop() || first.path;
-        }
-      }
-      setContextToast(openedBase ? `Opened ${openedBase}. ${loadedLine}` : loadedLine);
-      await openPanelWindow("panel-playlist", "playlist", "Playlist", 360, 500);
+      const { line, openedBase } = await openPlaylistPath(path);
+      setContextToast(openedBase ? `Opened ${openedBase}. ${line}` : line);
     } catch {
       setContextToast("Open Playlist: could not read the file.");
     }
   }
+
+  // tb_1792536109_79489_5: общий путь открытия плейлиста ПО ПУТИ, без
+  // диалога — им пользуются меню и очередь команд агента (рекон §7).
+  async function openPlaylistPath(path: string): Promise<{ line: string; openedBase: string | null }> {
+    const { readTextFile } = await import("@tauri-apps/plugin-fs");
+    const { deserializePlaylist } = await import("./lib/playlist");
+    const text = await readTextFile(path);
+    const fileLabel = path.split(/[\\/]/).pop() || path;
+    let parsed = deserializePlaylist(text);
+    if (!parsed) {
+      // tb_1791685802_1275_3: меню тоже ест рабочие форматы Беты —
+      // раньше их знала только панель (оператор: File → Open Playlist
+      // молча ничего не делал, а импорт из окна — работал).
+      const { importBetaBundleText } = await import("./lib/betaBundles");
+      parsed = await importBetaBundleText(text, path);
+    }
+    if (!parsed) {
+      throw new Error(`Not a playlist: ${fileLabel} (needs {entries: [...]} or a Beta bundle).`);
+    }
+    savePlaylist(parsed);
+    // tb_1791521998_11250_5: ответы лягут рядом с этим файлом
+    const questionPlaylist = isQuestionPlaylist(parsed);
+    rememberQuestionPlaylistPath(questionPlaylist ? path : null);
+    // tb_1792634443_73606_2: answers.json — источник истины для агента.
+    // Пересобираем при открытии: только свои question_id + прогресс;
+    // исходник один раз уезжает в .bak (файлы v03 — улики).
+    let answersNote = "";
+    if (questionPlaylist) {
+      try {
+        const questionIds = (parsed.entries ?? [])
+          .map((e) => (e as QuestionEntry).question_id)
+          .filter((x): x is string => typeof x === "string" && x.length > 0);
+        const clean = await sanitizeAnswersFileOnDisk(path, {
+          playlistId: typeof parsed.id === "string" && parsed.id ? parsed.id : "playlist",
+          questionIds,
+        });
+        answersDocRef.current = clean.doc;
+        answersCompleteRef.current = clean.doc.complete;
+        setAnsweredQuestionIds(new Set(clean.doc.answered_question_ids));
+        if (clean.foreignRemoved > 0) {
+          answersNote = ` Removed ${clean.foreignRemoved} foreign answer${clean.foreignRemoved === 1 ? "" : "s"} (backup .bak).`;
+        }
+      } catch {
+        // санитайз не удался — плейлист всё равно открываем
+      }
+    } else {
+      answersDocRef.current = null;
+      answersCompleteRef.current = false;
+      setAnsweredQuestionIds(new Set());
+    }
+    // tb_1791563210_29299_4: уже открытая панель сама не узнает — будим событием
+    notifyPlaylistReloaded();
+    // tb_1791854416_63972_5: меню открывает видео файла (один path записей) —
+    // раньше маркеры материализовались мимо currentMediaKey: Markers пуст,
+    // гард гасил Confirm (окно плейлиста работает, т.к. оператор открывает
+    // видео сам). Несколько разных — не гадаем, оператор выберет записью.
+    let openedBase: string | null = null;
+    if (isTauriRuntimeSync() && isQuestionPlaylist(parsed)) {
+      const single = singlePlaylistMediaPath(parsed.entries);
+      if (single) {
+        const target = decideMarkersImportTarget(
+          { mediaPath: single, contentHash: null },
+          currentFilePathRef.current,
+          true,
+        );
+        if (target.mode === "open") {
+          await handleOpenPath(target.path);
+          openedBase = target.path.split(/[\\/]/).pop() || target.path;
+        }
+      }
+    }
+    // tb_1791840835_63972_1: меню материализует вопросы так же, как панель
+    // (раньше клало записи без маркеров — карточка молчала по гарду;
+    // имя — fileLabel, поля name у файла Беты нет). Персист — эффектом
+    // markers→LS, чужие окна — событием.
+    const loadedLine = await materializePlaylistQuestions(parsed, fileLabel, {
+      // tb_1791861762_84020_3: дедуп по паре id+медиа — тот же вопрос на
+      // другом видео материализуется заново, а не режется как дубль.
+      readStoredKeys: () => new Set(markersRef.current.map((m) => markerDedupKey(m.marker_id, m.media_path, m.anchor_sec))),
+      appendMarkers: (fresh) => setMarkers((prev) => [...prev, ...(fresh as unknown as PlayerTimeMarker[])]),
+      resolveMediaUrl: (p) => toAssetUrl(p),
+      notifyChanged: () => notifyMarkersChanged(),
+    });
+    // tb_1792025130_97848_4: импорт обычного мульти-видео листа раньше
+    // визуально ничего не делал (видео не открывалось — только тост).
+    // Слово оператора 15.10: сразу показывать первое playable-видео
+    // на СТОПЕ (без автоплея); окно плейлиста открывается ниже, как раньше.
+    if (!openedBase && Array.isArray(parsed.entries) && parsed.entries.length > 0) {
+      const first = parsed.entries.find(
+        (e) => e && typeof e.path === "string" && mediaPlayability(e.path) === "native",
+      );
+      if (first) {
+        autoplayOnLoadRef.current = false;
+        await handleOpenPath(first.path);
+        openedBase = first.path.split(/[\\/]/).pop() || first.path;
+      }
+    }
+    await openPanelWindow("panel-playlist", "playlist", "Playlist", 360, 500);
+    return { line: `${loadedLine}${answersNote}`, openedBase };
+  }
+
+  // tb_1792536109_79489_5: глаголы очереди — исполнение (Rust уже проверил
+  // путь, срок жизни и структуру; здесь только действие и ack).
+  async function executeAgentVerb(cmd: AgentCommand, playlistsDir: string): Promise<void> {
+    const args = cmd.args;
+    switch (cmd.verb) {
+      case "open_playlist": {
+        const direct = typeof args.path === "string" ? args.path : "";
+        if (direct) {
+          rememberQuestionCommandId(direct, cmd.id);
+          await openPlaylistPath(direct);
+          return;
+        }
+        const doc = inlinePlaylistForCommand(cmd);
+        if (!doc) throw new Error("open_playlist: нужен args.path или непустой args.entries");
+        const { mkdir, writeTextFile } = await import("@tauri-apps/plugin-fs");
+        await mkdir(playlistsDir, { recursive: true });
+        const file = `${playlistsDir}/${doc.id}.playlist.json`;
+        await writeTextFile(file, JSON.stringify(doc, null, 2));
+        rememberQuestionCommandId(file, cmd.id);
+        await openPlaylistPath(file);
+        return;
+      }
+      case "open_file": {
+        const path = typeof args.path === "string" ? args.path : "";
+        if (!path) throw new Error("open_file: нужен args.path");
+        await handleOpenPath(path);
+        return;
+      }
+      case "seek": {
+        const t = numericArg(args, "t_sec");
+        if (t === null) throw new Error("seek: нужен args.t_sec (секунды, число)");
+        seekTransportTo(t, true);
+        return;
+      }
+      case "play_range": {
+        const inSec = numericArg(args, "in_sec");
+        const outSec = numericArg(args, "out_sec");
+        if (inSec === null || outSec === null || outSec <= inSec) {
+          throw new Error("play_range: нужны args.in_sec < args.out_sec");
+        }
+        playRangeRef.current = { in: inSec, out: outSec };
+        seekTransportTo(inSec, true);
+        void videoRef.current?.play().catch(() => {});
+        return;
+      }
+      case "next": {
+        playRangeRef.current = null;
+        if (!advanceToNextEntry()) throw new Error("next: в плейлисте нет следующей записи");
+        return;
+      }
+      case "pause": {
+        const t = numericArg(args, "t_sec");
+        if (t !== null) seekTransportTo(t, true);
+        videoRef.current?.pause();
+        return;
+      }
+      default:
+        throw new Error(`неизвестный глагол: ${String((cmd as { verb?: unknown }).verb)}`);
+    }
+  }
+
+  async function runAgentCommand(event: AgentCommandEvent): Promise<void> {
+    const parsed = parseAgentCommand(event.cmd);
+    if (parsed.ok) {
+      // Rust повторяет emit, пока ack не появился (первый emit может
+      // обогнать подписку WebView). Второй раз глагол не исполняем.
+      const cached = cachedAckFor(agentAckCacheRef.current, parsed.cmd);
+      if (cached !== null) {
+        try {
+          const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+          await writeTextFile(event.ack_path, cached);
+        } catch (err) {
+          console.warn("[agent-queue] ack rewrite failed", err);
+        }
+        return;
+      }
+    }
+    const rawId = (event.cmd as { id?: unknown } | null)?.id;
+    const fallbackId = typeof rawId === "string" && rawId ? rawId : "unknown";
+    let ack: AgentAck;
+    if (!parsed.ok) {
+      ack = buildAck({ id: fallbackId, status: "error", error: { code: parsed.code, message: parsed.message } });
+    } else if (isAgentCommandExpired(parsed.cmd)) {
+      ack = buildAck({
+        id: parsed.cmd.id,
+        verb: parsed.cmd.verb,
+        status: "expired",
+        error: { code: "expired", message: "команда истекла до исполнения" },
+      });
+    } else {
+      try {
+        await executeAgentVerb(parsed.cmd, event.playlists_dir);
+        ack = buildAck({ id: parsed.cmd.id, verb: parsed.cmd.verb, status: "done" });
+      } catch (err) {
+        ack = buildAck({
+          id: parsed.cmd.id,
+          verb: parsed.cmd.verb,
+          status: "error",
+          error: {
+            code: "execution_failed",
+            message: err instanceof Error ? err.message : String(err),
+          },
+        });
+      }
+    }
+    const ackText = serializeAck(ack);
+    if (parsed.ok) rememberAck(agentAckCacheRef.current, parsed.cmd.id, ackText);
+    try {
+      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+      await writeTextFile(event.ack_path, ackText);
+    } catch (err) {
+      console.warn("[agent-queue] ack write failed", err);
+    }
+    setContextToast(describeAck(ack));
+  }
+
+  const agentAckCacheRef = useRef(new Map<string, string>());
+  const runAgentCommandRef = useRef(runAgentCommand);
+  runAgentCommandRef.current = runAgentCommand;
+  // Очередь приходит событием из Rust (inbox/ → vetka-command). Подписка
+  // одна на окно; колбэк — через ref, чтобы не переподписываться на стейт.
+  useEffect(() => {
+    if (!isTauriRuntimeSync()) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<AgentCommandEvent>(QUEUE_EVENT_NAME, (event) => {
+          void runAgentCommandRef.current(event.payload);
+        }),
+      )
+      .then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      })
+      .catch((err) => {
+        console.warn("[agent-queue] listen failed", err);
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   async function handleOpenCutsheetFile(): Promise<void> {
     // File > Import > Cutsheet preview: открыть .cutsheet.json (ADR-06)
@@ -5480,6 +6046,8 @@ function App() {
                             setIsPlaying(false);
                             // tb_1791233024_7043_1: пауза — точная запись позиции для Resume.
                             recordPlaybackPositionExact(currentFilePathRef.current, Number(event.currentTarget.currentTime || 0));
+                            // tb_1792532431_93509_9: пауза — событие отчёта о показе.
+                            void sessionReporter.pause(Number(event.currentTarget.currentTime || 0));
                           }}
                           onError={() => {
                             // tb_1792441299_49541_7: сик не удался — не врём
@@ -5514,6 +6082,22 @@ function App() {
                             const video = event.currentTarget;
                             const prevT = inOutPrevTRef.current;
                             inOutPrevTRef.current = t;
+                            // tb_1792536109_79489_5: окно из play_range —
+                            // встаём на out и молчим (одноразово).
+                            const range = playRangeRef.current;
+                            if (range && isTimeMedia && !video.paused && t >= range.out) {
+                              playRangeRef.current = null;
+                              try {
+                                video.currentTime = range.out;
+                              } catch {
+                                // ignore — останется внешнее
+                              }
+                              video.pause();
+                              inOutPrevTRef.current = range.out;
+                              setSeekTarget(null);
+                              setCurrentTime(range.out);
+                              return;
+                            }
                             if (
                               inOutPlayOn &&
                               isTimeMedia &&
@@ -5611,8 +6195,8 @@ function App() {
                       )}
                       {/* tb_1791156671_82609_1: дорожка поверх кадра (fullscreen/mini/вертикаль —
                           якорь video-raster уже в размере видимого кадра). */}
-                      {subtitlesVisible ? (
-                        <SubtitleOverlay cues={activeSubtitleCues} frameHeight={snapshot.displayedHeight || 0} liftPx={subtitleLift} />
+                      {subtitlesVisible || captionCues.length > 0 ? (
+                        <SubtitleOverlay cues={[...(subtitlesVisible ? activeSubtitleCues : []), ...captionCues]} frameHeight={snapshot.displayedHeight || 0} liftPx={subtitleLift} />
                       ) : null}
                       {/* tb_1791754893_1275_4: рамка региона-лица поверх кадра.
                           Обычный режим: raster ровно размер кадра → доли
@@ -5918,11 +6502,19 @@ function App() {
                           маркеров вопроса кнопки гаснут + подсказка. */}
                       {mediaKind === "video" && activeQuestion && questionPathRef.current === currentFilePath ? (
                         <div
+                          ref={questionCardRef}
                           data-testid="question-card"
                           className="question-card-side"
+                          style={questionCardPos ? { left: questionCardPos.x, top: questionCardPos.y, transform: "none" } : undefined}
                           title={activeQuestion.hypothesis || activeQuestion.question || activeQuestion.question_id}
                         >
-                          <div className="question-card-side-head">
+                          <div
+                            className="question-card-side-head"
+                            onPointerDown={beginQuestionCardDrag}
+                            onPointerMove={moveQuestionCard}
+                            onPointerUp={endQuestionCardDrag}
+                            onPointerCancel={endQuestionCardDrag}
+                          >
                             <span data-testid="question-text" className="question-card-side-text">
                               {activeQuestion.question || activeQuestion.question_id}
                             </span>
@@ -5930,12 +6522,18 @@ function App() {
                               type="button"
                               className="question-card-side-x"
                               data-testid="question-close"
-                              onClick={clearActiveQuestion}
+                              onClick={dismissQuestionCard}
                               title="Dismiss question"
                             >
                               ✕
                             </button>
                           </div>
+                          {questionFilePos && questionFilePos.total > 1 ? (
+                            <div className="question-card-side-progress" data-testid="question-file-progress">
+                              Question {questionFilePos.index || "?"}/{questionFilePos.total} on this file
+                              {questionFilePos.answered ? " · answered" : ""}
+                            </div>
+                          ) : null}
                           {(activeQuestion.choices ?? []).map((choice) => (
                             <button
                               key={choice}
@@ -5988,6 +6586,28 @@ function App() {
                               title={questionHasMarkers(activeQuestion?.question_id) ? "Not sure (comment)" : "No question markers — reimport the playlist"}
                             >
                               Not sure
+                            </button>
+                          </div>
+                          <div className="question-card-side-row">
+                            {questionFilePos?.next?.question_id && currentFilePath ? (
+                              <button
+                                type="button"
+                                className="question-card-side-verdict"
+                                data-testid="question-next-on-file"
+                                onClick={() => switchCardToQuestion(currentFilePath, questionFilePos.next?.question_id ?? null, questionFilePos.next)}
+                                title="Go to the next unanswered question on this file"
+                              >
+                                Next question
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              className="question-card-side-verdict"
+                              data-testid="question-send-agent"
+                              onClick={() => void sendAnswersToAgent()}
+                              title="Copy answers.json to ack/ for the agent (works with incomplete answers too)"
+                            >
+                              Send to agent
                             </button>
                           </div>
                           {!questionHasMarkers(activeQuestion?.question_id) ? (

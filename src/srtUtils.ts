@@ -682,7 +682,7 @@ function buildXmemlDocument(sources: XmemlSourceBuild[], seq: XmemlSequenceSpec)
       const len = clip.outF - clip.inF;
       L.push(`\t\t\t\t\t<clipitem id="clipitem-${n}">`);
       L.push(`\t\t\t\t\t\t<masterclipid>masterclip-${s.fileIdx}</masterclipid>`);
-      L.push(`\t\t\t\t\t\t<name>${escapeXml(s.clipNameBase)} ${n}</name>`);
+      L.push(`\t\t\t\t\t\t<name>${escapeXml(s.clipNameBase)}</name>`);
       L.push("\t\t\t\t\t\t<enabled>TRUE</enabled>");
       L.push(`\t\t\t\t\t\t<duration>${s.durationFrames}</duration>`);
       L.push(rateBlock("\t\t\t\t\t"));
@@ -725,7 +725,7 @@ function buildXmemlDocument(sources: XmemlSourceBuild[], seq: XmemlSequenceSpec)
         an += 1;
         L.push(`\t\t\t\t\t<clipitem id="clipitem-a${an}">`);
         L.push(`\t\t\t\t\t\t<masterclipid>masterclip-${s.fileIdx}</masterclipid>`);
-        L.push(`\t\t\t\t\t\t<name>${escapeXml(s.clipNameBase)} ${an}</name>`);
+        L.push(`\t\t\t\t\t\t<name>${escapeXml(s.clipNameBase)}</name>`);
         L.push("\t\t\t\t\t\t<enabled>TRUE</enabled>");
         L.push(`\t\t\t\t\t\t<duration>${s.durationFrames}</duration>`);
         L.push(rateBlock("\t\t\t\t\t"));

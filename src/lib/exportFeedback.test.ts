@@ -8,12 +8,12 @@ describe("resolveExportToast (Bell №5)", () => {
     expect(resolveExportToast("xml", true, null)).toBe("No markers to export.");
   });
 
-  it("reports saved file by basename (posix + windows)", () => {
+  it("reports saved file by full path (posix + windows)", () => {
     expect(resolveExportToast("srt", false, { status: "saved", path: "/Users/a/markers.srt" })).toBe(
-      "Saved: markers.srt",
+      "Saved: /Users/a/markers.srt",
     );
     expect(resolveExportToast("xml", false, { status: "saved", path: "C:\\Video\\review.xml" })).toBe(
-      "Saved: review.xml",
+      "Saved: C:\\Video\\review.xml",
     );
   });
 
@@ -30,19 +30,19 @@ describe("resolveExportToast (Bell №5)", () => {
   it("warns on xml saved with non-probe fps (E2E Premiere 46 vs 50)", () => {
     expect(
       resolveExportToast("xml", false, { status: "saved", path: "C:\\Video\\review.xml" }, "fps ~46 estimated, verify sequence settings"),
-    ).toBe("Saved: review.xml — fps ~46 estimated, verify sequence settings.");
+    ).toBe("Saved: C:\\Video\\review.xml — fps ~46 estimated, verify sequence settings.");
     expect(
       resolveExportToast("xml", false, { status: "saved", path: "/Users/a/review.xml" }, "fps 25 fallback, verify sequence settings"),
-    ).toBe("Saved: review.xml — fps 25 fallback, verify sequence settings.");
+    ).toBe("Saved: /Users/a/review.xml — fps 25 fallback, verify sequence settings.");
   });
 
   it("leaves probe-based xml and other kinds untouched by the fps note", () => {
     expect(
       resolveExportToast("xml", false, { status: "saved", path: "/Users/a/review.xml" }),
-    ).toBe("Saved: review.xml");
+    ).toBe("Saved: /Users/a/review.xml");
     expect(
       resolveExportToast("srt", false, { status: "saved", path: "/Users/a/markers.srt" }, "fps ~46 estimated, verify sequence settings"),
-    ).toBe("Saved: markers.srt");
+    ).toBe("Saved: /Users/a/markers.srt");
   });
 });
 

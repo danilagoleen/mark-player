@@ -1,9 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod command_queue;
 mod range_server;
 
 use serde::Serialize;
-use tauri::{Emitter, LogicalSize, Manager, PhysicalSize, Size, WebviewWindow};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalSize, Size, WebviewWindow};
 
 #[derive(Debug, Clone, Serialize)]
 struct PlayerWindowTrace {
@@ -64,7 +65,10 @@ fn snap_logical_size_for_aspect(
     aspect_width: f64,
     aspect_height: f64,
 ) -> Result<(f64, f64), String> {
-    if !(aspect_width.is_finite() && aspect_height.is_finite()) || aspect_width <= 0.0 || aspect_height <= 0.0 {
+    if !(aspect_width.is_finite() && aspect_height.is_finite())
+        || aspect_width <= 0.0
+        || aspect_height <= 0.0
+    {
         return Ok((width.max(240.0).round(), height.max(220.0).round()));
     }
 
@@ -76,23 +80,15 @@ fn snap_logical_size_for_aspect(
     let requested_width = ((width.max(240.0)) * scale_factor).round().max(1.0) as i32;
     let requested_height = ((height.max(220.0)) * scale_factor).round().max(1.0) as i32;
 
-    let height_candidates = [
-        requested_height - 1,
-        requested_height,
-        requested_height + 1,
-    ]
-    .into_iter()
-    .filter(|value| *value > 0)
-    .map(|value| candidate_from_height(value, ratio));
+    let height_candidates = [requested_height - 1, requested_height, requested_height + 1]
+        .into_iter()
+        .filter(|value| *value > 0)
+        .map(|value| candidate_from_height(value, ratio));
 
-    let width_candidates = [
-        requested_width - 1,
-        requested_width,
-        requested_width + 1,
-    ]
-    .into_iter()
-    .filter(|value| *value > 0)
-    .map(|value| candidate_from_width(value, ratio));
+    let width_candidates = [requested_width - 1, requested_width, requested_width + 1]
+        .into_iter()
+        .filter(|value| *value > 0)
+        .map(|value| candidate_from_width(value, ratio));
 
     let mut best = (requested_width, requested_height);
     let mut best_score = candidate_score(best.0, best.1, requested_width, requested_height);
@@ -122,7 +118,10 @@ fn snap_trace_to_aspect(
     aspect_width: f64,
     aspect_height: f64,
 ) -> Option<PhysicalSize<u32>> {
-    if !(aspect_width.is_finite() && aspect_height.is_finite()) || aspect_width <= 0.0 || aspect_height <= 0.0 {
+    if !(aspect_width.is_finite() && aspect_height.is_finite())
+        || aspect_width <= 0.0
+        || aspect_height <= 0.0
+    {
         return None;
     }
     let ratio = aspect_width / aspect_height;
@@ -134,7 +133,8 @@ fn snap_trace_to_aspect(
 
     let from_height = candidate_from_height(current_height, ratio);
     let from_width = candidate_from_width(current_width, ratio);
-    let current_score = candidate_score(current_width, current_height, current_width, current_height);
+    let current_score =
+        candidate_score(current_width, current_height, current_width, current_height);
     let height_score = candidate_score(from_height.0, from_height.1, current_width, current_height);
     let width_score = candidate_score(from_width.0, from_width.1, current_width, current_height);
 
@@ -266,6 +266,42 @@ fn trace_player_window(window: WebviewWindow) -> Result<PlayerWindowTrace, Strin
     trace_window(&window)
 }
 
+// tb_1792631872_72740_1: панели нужны выше плеера везде, КРОМЕ native
+// fullscreen — там главное окно занимает весь экран, а дочерние панели по
+// контракту parent(main) остаются над кадром (оператор 22.10). Скрываем их
+// на входе в полный экран и возвращаем на выходе; оконный режим не меняем.
+const PANEL_LABEL_PREFIX: &str = "panel-";
+
+fn is_panel_label(label: &str) -> bool {
+    // "main" префиксу не соответствует: скрывать само окно плеера нельзя.
+    label.starts_with(PANEL_LABEL_PREFIX)
+}
+
+fn main_is_fullscreen(app: &tauri::AppHandle) -> bool {
+    use tauri::Manager;
+    app.get_webview_window("main")
+        .and_then(|win| win.is_fullscreen().ok())
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+fn set_panel_windows_visible(app: tauri::AppHandle, visible: bool) -> Result<usize, String> {
+    use tauri::Manager;
+    let mut touched = 0usize;
+    for (label, win) in app.webview_windows() {
+        if !is_panel_label(&label) {
+            continue;
+        }
+        if visible {
+            let _ = win.show();
+        } else {
+            let _ = win.hide();
+        }
+        touched += 1;
+    }
+    Ok(touched)
+}
+
 #[tauri::command]
 fn open_panel_window(
     app: tauri::AppHandle,
@@ -278,6 +314,9 @@ fn open_panel_window(
     query: Option<String>,
 ) -> Result<(), String> {
     use tauri::Manager;
+    // Панель, открытая во время fullscreen, не должна всплывать над кадром:
+    // создаём/держим её скрытой до выхода из полного экрана.
+    let main_fullscreen = main_is_fullscreen(&app);
     let path = format!("{}.html", route);
     let url_str = if let Some(q) = &query {
         format!("{}/{}?{}", base_url.trim_end_matches('/'), path, q)
@@ -295,14 +334,17 @@ fn open_panel_window(
                 .map_err(|e| format!("Failed to encode panel URL: {}", e))?;
             let _ = win.eval(&format!("window.location.replace({})", js_url));
         }
+        if main_fullscreen {
+            let _ = win.hide();
+            return Ok(());
+        }
         let _ = win.unminimize();
         let _ = win.show();
         win.set_focus()
             .map_err(|e| format!("Failed to focus window: {}", e))?;
         return Ok(());
     }
-    let url = url::Url::parse(&url_str)
-        .map_err(|e| format!("Invalid panel URL: {}", e))?;
+    let url = url::Url::parse(&url_str).map_err(|e| format!("Invalid panel URL: {}", e))?;
 
     // tb_1792023845_97848_2: панели — дочерние к main (parent): всегда выше
     // плеера (macOS addChildWindow / Windows owned / Linux transient-for),
@@ -313,7 +355,8 @@ fn open_panel_window(
         tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::External(url.clone()))
             .title(title.clone())
             .inner_size(width, height)
-            .focused(true)
+            .visible(!main_fullscreen)
+            .focused(!main_fullscreen)
     };
     let builder = match &main {
         Some(m) => match fresh_builder().parent(m) {
@@ -332,9 +375,11 @@ fn open_panel_window(
     // Косметика 2026-09-25: панели справа от главного окна, а не поверх видео.
     // Кламп в монитор: если справа нет места — втискиваем в видимую область.
     if let Some(main) = &main {
-        if let (Ok(pos), Ok(size), Ok(scale)) =
-            (main.outer_position(), main.outer_size(), main.scale_factor())
-        {
+        if let (Ok(pos), Ok(size), Ok(scale)) = (
+            main.outer_position(),
+            main.outer_size(),
+            main.scale_factor(),
+        ) {
             let gap = 12.0;
             let pw = width * scale;
             let ph = height * scale;
@@ -361,7 +406,8 @@ fn open_panel_window(
 
 #[tauri::command]
 fn emit_menu_event(window: WebviewWindow, action: String) -> Result<(), String> {
-    window.emit("menu-event", action)
+    window
+        .emit("menu-event", action)
         .map_err(|e| format!("emit failed: {e}"))
 }
 
@@ -432,11 +478,7 @@ fn inspect_atom_header(
         }
         n => (n, 8u64),
     };
-    if size < header_len
-        || offset
-            .checked_add(size)
-            .map_or(true, |end| end > file_size)
-    {
+    if size < header_len || offset.checked_add(size).map_or(true, |end| end > file_size) {
         return Ok(None);
     }
     Ok(Some((kind, size)))
@@ -508,11 +550,7 @@ fn sample_file_bytes(path: String, sample_len: Option<u64>) -> Result<FileConten
         .map_err(|e| format!("seek failed: {e}"))?;
     file.read_exact(&mut tail)
         .map_err(|e| format!("read tail failed: {e}"))?;
-    Ok(FileContentSample {
-        size,
-        head,
-        tail,
-    })
+    Ok(FileContentSample { size, head, tail })
 }
 
 // 0.26: переключатель транспорта. На macOS WKWebView по asset:// перестаёт
@@ -525,6 +563,13 @@ fn loopback_media_url(
     server: tauri::State<'_, range_server::RangeServer>,
 ) -> Result<Option<String>, String> {
     server.url_for(std::path::Path::new(&path))
+}
+
+// tb_1792536109_79489_5: куда класть <id>.cmd.json и откуда читать ack.
+// Пути — единственная правда о раскладке очереди (фронт и доки берут отсюда).
+#[tauri::command]
+fn command_queue_info(app: AppHandle) -> Result<command_queue::QueuePaths, String> {
+    command_queue::queue_paths(&app)
 }
 
 fn main() {
@@ -541,6 +586,9 @@ fn main() {
                     eprintln!("[Mark Player] media range server unavailable: {err}");
                 }
             }
+            // tb_1792536109_79489_5: очередь команд агента (inbox/ + ack/).
+            // Никакого сетевого входа: только файлы в app data dir.
+            command_queue::start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -548,11 +596,13 @@ fn main() {
             toggle_player_fullscreen,
             trace_player_window,
             open_panel_window,
+            set_panel_windows_visible,
             emit_menu_event,
             inspect_media_container,
             sample_file_bytes,
             loopback_media_url,
             os_username,
+            command_queue_info,
         ]);
 
     // Bell №7 + UPD 9: pilot только по явному запросу И только в деве
@@ -597,7 +647,8 @@ mod container_tests {
     }
 
     fn write_sample(name: &str, atoms: Vec<Vec<u8>>) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!("mark-container-{}-{name}", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("mark-container-{}-{name}", std::process::id()));
         let mut bytes = Vec::new();
         for a in atoms {
             bytes.extend_from_slice(&a);
@@ -608,7 +659,14 @@ mod container_tests {
 
     #[test]
     fn detects_moov_at_end() {
-        let path = write_sample("moov-end", vec![atom(b"ftyp", &[0; 12]), atom(b"mdat", &[0; 100]), atom(b"moov", &[0; 40])]);
+        let path = write_sample(
+            "moov-end",
+            vec![
+                atom(b"ftyp", &[0; 12]),
+                atom(b"mdat", &[0; 100]),
+                atom(b"moov", &[0; 40]),
+            ],
+        );
         let info = inspect_media_container_at(&path).expect("inspect");
         assert_eq!(info.moov_offset, Some(128));
         assert_eq!(info.mdat_offset, Some(20));
@@ -618,7 +676,14 @@ mod container_tests {
 
     #[test]
     fn detects_faststart() {
-        let path = write_sample("faststart", vec![atom(b"ftyp", &[0; 12]), atom(b"moov", &[0; 40]), atom(b"mdat", &[0; 100])]);
+        let path = write_sample(
+            "faststart",
+            vec![
+                atom(b"ftyp", &[0; 12]),
+                atom(b"moov", &[0; 40]),
+                atom(b"mdat", &[0; 100]),
+            ],
+        );
         let info = inspect_media_container_at(&path).expect("inspect");
         assert_eq!(info.moov_offset, Some(20));
         assert!(!info.moov_at_end);
@@ -632,11 +697,42 @@ mod container_tests {
         mdat.extend_from_slice(b"mdat");
         mdat.extend_from_slice(&(16u64 + 100).to_be_bytes());
         mdat.extend_from_slice(&[0u8; 100]);
-        let path = write_sample("largesize", vec![atom(b"ftyp", &[0; 12]), mdat, atom(b"moov", &[0; 40])]);
+        let path = write_sample(
+            "largesize",
+            vec![atom(b"ftyp", &[0; 12]), mdat, atom(b"moov", &[0; 40])],
+        );
         let info = inspect_media_container_at(&path).expect("inspect");
         assert_eq!(info.mdat_offset, Some(20));
         assert_eq!(info.moov_offset, Some(136));
         assert!(info.moov_at_end);
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod panel_window_tests {
+    use super::is_panel_label;
+
+    // tb_1792631872_72740_1: в fullscreen прячем только панели, не main.
+    #[test]
+    fn panel_labels_cover_all_panel_windows() {
+        for label in [
+            "panel-comments",
+            "panel-playlist",
+            "panel-about",
+            "panel-chat",
+            "panel-chat-history",
+            "panel-phonebook",
+            "panel-module-index-review",
+        ] {
+            assert!(is_panel_label(label), "{label} must be treated as a panel");
+        }
+    }
+
+    #[test]
+    fn main_window_is_not_a_panel() {
+        assert!(!is_panel_label("main"));
+        assert!(!is_panel_label("panel"));
+        assert!(!is_panel_label(""));
     }
 }

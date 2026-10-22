@@ -1,0 +1,15 @@
+{
+  "contract_version": "1",
+  "playlist_schema": "vetka.cut.question_playlist/1",
+  "db_version": 9,
+  "fps": 25,
+  "seq_width": 1920,
+  "seq_height": 1080,
+  "sequence_name": "palette_v01",
+  "projection": "P = XMEML без таймлайновых координат и без фильтров; сравниваются файловые in/out, имена, маркеры, ★ и порядок",
+  "expected": "expected.player.xml",
+  "expected_sha256": "1a6025d8e1dc4f0b0e79fbdb5da611555cbe4d3a0fefb7bb7ea917a5d01ea0db",
+  "expected_generated_by": "player_playground/src/srtUtils.ts exportPlaylistToXmeml (reference)",
+  "module_generator": "cut-player-mcp cut_player_export_xml (must match projection P)",
+  "fixture_role": "player projection copy; the module owns the full expected.module.xml and expected_decisions.json"
+}

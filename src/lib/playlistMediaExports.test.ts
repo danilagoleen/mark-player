@@ -19,6 +19,17 @@ describe("buildPlaylistMarkersJson", () => {
     expect(doc.files[0].markers[0].text).toBe("hi");
     expect(doc.files[1].markers).toEqual([]);
   });
+
+  it("два вопроса на один файл: одна секция, маркеры не дублируются", () => {
+    const marker = { marker_id: "qmat_v03-4c_in", kind: "in", start_sec: 0, end_sec: 0, anchor_sec: 0, label: "v03-4c", text: "?" };
+    const json = buildPlaylistMarkersJson("v03", [
+      { file: "preview_v03_ru.mp4", markers: [marker], provisional_events: [] },
+      { file: "preview_v03_ru.mp4", markers: [marker], provisional_events: [] },
+    ]);
+    const doc = JSON.parse(json);
+    expect(doc.files).toHaveLength(1);
+    expect(doc.files[0].markers).toHaveLength(1);
+  });
 });
 
 describe("shiftSrtMarkers", () => {

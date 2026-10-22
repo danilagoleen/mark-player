@@ -1,14 +1,23 @@
-# Mark Player 0.26.0 beta, by VETKA lab
+# Mark Player 0.26.1 beta, by VETKA lab
 
 <img src="docs/screenshots/icon-128.png" width="128" alt="Mark Player icon">
 
 Marker-first video review: open a file, mark the moments, land them in Premiere — frame-accurately.
 
-[⬇ Download for macOS (Apple Silicon)](https://github.com/danilagoleen/mark-player/releases/download/v0.26.0/Mark.Player_0.26.0_aarch64.dmg) ·
-[Intel Mac](https://github.com/danilagoleen/mark-player/releases/download/v0.26.0/Mark.Player_0.26.0_x64.dmg) ·
-[Windows](https://github.com/danilagoleen/mark-player/releases/download/v0.26.0/Mark.Player_0.26.0_x64-setup.exe)
+[⬇ Download for macOS (Apple Silicon)](https://github.com/danilagoleen/mark-player/releases/download/v0.26.1/Mark.Player_0.26.1_aarch64.dmg) ·
+[Intel Mac](https://github.com/danilagoleen/mark-player/releases/download/v0.26.1/Mark.Player_0.26.1_x64.dmg) ·
+[Windows](https://github.com/danilagoleen/mark-player/releases/download/v0.26.1/Mark.Player_0.26.1_x64-setup.exe)
 
 [![Watch it in action (1 min) — mark the moments, land them in Premiere](docs/promo/promo_poster.jpg)](https://github.com/user-attachments/assets/098c218f-5e4e-4c8f-ab3b-382bffc51d17)
+
+## Versioning
+
+`MAJOR.MINOR.PATCH` — the second number is the major line, the third is the
+minor step. A major release moves the hundredths (`0.26` → `0.27`); every
+shipped change moves the thousandths (`0.26.1`, `0.26.2`, …). Two different
+builds must never carry the same stamp: `package.json`, `tauri.conf.json`
+(version + window title), `Cargo.toml` and the README download links move
+together, and `appVersion.test.ts` keeps them in sync.
 
 ## Screenshots
 
@@ -58,9 +67,9 @@ Marilyn marked the frames she didn't like. Now any producer marks right in the p
 Grab the latest beta from
 **[Releases](https://github.com/danilagoleen/mark-player/releases)**:
 
-- **macOS Apple Silicon** — `Mark.Player_0.26.0_aarch64.dmg`
-- **macOS Intel** — `Mark.Player_0.26.0_x64.dmg`
-- **Windows 10/11** — `Mark.Player_0.26.0_x64-setup.exe` (installer) or `Mark.Player_0.26.0_x64_en-US.msi`
+- **macOS Apple Silicon** — `Mark.Player_0.26.1_aarch64.dmg`
+- **macOS Intel** — `Mark.Player_0.26.1_x64.dmg`
+- **Windows 10/11** — `Mark.Player_0.26.1_x64-setup.exe` (installer) or `Mark.Player_0.26.1_x64_en-US.msi`
 
 ## Installation (macOS)
 

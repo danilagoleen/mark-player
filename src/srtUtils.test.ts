@@ -584,6 +584,15 @@ describe("exportPlaylistToXmeml", () => {
     expect(xml).not.toContain("<masterclipid>masterclip-1</masterclipid>\n\t\t\t\t\t\t<name>b");
   });
 
+  it("writes the source basename as clip name, without a counter", () => {
+    const xml = exportPlaylistToXmeml(
+      [mkItem({ sourcePath: "/tmp/a.mp4", clipName: "a.mp4" })],
+      { fps: 25, seqWidth: 1280, seqHeight: 720, sequenceName: "Trip" },
+    );
+    expect(xml).toContain("<name>a.mp4</name>");
+    expect(xml).not.toContain("<name>a.mp4 1</name>");
+  });
+
   it("emits a skeleton for an empty playlist", () => {
     const xml = exportPlaylistToXmeml(
       [],

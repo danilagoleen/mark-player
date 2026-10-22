@@ -3,7 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   answersFromMarkers,
   appendAnswerRecord,
+  buildAnswersDocument,
   filterAnswersToPlaylist,
+  parseAnswersDocument,
+  questionAnswerProgress,
+  questionFilePosition,
+  serializeAnswersDocument,
   readAnswersOutbox,
   writeAnswersOutbox,
   QUESTION_ANSWERS_OUTBOX_KEY,
@@ -81,6 +86,13 @@ describe("normalizeQuestionEntry", () => {
   });
   it("не-объект — пусто", () => {
     expect(normalizeQuestionEntry(null)).toEqual({});
+  });
+  // tb_1792547382_5133_1: подпись поверх кадра — необязательное поле записи.
+  it("caption едет строкой, пустое и нестроковое отбрасывается", () => {
+    expect(normalizeQuestionEntry({ question_id: "q1", caption: "  Кадр 12 — вход  " }).caption).toBe("Кадр 12 — вход");
+    expect(normalizeQuestionEntry({ question_id: "q1", caption: "   " })).not.toHaveProperty("caption");
+    expect(normalizeQuestionEntry({ question_id: "q1", caption: 42 })).not.toHaveProperty("caption");
+    expect(normalizeQuestionEntry({ question_id: "q1" })).not.toHaveProperty("caption");
   });
 });
 
@@ -482,5 +494,68 @@ describe("answers outbox keyed by playlist (tb_1792431205_48582_4)", () => {
     const kept = filterAnswersToPlaylist([...foreign, ...own], ids);
     expect(kept.map((r) => r.question_id).sort()).toEqual(ids.slice().sort());
     expect(parseAnswersFile(resolveExportAnswersText(null, kept))).toHaveLength(13);
+  });
+});
+
+// tb_1792634443_73606_2: контракт answers.json для агента.
+describe("answers.json для агента (v03-4c + v03-final)", () => {
+  const rec = (qid: string, verdict: "favorite" | "negative" | "comment" = "comment"): AnswerRecord =>
+    ({ question_id: qid, verdict, answered_at: "2026-10-22T01:50:20.162Z" });
+
+  it("чужие ответы не проходят, прогресс честный", () => {
+    const doc = buildAnswersDocument(
+      [rec("mrg-01"), rec("v03-4c"), rec("vc-17"), rec("v03-final", "favorite")],
+      { playlistId: "queue_commander-promo-v03-1", questionIds: ["v03-4c", "v03-final"], updatedAt: "2026-10-22T02:00:00Z" },
+    );
+    expect(doc.answers.map((r) => r.question_id)).toEqual(["v03-4c", "v03-final"]);
+    expect(doc.answered_question_ids).toEqual(["v03-4c", "v03-final"]);
+    expect(doc.pending_question_ids).toEqual([]);
+    expect(doc.complete).toBe(true);
+    expect(doc.answers_version).toBe(2);
+    expect(doc.playlist_id).toBe("queue_commander-promo-v03-1");
+  });
+
+  it("неполный плейлист: pending виден, complete=false", () => {
+    const doc = buildAnswersDocument([rec("v03-4c")], {
+      playlistId: "queue_x",
+      questionIds: ["v03-4c", "v03-final"],
+    });
+    expect(doc.answered_question_ids).toEqual(["v03-4c"]);
+    expect(doc.pending_question_ids).toEqual(["v03-final"]);
+    expect(doc.complete).toBe(false);
+  });
+
+  it("сериализация/разбор сохраняют прогресс, легаси-файл тоже читается", () => {
+    const doc = buildAnswersDocument([rec("v03-4c"), rec("v03-final")], {
+      playlistId: "queue_x",
+      questionIds: ["v03-4c", "v03-final"],
+    });
+    const parsed = parseAnswersDocument(serializeAnswersDocument(doc));
+    expect(parsed?.complete).toBe(true);
+    expect(parsed?.question_ids).toEqual(["v03-4c", "v03-final"]);
+    // Легаси без question_ids не считается документом: полного списка нет,
+    // complete=true соврал бы агенту.
+    expect(parseAnswersDocument(JSON.stringify({ answers: [rec("v03-4c")] }))).toBeNull();
+  });
+
+  it("questionAnswerProgress: последний ответ по answered_at главнее", () => {
+    const older: AnswerRecord = { question_id: "q", verdict: "comment", answered_at: "2026-10-22T00:00:00Z" };
+    const newer: AnswerRecord = { question_id: "q", verdict: "favorite", answered_at: "2026-10-22T01:00:00Z" };
+    const progress = questionAnswerProgress([newer, older], ["q", "q2"]);
+    expect(progress.answeredQuestionIds).toEqual(["q"]);
+    expect(progress.pendingQuestionIds).toEqual(["q2"]);
+  });
+
+  it("questionFilePosition: два вопроса на одном файле", () => {
+    const entries = [
+      { path: "/v.mp4", question_id: "v03-4c" },
+      { path: "/v.mp4", question_id: "v03-final" },
+      { path: "/other.mp4", question_id: "other" },
+    ];
+    const pos = questionFilePosition(entries, "/v.mp4", "v03-4c", ["v03-4c"]);
+    expect(pos?.index).toBe(1);
+    expect(pos?.total).toBe(2);
+    expect(pos?.answered).toBe(true);
+    expect(pos?.next?.question_id).toBe("v03-final");
   });
 });

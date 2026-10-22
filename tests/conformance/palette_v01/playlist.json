@@ -1,0 +1,85 @@
+{
+  "schema": "vetka.cut.question_playlist/1",
+  "name": "palette_v01",
+  "source": {
+    "by": "Beta",
+    "tool": "cut_player_playlist",
+    "contract_version": "1",
+    "db_version": 9,
+    "index_fingerprint": "fixture:palette_v01:people-phase-v4"
+  },
+  "entries": [
+    {
+      "path": "/fixture/palette_v01/P1755160.MOV",
+      "name": "P1755160.MOV",
+      "question_id": "it_0001",
+      "in_sec": 26.0,
+      "out_sec": 38.0,
+      "ref": {
+        "layer": "palette",
+        "id": "it_0001",
+        "person_id": "P112",
+        "phase": "after",
+        "phase_piece": [25.75, 48.5]
+      },
+      "markers": [
+        { "marker_id": "it_0001-fav", "kind": "favorite", "t_sec": 26.0, "label": "", "text": "" },
+        { "marker_id": "it_0001-title", "kind": "comment", "t_sec": 26.0, "label": "", "text": "P112 героиня — готовая укладка" },
+        { "marker_id": "it_0001-bblock-1", "kind": "comment", "t_sec": 26.0, "label": "", "text": "G6d У зеркала — ПОСЛЕ" }
+      ]
+    },
+    {
+      "path": "/fixture/palette_v01/P1755144.MOV",
+      "name": "P1755144.MOV",
+      "question_id": "it_0002",
+      "in_sec": 28.0,
+      "out_sec": 38.0,
+      "ref": {
+        "layer": "palette",
+        "id": "it_0002",
+        "person_id": "P111",
+        "phase": "process",
+        "phase_piece": [10.0, 42.0]
+      },
+      "markers": [
+        { "marker_id": "it_0002-title", "kind": "comment", "t_sec": 28.0, "label": "", "text": "фен — волосы сохнут" }
+      ]
+    },
+    {
+      "path": "/fixture/palette_v01/P1755162.MOV",
+      "name": "P1755162.MOV",
+      "question_id": "it_0003",
+      "in_sec": 44.0,
+      "out_sec": 50.0,
+      "ref": {
+        "layer": "palette",
+        "id": "it_0003",
+        "person_id": "P112",
+        "phase": "after",
+        "phase_piece": [40.0, 60.0]
+      },
+      "markers": [
+        { "marker_id": "it_0003-title", "kind": "comment", "t_sec": 44.0, "label": "", "text": "P112 — проверка затылка" },
+        { "marker_id": "it_0003-bblock-2", "kind": "comment", "t_sec": 44.0, "label": "", "text": "G6d Фен — ПРОЦЕСС" }
+      ]
+    },
+    {
+      "path": "/fixture/palette_v01/P1755146.MOV",
+      "name": "P1755146.MOV",
+      "question_id": "it_0004",
+      "in_sec": 5.0,
+      "out_sec": 10.0,
+      "ref": {
+        "layer": "palette",
+        "id": "it_0004",
+        "person_id": "P111",
+        "phase": "process",
+        "phase_piece": [0.0, 12.0]
+      },
+      "markers": [
+        { "marker_id": "it_0004-fav", "kind": "favorite", "t_sec": 5.0, "label": "", "text": "" },
+        { "marker_id": "it_0004-title", "kind": "comment", "t_sec": 5.0, "label": "", "text": "P111 — руки крупно" }
+      ]
+    }
+  ]
+}

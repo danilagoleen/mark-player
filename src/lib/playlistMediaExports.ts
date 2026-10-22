@@ -44,13 +44,44 @@ export function buildPlaylistMarkersJson(
   playlistName: string,
   files: PlaylistJsonFile[],
 ): string {
+  // tb_1792634443_73606_2: два вопроса на один файл = две записи плейлиста,
+  // но один файл. Секция — одна; маркеры/события дедуплицируются по id,
+  // иначе каждый ответ оператора уезжает в экспорт дважды.
+  const merged: PlaylistJsonFile[] = [];
+  const byFile = new Map<string, PlaylistJsonFile>();
+  for (const f of files) {
+    const existing = byFile.get(f.file);
+    if (!existing) {
+      const copy: PlaylistJsonFile = {
+        file: f.file,
+        markers: [...f.markers],
+        provisional_events: [...f.provisional_events],
+      };
+      byFile.set(f.file, copy);
+      merged.push(copy);
+      continue;
+    }
+    const markerKeys = new Set(existing.markers.map((m) => `${m.marker_id}|${m.kind}|${m.start_sec}`));
+    for (const m of f.markers) {
+      const key = `${m.marker_id}|${m.kind}|${m.start_sec}`;
+      if (markerKeys.has(key)) continue;
+      markerKeys.add(key);
+      existing.markers.push(m);
+    }
+    const eventKeys = new Set(existing.provisional_events.map((e) => e.provisional_event_id));
+    for (const e of f.provisional_events) {
+      if (eventKeys.has(e.provisional_event_id)) continue;
+      eventKeys.add(e.provisional_event_id);
+      existing.provisional_events.push(e);
+    }
+  }
   return JSON.stringify(
     {
       playlist_markers_version: "1",
       source: "cut_player",
       playlist: playlistName || "playlist",
       generated_at: new Date().toISOString(),
-      files: files.map((f) => ({
+      files: merged.map((f) => ({
         file: f.file,
         markers: f.markers.map((m) => ({
           marker_id: m.marker_id,

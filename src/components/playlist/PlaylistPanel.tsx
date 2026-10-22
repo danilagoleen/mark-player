@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Playlist, PlaylistEntry, QuestionPlaylistEntry } from "../../lib/playlist";
 import type { PlaybackMode } from "../../lib/playlist";
 import { createEmptyPlaylist, loadPlaylist, removeEntry, moveEntry, serializePlaylist, loadPlaybackMode, savePlaybackMode, savePlaylist, nextLoopMode, renamePlaylist, sanitizePlaylistFilename } from "../../lib/playlist";
-import { rememberQuestionPlaylistPath } from "../../lib/questionPlaylist";
+import { buildAnswersDocument, filterAnswersToPlaylist, isQuestionPlaylist, parseAnswersFile, rememberQuestionPlaylistPath, serializeAnswersDocument, type QuestionEntry } from "../../lib/questionPlaylist";
+import { sanitizeAnswersFileOnDisk } from "../../lib/questionAnswersFile";
+import { dirOfPath, joinForDialog } from "../../lib/exportPaths";
 import {
   markerDedupKey,
   materializePlaylistQuestions,
@@ -187,12 +189,18 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
           if (srcPath) sourceText = await fs.readTextFile(qp.answersPathFor(srcPath));
         } catch { /* файла ещё нет — дальше аутбокс */ }
       }
-      answersText = qp.resolveExportAnswersText(sourceText, qp.readAnswersOutbox());
-      try {
-        answersCount = answersText ? qp.parseAnswersFile(answersText).length : 0;
-      } catch {
-        answersCount = 0;
-      }
+      const rawAnswers = qp.resolveExportAnswersText(sourceText, qp.readAnswersOutbox());
+      // tb_1792634443_73606_2: экспорт не тащит чужие ответы и всегда несёт
+      // прогресс question_ids/answered/pending/complete для агента.
+      const questionIds = (playlist.entries as QuestionEntry[])
+        .map((e) => e.question_id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
+      const doc = buildAnswersDocument(
+        filterAnswersToPlaylist(parseAnswersFile(rawAnswers), questionIds),
+        { playlistId: playlist.id, questionIds },
+      );
+      answersText = questionIds.length ? serializeAnswersDocument(doc) : rawAnswers;
+      answersCount = doc.answers.length;
     } catch { /* экспорт entries всё равно уедет */ }
     const downloadBlob = (text: string, name: string) => {
       const blob = new Blob([text], { type: "application/json" });
@@ -208,7 +216,13 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
         const dialog = await import("@tauri-apps/plugin-dialog");
         const fs = await import("@tauri-apps/plugin-fs");
         const savePath = await dialog.save({
-          defaultPath: fileName,
+          // tb_1792634443_73606_2: рядом с плейлистом/медиа, а не в
+          // «последней открытой папке».
+          defaultPath: joinForDialog(
+            dirOfPath((await import("../../lib/questionPlaylist")).readQuestionPlaylistPath()) ||
+              dirOfPath(playlist.entries[0]?.path),
+            fileName,
+          ),
           filters: [{ name: "Playlist JSON", extensions: ["json"] }],
         });
         if (!savePath || typeof savePath !== "string") return;
@@ -231,6 +245,18 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
     if (answersText) downloadBlob(answersText, `${fileName}.answers.json`);
   }, [playlist]);
 
+  // tb_1792634443_73606_2: импорт вопрос-плейлиста санитайзит sibling
+  // answers.json (только свои question_id, исходник — в .bak).
+  const sanitizeImportedAnswers = useCallback(async (pl: Playlist, path: string) => {
+    if (!isQuestionPlaylist(pl)) return;
+    try {
+      const questionIds = (pl.entries as QuestionEntry[])
+        .map((e) => e.question_id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
+      await sanitizeAnswersFileOnDisk(path, { playlistId: pl.id || "playlist", questionIds });
+    } catch { /* плейлист всё равно открываем */ }
+  }, []);
+
   const handleImport = useCallback(async () => {
     // Tauri standalone: use native dialog + fs (file input unreliable in WebView)
     if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
@@ -252,8 +278,8 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
           // в вопрос-плейлист (answers лягут рядом с исходником).
           const converted = await importBetaBundleText(text, path);
           if (converted) {
-            const { isQuestionPlaylist } = await import("../../lib/questionPlaylist");
             rememberQuestionPlaylistPath(isQuestionPlaylist(converted) ? path : null);
+            await sanitizeImportedAnswers(converted, path);
             try {
               localStorage.setItem("vetka_player_lab_playlist_v1", JSON.stringify(converted));
             } catch { /* ignore */ }
@@ -269,8 +295,8 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
           return;
         }
         // tb_1791521998_11250_5: ответы лягут рядом с этим файлом
-        const { isQuestionPlaylist } = await import("../../lib/questionPlaylist");
         rememberQuestionPlaylistPath(isQuestionPlaylist(parsed) ? path : null);
+        await sanitizeImportedAnswers(parsed, path);
         try {
           localStorage.setItem("vetka_player_lab_playlist_v1", JSON.stringify(parsed));
         } catch { /* ignore */ }
@@ -321,7 +347,7 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
       } catch { /* ignore */ }
     };
     input.click();
-  }, []);
+  }, [sanitizeImportedAnswers]);
 
   const entries = playlist?.entries ?? [];
 

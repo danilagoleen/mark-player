@@ -54,6 +54,10 @@ export interface QuestionEntryFields {
   bbox?: QuestionBox;
   /** рамка на out_sec: плеер линейно едет bbox→bbox_end за in..out. */
   bbox_end?: QuestionBox;
+  // tb_1792547382_5133_1: подпись/титр поверх кадра на in..out записи
+  // (разведка §2, «Подпись/титр поверх кадра»). Показ — только плеером;
+  // в Premiere и в SRT-маркеры НЕ уезжает: полей под текстовую подпись там нет.
+  caption?: string;
 }
 
 /** Рамка региона в долях кадра. */
@@ -444,6 +448,8 @@ export function normalizeQuestionEntry(raw: unknown): QuestionEntryFields {
   if (question !== undefined) out.question = question;
   const hypothesis = textOrUndefined(m.hypothesis);
   if (hypothesis !== undefined) out.hypothesis = hypothesis;
+  const caption = textOrUndefined(m.caption);
+  if (caption !== undefined) out.caption = caption;
   const in_sec = finiteOrUndefined(m.in_sec);
   if (in_sec !== undefined && in_sec >= 0) out.in_sec = in_sec;
   const out_sec = finiteOrUndefined(m.out_sec);
@@ -651,6 +657,155 @@ export function parseAnswersFile(text: string | null | undefined): AnswerRecord[
 
 export function serializeAnswersFile(records: AnswerRecord[]): string {
   return JSON.stringify({ answers: records }, null, 2);
+}
+
+/**
+ * tb_1792634443_73606_2, контракт Commander 22.10: answers.json — источник
+ * истины для агента, а не только выжимка маркеров. Сверху лежит прогресс
+ * плейлиста (все/отвеченные/ожидающие question_id), чтобы агент не гадал
+ * и не поллил session.json.
+ */
+export interface AnswersDocument {
+  answers_version: 2;
+  /** id плейлиста (= id команды, если плейлист создан очередью) */
+  playlist_id: string;
+  /** все question_id плейлиста, в порядке записей */
+  question_ids: string[];
+  answered_question_ids: string[];
+  pending_question_ids: string[];
+  complete: boolean;
+  updated_at: string;
+  /** только ответы на question_id этого плейлиста */
+  answers: AnswerRecord[];
+}
+
+export interface AnswersDocOptions {
+  playlistId: string;
+  questionIds: Iterable<string>;
+  updatedAt?: string;
+}
+
+function uniqueIds(questionIds: Iterable<string>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of questionIds) {
+    const id = typeof raw === "string" ? raw.trim() : "";
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/** Прогресс по question_id: действующий ответ = последний по answered_at. */
+export function questionAnswerProgress(
+  records: AnswerRecord[],
+  questionIds: Iterable<string>,
+): { questionIds: string[]; answeredQuestionIds: string[]; pendingQuestionIds: string[]; complete: boolean } {
+  const ids = uniqueIds(questionIds);
+  const active = resolveAnswers(Array.isArray(records) ? records : []);
+  const answeredQuestionIds = ids.filter((id) => active.has(id));
+  const pendingQuestionIds = ids.filter((id) => !active.has(id));
+  return {
+    questionIds: ids,
+    answeredQuestionIds,
+    pendingQuestionIds,
+    complete: ids.length > 0 && pendingQuestionIds.length === 0,
+  };
+}
+
+export function buildAnswersDocument(records: AnswerRecord[], opts: AnswersDocOptions): AnswersDocument {
+  const ids = uniqueIds(opts.questionIds);
+  const ownIds = new Set(ids);
+  const own = filterAnswersToPlaylist(records, ownIds);
+  const progress = questionAnswerProgress(own, ids);
+  return {
+    answers_version: 2,
+    playlist_id: opts.playlistId,
+    question_ids: progress.questionIds,
+    answered_question_ids: progress.answeredQuestionIds,
+    pending_question_ids: progress.pendingQuestionIds,
+    complete: progress.complete,
+    updated_at: opts.updatedAt ?? new Date().toISOString(),
+    answers: own,
+  };
+}
+
+export function serializeAnswersDocument(doc: AnswersDocument): string {
+  return JSON.stringify(doc, null, 2);
+}
+
+/**
+ * Разбор и нового документа, и легаси `{answers: [...]}`. Прогресс
+ * пересчитываем из answers: старый файл мог врать (чужие ответы).
+ */
+export function parseAnswersDocument(text: string | null | undefined): AnswersDocument | null {
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    const obj = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+    const declared = Array.isArray(obj.question_ids)
+      ? uniqueIds(obj.question_ids.filter((id): id is string => typeof id === "string"))
+      : [];
+    // Легаси-файл без question_ids не знает полного списка вопросов: считать
+    // его complete=true нельзя (агент пропустит неотвеченное). Такой файл
+    // пересобирается при открытии плейлиста и только тогда читается.
+    if (!declared.length) return null;
+    const records = parseAnswersFile(text);
+    const playlistId = typeof obj.playlist_id === "string" ? obj.playlist_id : "";
+    return buildAnswersDocument(records, {
+      playlistId,
+      questionIds: declared,
+      updatedAt: typeof obj.updated_at === "string" && obj.updated_at ? obj.updated_at : undefined,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * tb_1792634443_73606_2: пересобрать документ из сырого файла, оставив
+ * только ответы этого плейлиста. Чистая — I/O (бэкап .bak) делает App.
+ */
+export function sanitizeAnswersText(
+  text: string | null | undefined,
+  opts: Omit<AnswersDocOptions, "updatedAt"> & { updatedAt?: string },
+): AnswersDocument {
+  return buildAnswersDocument(parseAnswersFile(text), opts);
+}
+
+/**
+ * Позиция вопроса на файле: «Вопрос 1/2 на этом файле» + следующий
+ * неотвеченный. Чистая, тестируем.
+ */
+export function questionFilePosition(
+  entries: unknown,
+  path: string | null | undefined,
+  questionId: string | null | undefined,
+  answeredIds: Iterable<string>,
+): { index: number; total: number; answered: boolean; next: QuestionEntry | null } | null {
+  if (!Array.isArray(entries) || typeof path !== "string" || !path) return null;
+  const onFile = entries.filter(
+    (raw): raw is QuestionEntry =>
+      !!raw && typeof raw === "object" &&
+      (raw as QuestionEntry).path === path &&
+      typeof (raw as QuestionEntry).question_id === "string" &&
+      !!(raw as QuestionEntry).question_id,
+  );
+  if (!onFile.length) return null;
+  const answered = new Set<string>();
+  for (const id of answeredIds) if (id) answered.add(String(id));
+  const qid = typeof questionId === "string" ? questionId : "";
+  const index = onFile.findIndex((e) => e.question_id === qid);
+  const next = onFile.find((e) => e.question_id !== qid && !answered.has(String(e.question_id))) ?? null;
+  return {
+    index: index >= 0 ? index + 1 : 0,
+    total: onFile.length,
+    answered: qid ? answered.has(qid) : false,
+    next,
+  };
 }
 
 /**
