@@ -284,6 +284,62 @@ fn main_is_fullscreen(app: &tauri::AppHandle) -> bool {
         .unwrap_or(false)
 }
 
+// tb_1792801925_82234_1 (оператор 24.10): панели обязаны быть ВСЕГДА выше окна
+// видео в оконном режиме. parent(main) держит их выше, но native fullscreen
+// отцепляет дочерние окна в AppKit, и после выхода show() возвращает обычное
+// окно — оно уезжает за главное. Перед каждым показом восстанавливаем
+// child-связь и порядок. Системный always-on-top не включаем: панели не должны
+// висеть над чужими приложениями.
+#[cfg(target_os = "macos")]
+fn attach_panel_above_main(app: &tauri::AppHandle, panel: &WebviewWindow) {
+    use objc2::runtime::AnyObject;
+    use objc2_app_kit::{NSWindow, NSWindowOrderingMode};
+    use tauri::Manager;
+
+    let Some(main) = app.get_webview_window("main") else {
+        return;
+    };
+    let (Ok(main_ns), Ok(panel_ns)) = (main.ns_window(), panel.ns_window()) else {
+        return;
+    };
+    let (main_ns, panel_ns) = (main_ns as usize, panel_ns as usize);
+    let _ = panel.run_on_main_thread(move || unsafe {
+        let parent: &NSWindow = &*((main_ns as *mut AnyObject).cast::<NSWindow>());
+        let child: &NSWindow = &*((panel_ns as *mut AnyObject).cast::<NSWindow>());
+        if child.parentWindow().is_none() {
+            parent.addChildWindow_ordered(child, NSWindowOrderingMode::Above);
+        } else {
+            child.orderWindow_relativeTo(NSWindowOrderingMode::Above, parent.windowNumber());
+        }
+        child.orderFront(None);
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn attach_panel_above_main(_app: &tauri::AppHandle, _panel: &WebviewWindow) {}
+
+// Выход из fullscreen в AppKit асинхронный: сразу после show() порядок окон
+// может быть переставлен ещё раз. Через полсекунды подтверждаем порядок.
+fn reassert_panels_above_main(app: tauri::AppHandle) {
+    use tauri::Manager;
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(450));
+        for (label, win) in app.webview_windows() {
+            if !is_panel_label(&label) {
+                continue;
+            }
+            if win.is_visible().unwrap_or(false) {
+                attach_panel_above_main(&app, &win);
+            }
+        }
+    });
+}
+
+fn show_panel_above_main(app: &tauri::AppHandle, win: &WebviewWindow) {
+    let _ = win.show();
+    attach_panel_above_main(app, win);
+}
+
 #[tauri::command]
 fn set_panel_windows_visible(app: tauri::AppHandle, visible: bool) -> Result<usize, String> {
     use tauri::Manager;
@@ -293,11 +349,14 @@ fn set_panel_windows_visible(app: tauri::AppHandle, visible: bool) -> Result<usi
             continue;
         }
         if visible {
-            let _ = win.show();
+            show_panel_above_main(&app, &win);
         } else {
             let _ = win.hide();
         }
         touched += 1;
+    }
+    if visible && touched > 0 {
+        reassert_panels_above_main(app.clone());
     }
     Ok(touched)
 }
@@ -339,7 +398,9 @@ fn open_panel_window(
             return Ok(());
         }
         let _ = win.unminimize();
-        let _ = win.show();
+        // tb_1792801925_82234_1: после fullscreen окно могло потерять child-связь
+        // с main — возвращаем её до фокуса, иначе панель уедет за видео.
+        show_panel_above_main(&app, &win);
         win.set_focus()
             .map_err(|e| format!("Failed to focus window: {}", e))?;
         return Ok(());
@@ -400,6 +461,12 @@ fn open_panel_window(
                 y / scale,
             )));
         }
+    }
+    // tb_1792801925_82234_1: панель, созданная в оконном режиме, обязана быть
+    // выше видео — подтверждаем child-связь и порядок (в fullscreen не надо:
+    // окно скрыто до выхода из полного экрана).
+    if !main_fullscreen {
+        attach_panel_above_main(&app, &win);
     }
     Ok(())
 }

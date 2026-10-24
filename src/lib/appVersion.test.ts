@@ -11,8 +11,8 @@ import readme from "../../README.md?raw";
 // Без node: импортов (@types/node нет в src-tsconfig): JSON напрямую,
 // Cargo.toml и App.tsx — через ?raw (vite/client уже подключён в vite-env.d.ts).
 
-const EXPECTED_VERSION = "0.26.1";
-const EXPECTED_DISPLAY = "Mark Player 0.26.1 beta";
+const EXPECTED_VERSION = "0.26.2";
+const EXPECTED_DISPLAY = "Mark Player 0.26.2 beta";
 
 describe("version stamp 0.17", () => {
   it("package.json carries the stamp", () => {

@@ -4502,9 +4502,14 @@ function App() {
       }).catch(() => {});
     }
     window.addEventListener("resize", onFsChange);
+    // tb_1792801925_82234_1: выход из native fullscreen не всегда приходит
+    // событием resize (зелёная кнопка). Окно после перехода получает фокус —
+    // перечитываем состояние там, иначе панели останутся скрытыми, а не поверх.
+    window.addEventListener("focus", onFsChange);
     return () => {
       document.removeEventListener("fullscreenchange", onFsChange);
       window.removeEventListener("resize", onFsChange);
+      window.removeEventListener("focus", onFsChange);
       unlistenWin?.();
     };
   }, []);
