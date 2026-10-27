@@ -156,7 +156,7 @@ test("portrait images request a portrait-oriented shell", async ({ page }) => {
   expect((snapshot?.suggestedShellHeight ?? 0) > (snapshot?.suggestedShellWidth ?? Number.MAX_SAFE_INTEGER)).toBe(true);
 });
 
-test("seek через шкалу сходится к фактическому времени, seeking-бейдж гаснет (tb_1791172090_2308_6 п.3)", async ({ page }) => {
+test("seek через шкалу сходится к фактическому времени, надписи seeking нет (tb_1792869187_45227_1)", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 840 });
   await page.goto("/");
   await page.locator('input[accept*="video/*"]').setInputFiles(VIDEO_FIXTURE);
@@ -170,9 +170,32 @@ test("seek через шкалу сходится к фактическому в
     const video = document.querySelector("video") as HTMLVideoElement | null;
     return video !== null && Math.abs(video.currentTime - 3) < 0.35;
   });
-  // Декодер догнал: бейджа нет, цифра — фактическая позиция
+  // Декодер догнал: цифра — фактическая позиция
   // (сик сел на сэмпл 2.76, а не ровно на 3.00 — в этом и суть фикса).
+  // tb_1792869187_45227_1: бейджа seeking… в приложении больше нет совсем.
   await expect(page.getByTestId("transport-seeking")).toHaveCount(0);
   const text = await page.locator(".transport-time").first().textContent();
   expect(text).toMatch(/00:00:0[23]:\d{2}/);
+});
+
+test("бейдж ставки J/L стоит над таймкодом плейхеда (tb_1792869187_45227_1)", async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 840 });
+  await page.goto("/");
+  await page.locator('input[accept*="video/*"]').setInputFiles(VIDEO_FIXTURE);
+  await page.waitForFunction(() => {
+    const snapshot = window.vetkaPlayerLab?.snapshot();
+    return Boolean(snapshot?.ok && snapshot.sourceKind === "video");
+  });
+
+  await page.keyboard.press("l");
+  const badge = page.getByTestId("transport-shuttle-badge");
+  await expect(badge).toContainText("1x");
+  const badgeBox = await badge.boundingBox();
+  const timeBox = await page.locator(".transport-time").first().boundingBox();
+  expect(badgeBox).not.toBeNull();
+  expect(timeBox).not.toBeNull();
+  // Ставка целиком выше таймкода; сумма in-out живёт под таймкодом,
+  // поэтому пересечься с бейджем она больше не может.
+  expect(badgeBox!.y + badgeBox!.height).toBeLessThanOrEqual(timeBox!.y);
+  expect(await page.getByTestId("transport-seeking").count()).toBe(0);
 });

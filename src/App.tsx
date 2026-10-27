@@ -654,10 +654,11 @@ function App() {
   const shuttleDisplay = getShuttleDisplay(shuttle, isPlaying);
   const isMoving = shuttleDisplay.moving;
   const [currentTime, setCurrentTime] = useState(0);
-  // tb_1791172090_2308_6 п.3: запрошенная перемотка, которую декодер ещё
-  // не догнал. Пока seekTarget != null транспорт показывает ФАКТИЧЕСКУЮ
-  // позицию (currentTime) + честный бейдж «seeking…». Чистит onSeeked.
-  const [seekTarget, setSeekTarget] = useState<number | null>(null);
+  // tb_1792869187_45227_1 (оператор 24.10): бейдж «seeking…» убран
+  // ПОЛНОСТЬЮ (отменяет tb_1791689190_1275_1 п.2 и tb_1791172090_2308_6
+  // п.3): он ничего не даёт оператору и рискует мигать/прыгать. Вместе с
+  // ним удалено запрошенное время seekTarget — после снятия бейджа оно
+  // нигде не читается. Таймкод плейхеда — по-прежнему фактический currentTime.
   // tb_1792441299_49541_7 + tb_1792443862_5828_1: scrub-preview. Пока тянем
   // плейхед, UI ведёт его за курсором, не дожидаясь медленного seek аудио
   // через asset-протокол. Промежуточных сиков НЕТ вообще: каждый
@@ -668,18 +669,6 @@ function App() {
   const scrubbingRef = useRef(false);
   const scrubClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrubDisplayTime = scrubPreview ?? currentTime;
-  // tb_1791689190_1275_1: бейдж seeking… стробил при скрабе (тик ставит,
-  // seeked тут же гасит). Честный сигнал остался: показываем только
-  // зависший сик (>300мс), скраб идёт мимо бейджа.
-  const [seekStuck, setSeekStuck] = useState(false);
-  useEffect(() => {
-    if (seekTarget == null) {
-      setSeekStuck(false);
-      return;
-    }
-    const timer: ReturnType<typeof setTimeout> = setTimeout(() => setSeekStuck(true), 300);
-    return () => clearTimeout(timer);
-  }, [seekTarget]);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
@@ -2711,8 +2700,8 @@ function App() {
     setDraggingMarkerId(markerId);
   }
   // tb_1791844731_63972_4: плейхед-вертикаль — единый слой указателя (§3.2).
-  // Сик одним трактом: факт в video + setSeekTarget; ручной — с меткой
-  // markManualSeek (ножницы молчат 800мс, как мосты markers:seek).
+  // Сик одним трактом: факт в video + (с tb_1792869187_45227_1) метка
+  // markManualSeek при ручном сике (ножницы молчат 800мс, как мосты markers:seek).
   // tb_1792441299_49541_7: scrub-preview снимаем, когда декодер догнал
   // запрошенную точку (onSeeked), либо страховочным таймаутом.
   function clearScrubPreview(): void {
@@ -2766,7 +2755,6 @@ function App() {
         // ignore — останется внешнее
       }
     }
-    setSeekTarget(sec);
     if (manual) markManualSeek();
   }
   // Значки для hitTest — из тех же mediaMarkers, что отрисованы: центры по
@@ -4637,7 +4625,6 @@ function App() {
         // ignore — останется внешнее
       }
     }
-    setSeekTarget(snap);
   }, [activeQuestion, duration, currentTime]);
 
   // tb_1791819024_26192_2: карточка следует за playhead внутри одного файла
@@ -4707,7 +4694,6 @@ function App() {
         // ignore — останется внешнее
       }
     }
-    setSeekTarget(at);
   }, [activeQuestion, duration, mediaMarkers, currentFilePath]);
 
   // tb_1791146301_70644_17: прыжки плейхеда из окна всех маркеров.
@@ -4720,7 +4706,6 @@ function App() {
       const video = videoRef.current;
       if (video) {
         video.currentTime = sec;
-        setSeekTarget(sec);
         // tb_1791843935_63972_2: клик-сик из панели — навигация.
         markManualSeek();
       }
@@ -4743,7 +4728,6 @@ function App() {
         const video = videoRef.current;
         if (video) {
           video.currentTime = sec;
-          setSeekTarget(sec);
           // tb_1791843935_63972_2: клик-сик из панели — навигация.
           markManualSeek();
         }
@@ -4833,6 +4817,39 @@ function App() {
     attachSource(nextUrl, file.name);
   }
 
+  // tb_1792972841_45227_2: Repeat: one на плейлисте из одной записи вставал
+  // после первого проигрывания (оператор: «с видео рипит работал», аудио —
+  // нет). Причина: перезапуск той же записи делался сиком и play() в одном
+  // такте с 'ended' — WebKit стартовал play до завершения сика, элемент
+  // мгновенно упирался в конец и замирал. Ждём 'seeked' (страховка 300 мс),
+  // затем играем; отказ play() добиваем вторым заходом, чтобы петля не
+  // умирала молча. Путь смены записи (next.path !== current) не затронут.
+  function restartMediaAt(video: HTMLVideoElement, sec: number): void {
+    let started = false;
+    let guard = 0;
+    const start = () => {
+      if (started) return;
+      started = true;
+      window.clearTimeout(guard);
+      video.removeEventListener("seeked", start);
+      void video.play().catch(() => {
+        window.setTimeout(() => {
+          if (video.paused) void video.play().catch(() => {});
+        }, 80);
+      });
+    };
+    guard = window.setTimeout(start, 300);
+    video.addEventListener("seeked", start);
+    try {
+      video.currentTime = sec;
+    } catch {
+      // ignore — останется внешнее
+      start();
+      return;
+    }
+    if (!video.seeking) start();
+  }
+
   // tb_1791662784_27409_3: автопереход плейлиста — общий для onEnded и
   // OUT-хвоста ножниц (черновой монтаж: последнее OUT ведёт на следующее
   // видео). Возвращает false, когда идти некуда (нет плейлиста/следующего).
@@ -4867,21 +4884,10 @@ function App() {
       const video = videoRef.current;
       const inT = normalizeQuestionEntry(next as unknown as Record<string, unknown>).in_sec;
       if (video) {
-        if (typeof inT === "number" && Number.isFinite(inT) && inT >= 0 && inT < (duration || Infinity)) {
-          try {
-            video.currentTime = inT;
-          } catch {
-            // ignore — останется внешнее
-          }
-          setSeekTarget(inT);
-        } else {
-          try {
-            video.currentTime = 0;
-          } catch {
-            // ignore — останется внешнее
-          }
-        }
-        void video.play().catch(() => {});
+        const target = typeof inT === "number" && Number.isFinite(inT) && inT >= 0 && inT < (duration || Infinity) ? inT : 0;
+        // tb_1792972841_45227_2: перезапуск — через ожидание 'seeked',
+        // иначе аудио-петля умирает на первом же обороте.
+        restartMediaAt(video, target);
       }
       return true;
     }
@@ -5025,7 +5031,6 @@ function App() {
             } catch {
               // ignore — останется внешнее
             }
-            setSeekTarget(inT);
           }
           if (current.paused) {
             void current.play().catch(() => {});
@@ -6017,7 +6022,6 @@ function App() {
                                 } catch {
                                   // ignore — останется начало
                                 }
-                                setSeekTarget(target);
                               }
                             }
                           }}
@@ -6099,7 +6103,6 @@ function App() {
                               }
                               video.pause();
                               inOutPrevTRef.current = range.out;
-                              setSeekTarget(null);
                               setCurrentTime(range.out);
                               return;
                             }
@@ -6151,7 +6154,6 @@ function App() {
                                     // ignore — останется внешнее
                                   }
                                   video.pause();
-                                  setSeekTarget(null);
                                   setCurrentTime(pauseAt);
                                 }
                                 const target = action?.kind === "jump" ? action.at : null;
@@ -6162,7 +6164,6 @@ function App() {
                                 } catch {
                                   // ignore — останется внешнее
                                 }
-                                setSeekTarget(target);
                                 const skipped = Math.max(0, target - t);
                                 if (skipped > 0) {
                                   setSkippedTotalSec((prev) => prev + skipped);
@@ -6180,7 +6181,6 @@ function App() {
                           onSeeked={(event) => {
                             const t = Number(event.currentTarget.currentTime || 0);
                             setCurrentTime(t);
-                            setSeekTarget(null);
                             // tb_1792441299_49541_7: preview живёт до момента,
                             // когда декодер реально догнал точку.
                             const preview = scrubPreviewRef.current;
@@ -6332,11 +6332,6 @@ function App() {
                                   </span>
                                 ) : null}
                               </span>
-                              {seekTarget != null && seekStuck ? (
-                                <span className="transport-seeking" data-testid="transport-seeking" title={`Seeking to ${seekTarget}s`}>
-                                  seeking…
-                                </span>
-                              ) : null}
                               <span className={shuttleSlotClass(shuttleDisplay.badge)} data-testid="transport-shuttle-badge" title={shuttleDisplay.label}>
                                 {shuttleDisplay.badge ?? ""}
                               </span>
@@ -6431,10 +6426,9 @@ function App() {
                                     showScrubPreview(nextTime);
                                     return;
                                   }
-                                  // п.3: без оптимизма — показываем факт + seeking…,
-                                  // цифра догонит по onSeeked/timeupdate.
+                                  // без оптимизма: цифра — факт из onSeeked/
+                                  // timeupdate (бейджа seeking больше нет).
                                   if (videoRef.current && Math.abs(videoRef.current.currentTime - nextTime) < 0.02) return;
-                                  setSeekTarget(nextTime);
                                   if (videoRef.current) videoRef.current.currentTime = nextTime;
                                 }}
                                 aria-label="Seek"

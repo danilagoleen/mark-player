@@ -836,9 +836,9 @@ select {
   background: rgba(255, 255, 255, 0.16);
 }
 
-/* Дочерний 0.10.19 (E2E 2026-09-24): колонка время+слот ставки.
- * Слот всегда в DOM с мин-высотой — тулбар не прыгает; стиль слота =
- * стиль таймкода, никакого жёлтого. */
+/* tb_1792869187_45227_1 (оператор 24.10): в колонке остался только
+ * таймкод — бейдж ставки ушёл НАД ним, сумма in-out осталась под ним.
+ * Оба абсолютные: таймкод держит центр кнопки play и не прыгает. */
 .transport-time-col {
   position: relative;
   display: inline-flex;
@@ -850,9 +850,15 @@ select {
   margin-top: -2px;
   margin-top: calc(-2px * var(--player-scale, 1));
 }
+/* tb_1792869187_45227_1: ставка J/L — строго над таймкодом, чтобы её
+ * навсегда развести с суммой in-out (та висит под таймкодом). Абсолютная
+ * позиция: колонка не раздвигается, таймкод не уезжает с центра play. */
 .transport-shuttle-badge {
-  min-height: 13px;
-  min-height: calc(13px * var(--player-scale, 1));
+  position: absolute;
+  left: 0;
+  bottom: 100%;
+  margin-bottom: 1px;
+  margin-bottom: calc(1px * var(--player-scale, 1));
   color: #d4dae2;
   font-size: 11px;
   font-size: calc(11px * var(--player-scale, 1));
@@ -885,18 +891,6 @@ select {
   /* tb_1791689190_1275_1: чуть ниже таймкода плейхеда. */
   margin-top: 2px;
   margin-top: calc(2px * var(--player-scale, 1));
-}
-
-/* tb_1791172090_2308_6 п.3: честный статус зависшей перемотки. */
-.transport-seeking {
-  min-height: 13px;
-  min-height: calc(13px * var(--player-scale, 1));
-  color: #d4dae2;
-  font-size: 11px;
-  font-size: calc(11px * var(--player-scale, 1));
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  font-style: italic;
 }
 /* tb_1791233964_7043_5: сумма in-out — прямой ребёнок пилюли
    transport-bar (position:relative). Висит ПОД пилюлей и никогда не
