@@ -81,8 +81,32 @@ describe("questionMaterialize (tb_1791586270_32802_2)", () => {
       { question_id: "q1", markers: [{ kind: "wat", t_sec: 1 } as never] },
       CTX,
     );
+    // tb_1793480340_10647_1: без in запись получает родителя _whole + свой коммент.
+    expect(markers.map((m) => m.marker_id)).toEqual(["qmat_q1_whole", "qmat_q1_c0"]);
+    expect(markers[1].kind).toBe("comment");
+  });
+
+  it("tb_1793480340_10647_1: запись без скобок (картинка) → маркер-родитель _whole в 0:00", () => {
+    const markers = materializeQuestionEntry(
+      { question_id: "cap-3", question: "Один ли человек? Слева A, справа B." },
+      CTX,
+    );
     expect(markers).toHaveLength(1);
-    expect(markers[0].kind).toBe("comment");
+    const [whole] = markers;
+    expect(whole.marker_id).toBe("qmat_cap-3_whole");
+    expect(whole.marker_id.startsWith(materializedMarkerPrefix("cap-3"))).toBe(true);
+    expect(whole.kind).toBe("comment");
+    expect(whole.question_id).toBe("cap-3");
+    expect(whole.anchor_sec).toBe(0);
+    expect(whole.text).toBe("Один ли человек? Слева A, справа B.");
+    // повторный импорт — без дублей
+    const keys = new Set(markers.map((m) => markerDedupKey(m.marker_id, m.media_path, m.anchor_sec)));
+    expect(filterNewMarkers(keys, materializeQuestionEntry({ question_id: "cap-3", question: "x" }, CTX))).toHaveLength(0);
+  });
+
+  it("tb_1793480340_10647_1: со скобкой in родитель _whole не пишется", () => {
+    const markers = materializeQuestionEntry({ question_id: "q9", in_sec: 3, out_sec: 8 }, CTX);
+    expect(markers.map((m) => m.marker_id)).toEqual(["qmat_q9_in", "qmat_q9_out"]);
   });
 
   it("agentAuthorFor: by → agent:<by>, пусто → agent:agent", () => {

@@ -3,7 +3,7 @@
 // пишет штатные маркеры (in/out-пары режут клипы в XML, комменты едут
 // с автором agent:<роль>). Чистый модуль без DOM/LS-зависимостей.
 import type { QuestionBox, QuestionEntryFields, QuestionMarker } from "./questionPlaylist";
-import { isQuestionPlaylist, normalizeQuestionEntry } from "./questionPlaylist";
+import { WHOLE_FILE_MARKER_SUFFIX, isQuestionPlaylist, normalizeQuestionEntry } from "./questionPlaylist";
 import type { QuestionPlaylist } from "./questionPlaylist";
 import type { Playlist } from "./playlist";
 import { AGENT_AUTHOR_PREFIX } from "./commentAuthor";
@@ -135,6 +135,9 @@ function normalizeKind(raw: unknown): QuestionMarkerKind {
  * комменты из entry.markers. Пустая запись (нет question_id) — [].
  * out без валидного in или out<=in пропускается (ломаную пару не пишем),
  * in-одиночка и комменты — пишутся.
+ * tb_1793480340_10647_1: запись БЕЗ in (картинка, вопрос «на весь файл»)
+ * получает маркер-родитель `_whole` (комментарий в 0:00 с текстом вопроса):
+ * иначе ответу карточки не к чему прикрепиться и «answers won't save».
  */
 export function materializeQuestionEntry(
   entry: QuestionEntryFields,
@@ -159,6 +162,17 @@ export function materializeQuestionEntry(
       start_sec: inSec,
       end_sec: inSec,
       anchor_sec: inSec,
+      label: clampLabel(qid),
+      text: question + formatRegionSuffix(entry.bbox, entry.bbox_end),
+    });
+  }
+  if (inSec === undefined) {
+    out.push({
+      ...baseMarker(ctx, materializedMarkerId(qid, WHOLE_FILE_MARKER_SUFFIX), qid),
+      kind: "comment",
+      start_sec: 0,
+      end_sec: 0,
+      anchor_sec: 0,
       label: clampLabel(qid),
       text: question + formatRegionSuffix(entry.bbox, entry.bbox_end),
     });

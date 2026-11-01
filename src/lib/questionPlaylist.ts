@@ -224,6 +224,13 @@ function finiteNum(v: unknown): number | undefined {
 }
 
 /**
+ * tb_1793480340_10647_1: суффикс маркера-родителя для вопроса БЕЗ скобок
+ * (картинка, запись «на весь файл»): id = qmat_<вопрос>_whole. Без него у такой
+ * записи нет маркера вопроса, и ответ на карточке некуда прикрепить.
+ */
+export const WHOLE_FILE_MARKER_SUFFIX = "whole";
+
+/**
  * tb_1791809796_24701_1: answers.json = выжимка из маркеров. Прямые дети qmat —
  * ответы: с префиксом [answer] — разбор вердикта/choice/comment, без — свободный
  * текст (verdict comment, Commander). t_sec = anchor ответа (карточка ставит
@@ -277,10 +284,22 @@ export function answersFromMarkers(
     }
     const t = finiteNum(m.anchor_sec) ?? finiteNum(parent.anchor_sec);
     if (t !== undefined && t >= 0) record.t_sec = t;
-    const inSec = finiteNum(parent.start_sec);
-    const outSec = finiteNum(parent.end_sec);
-    if (inSec !== undefined && inSec >= 0) record.in_sec = inSec;
-    if (outSec !== undefined && outSec >= 0) record.out_sec = outSec;
+    // tb_1793480340_10647_1: родитель ответа — ТОЧКА in (start==end), и out_sec
+    // брался из неё же: в answers.json было in==out во всех ответах. OUT
+    // вопроса — отдельный маркер <префикс>_out (текущая позиция: человек мог
+    // его сдвинуть); легаси-родитель с настоящим диапазоном — как раньше.
+    // Вопрос на весь файл (_whole) скобок не имеет — in/out не пишем.
+    if (!parentId.endsWith(`_${WHOLE_FILE_MARKER_SUFFIX}`)) {
+      const inSec = finiteNum(parent.start_sec);
+      const outMarker = parentId.endsWith("_in") ? byId.get(`${parentId.slice(0, -3)}_out`) : undefined;
+      let outSec = finiteNum(outMarker?.start_sec) ?? finiteNum(outMarker?.anchor_sec);
+      if (outSec === undefined) {
+        const rangeEnd = finiteNum(parent.end_sec);
+        if (rangeEnd !== undefined && inSec !== undefined && rangeEnd > inSec) outSec = rangeEnd;
+      }
+      if (inSec !== undefined && inSec >= 0) record.in_sec = inSec;
+      if (outSec !== undefined && outSec >= 0 && (inSec === undefined || outSec > inSec)) record.out_sec = outSec;
+    }
     const author = typeof m.author === "string" ? m.author.trim() : "";
     record.confirmed_by = author || DEFAULT_CONFIRMED_BY;
     out.push(record);
@@ -297,17 +316,78 @@ export function findQuestionEntryAtTime(
   entries: unknown,
   path: string | null | undefined,
   t: number | null | undefined,
+  preferQuestionId?: string | null,
 ): QuestionEntry | null {
   if (!Array.isArray(entries) || typeof path !== "string" || typeof t !== "number" || !Number.isFinite(t)) return null;
+  // tb_1793480340_10647_1: границы соседних окон (0–10 и 10–20) делят точку
+  // 10 — раньше выигрывала первая запись списка, карточка прыгала туда-сюда.
+  // Теперь: текущий вопрос держится на своей границе (preferQuestionId), иначе
+  // побеждает окно, которое в этой точке НАЧИНАЕТСЯ ([in,out)); закрытый
+  // конец (t==out, пауза на OUT последнего окна) — только если других нет.
+  let halfOpen: QuestionEntry | null = null;
+  let closedOnly: QuestionEntry | null = null;
   for (const raw of entries) {
     if (!raw || typeof raw !== "object") continue;
     const e = raw as QuestionEntry;
     if (e.path !== path || typeof e.question_id !== "string" || !e.question_id) continue;
     const a = typeof e.in_sec === "number" ? e.in_sec : NaN;
     const b = typeof e.out_sec === "number" ? e.out_sec : NaN;
-    if (Number.isFinite(a) && Number.isFinite(b) && b > a && t >= a && t <= b) return e;
+    if (!(Number.isFinite(a) && Number.isFinite(b) && b > a && t >= a && t <= b)) continue;
+    if (preferQuestionId && e.question_id === preferQuestionId) return e;
+    if (t < b) {
+      if (!halfOpen) halfOpen = e;
+    } else if (!closedOnly) {
+      closedOnly = e;
+    }
   }
-  return null;
+  return halfOpen ?? closedOnly;
+}
+
+/**
+ * tb_1793480340_10647_1: скобки вопроса как отрезок, в котором принимается
+ * ответ. null — у вопроса нет скобок (картинка, «весь файл»): принимается
+ * везде. Одинокий IN — до конца файла, одинокий OUT — от начала (семантика
+ * ножниц). Чистая, тестируем.
+ */
+export function questionBracketOf(
+  entry: { in_sec?: unknown; out_sec?: unknown } | null | undefined,
+): { in: number; out: number } | null {
+  if (!entry) return null;
+  const a = finiteNum(entry.in_sec);
+  const b = finiteNum(entry.out_sec);
+  if (a === undefined && b === undefined) return null;
+  const inT = a !== undefined && a >= 0 ? a : 0;
+  const outT = b !== undefined && b > inT ? b : Number.POSITIVE_INFINITY;
+  return { in: inT, out: outT };
+}
+
+export type AnswerGate = { ok: true } | { ok: false; reason: "no_question" | "outside" };
+
+/**
+ * tb_1793480340_10647_1: можно ли принять ответ карточки. Раньше кнопка
+ * писала ответ вопросу карточки при ЛЮБОМ положении плейхеда: на live1
+ * вопрос 10–20 получил ответы с t=26.7/41.8/52.2, на live1b вопрос 20–30 —
+ * с t=0/10/30/50 (последний перебил верный). Правило: t внутри ЗАКРЫТЫХ
+ * скобок вопроса карточки (закрытый конец нужен — плеер встаёт на паузу ровно
+ * на OUT); вне — нельзя. Нет скобок или нет позиции (картинка) — можно.
+ */
+export function answerGate(
+  active: { in_sec?: unknown; out_sec?: unknown } | null | undefined,
+  t: number | null | undefined,
+): AnswerGate {
+  if (!active) return { ok: false, reason: "no_question" };
+  const bracket = questionBracketOf(active);
+  if (!bracket) return { ok: true };
+  if (typeof t !== "number" || !Number.isFinite(t)) return { ok: true };
+  return t >= bracket.in && t <= bracket.out ? { ok: true } : { ok: false, reason: "outside" };
+}
+
+/** Подпись скобок для тоста/подсказки: «10–20 s», «12–end s», без скобок — «whole file». */
+export function formatQuestionBrackets(entry: { in_sec?: unknown; out_sec?: unknown } | null | undefined): string {
+  const b = questionBracketOf(entry);
+  if (!b) return "whole file";
+  const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+  return `${fmt(b.in)}–${Number.isFinite(b.out) ? fmt(b.out) : "end"} s`;
 }
 
 /**

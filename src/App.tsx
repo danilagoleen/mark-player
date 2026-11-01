@@ -40,6 +40,7 @@ import {
 import { pushTransportTrace, shouldHideTransport, type TransportTraceEntry } from "./lib/transportVisibility";
 import { SCRUB_PREVIEW_TIMEOUT_MS, isScrubSettled } from "./lib/scrubSeek";
 import { PLAYER_SEEK_REQUEST_KEY, parseSeekRequest } from "./lib/markerSeek";
+import { publishCommentAnchor } from "./lib/commentAnchor";
 import { clampCardPosition, loadCardPosition, saveCardPosition, type CardPoint } from "./lib/questionCard";
 import { parseCutsheet, resolveCutsheetForMedia, type CutsheetSegment } from "./lib/cutsheet";
 import { PLAYER_PLAY_REQUEST_KEY, PLAYLIST_RELOAD_EVENT, notifyPlaylistReloaded, parsePlayRequest } from "./lib/playlistPlay";
@@ -66,7 +67,7 @@ import { DOOR_IDS, checkModuleDoor, doorClickTransition, doorEndpoint, doorLabel
 import type { ProbeResult } from "./lib/nativeWindow";
 import { dirOfPath, joinForDialog } from "./lib/exportPaths";
 import { createEmptyPlaylist, savePlaylist, loadPlaylist, addEntry, getNextEntryFromCursor, loadPlaybackMode, sanitizePlaylistFilename, trackOpenedFile, type QuestionPlaylistEntry } from "./lib/playlist";
-import { answersFromMarkers, buildAnswersDocument, filterAnswersToPlaylist, findQuestionEntryAtTime, formatAnswerReplyText, lerpQuestionBox, mergeAnswerRecords, normalizeQuestionEntry, parseAnswersDocument, questionFilePosition, readAnswersOutbox, readQuestionPlaylistPath, rememberQuestionPlaylistPath, resolveActiveEntry, resolveAnswers, resolveQuestionSnapTime, writeAnswersOutbox, isQuestionPlaylist, type AnswerRecord, type AnswersDocument, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
+import { WHOLE_FILE_MARKER_SUFFIX, answerGate, formatQuestionBrackets, answersFromMarkers, buildAnswersDocument, filterAnswersToPlaylist, findQuestionEntryAtTime, formatAnswerReplyText, lerpQuestionBox, mergeAnswerRecords, normalizeQuestionEntry, parseAnswersDocument, questionFilePosition, readAnswersOutbox, readQuestionPlaylistPath, rememberQuestionPlaylistPath, resolveActiveEntry, resolveAnswers, resolveQuestionSnapTime, writeAnswersOutbox, isQuestionPlaylist, type AnswerRecord, type AnswersDocument, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
 import { writeAnswersAckFile, writeAnswersDocumentFile, sanitizeAnswersFileOnDisk } from "./lib/questionAnswersFile";
 import { createSessionReporter, type SessionReporter } from "./lib/sessionReporter";
 import { isSameMediaPath, resolveMediaContentHash } from "./lib/mediaOpen";
@@ -883,6 +884,8 @@ function App() {
   // скобки (взводит commitAdvance, гасят failAdvance и ручной путь,
   // срабатывает эффектом ниже, одноразовый).
   const advanceInSeekRef = useRef<string | null>(null);
+  // tb_1793480340_10647_1: где плеер встал на OUT последней записи плейлиста.
+  const playlistTailPauseRef = useRef<{ path: string; at: number } | null>(null);
   const skipToastShownRef = useRef(false);
   const [skippedTotalSec, setSkippedTotalSec] = useState(0);
   // tb_1791333803_37784_1: превью монтажного листа одного видео (только
@@ -1105,6 +1108,15 @@ function App() {
     const q = activeQuestion;
     if (!q || !q.question_id) return;
     const qid = q.question_id;
+    // tb_1793480340_10647_1: ответ принимается только внутри скобок вопроса
+    // карточки. Позицию берём у элемента (state отстаёт на тик), на картинке
+    // позиции нет — скобок там тоже нет. Кнопки при этом уже погашены; здесь
+    // страховка от клика в тот же тик, когда плейхед выехал за OUT.
+    const gate = answerGate(q, mediaKind === "image" ? undefined : videoRef.current?.currentTime);
+    if (!gate.ok) {
+      setContextToast(`Answer NOT saved: playhead is outside this question (${formatQuestionBrackets(q)}).`);
+      return;
+    }
     // Дабл-клик — один ответ (scn-03 ×2 с разрывом 0.09с).
     if (answerBusyRef.current) return;
     const last = lastAnswerRef.current;
@@ -1117,8 +1129,11 @@ function App() {
     const comment = questionComment.trim();
     const t = videoRef.current?.currentTime;
     const playhead = typeof t === "number" && Number.isFinite(t) && t >= 0 ? t : undefined;
+    // tb_1793480340_10647_1: родитель — IN вопроса, а у вопроса «на весь файл»
+    // (картинка) — его _whole; префикс — только для старых маркеров.
     const replyParent =
       mediaMarkers.find((m) => m.marker_id === materializedMarkerId(qid, "in")) ??
+      mediaMarkers.find((m) => m.marker_id === materializedMarkerId(qid, WHOLE_FILE_MARKER_SUFFIX)) ??
       mediaMarkers.find((m) => m.marker_id.startsWith(materializedMarkerPrefix(qid))) ??
       null;
     const replyText = formatAnswerReplyText({ verdict, choice: questionChoice ?? undefined, comment: comment || undefined });
@@ -1272,6 +1287,11 @@ function App() {
     const prefix = materializedMarkerPrefix(qid);
     return mediaMarkers.some((m) => m.marker_id === inId || m.marker_id.startsWith(prefix));
   }
+  // tb_1793480340_10647_1: плейхед вне скобок вопроса карточки — кнопки гаснут
+  // с подсказкой «вне вопроса» (live1: вопрос 10–20 брал ответы с 26/41/52 с).
+  const answerOutside = activeQuestion
+    ? !answerGate(activeQuestion, mediaKind === "image" ? undefined : currentTime).ok
+    : false;
   // tb_1791876286_57716_1: entry/entryIndex — точная запись (сиблинги A/B
   // делят qid, trk-10 — и path+qid). Переданная валидная запись важнее
   // лукапа; иначе resolveActiveEntry: индекс → пара path+qid → qid → путь.
@@ -2075,6 +2095,9 @@ function App() {
           break;
         case "addCommentMarker":
           event.preventDefault();
+          // tb_1793125816_99982_1: M — точка разговора, не «на ходу».
+          // Пауза до открытия: окно и живой якорь получают один и тот же кадр.
+          if (video && !video.paused) video.pause();
           openCommentsPanelRef.current("comment");
           break;
         case "inOutPlayToggle":
@@ -4642,7 +4665,8 @@ function App() {
     if (questionPathRef.current !== null && questionPathRef.current !== currentFilePath) return;
     let hit: QuestionEntry | null = null;
     try {
-      hit = findQuestionEntryAtTime(loadPlaylist()?.entries, currentFilePath, currentTime);
+      // tb_1793480340_10647_1: текущий вопрос держится на общей границе окон.
+      hit = findQuestionEntryAtTime(loadPlaylist()?.entries, currentFilePath, currentTime, activeQuestionRef.current?.question_id);
     } catch {
       return;
     }
@@ -4662,7 +4686,8 @@ function App() {
   // tb_1792634247_72740_2: первый запуск/открытие записи — карточка видна
   // сразу, не дожидаясь тика follow внутри скобок. Закрытую X не воскрешаем.
   useEffect(() => {
-    if (mediaKind !== "video" || !currentFilePath) return;
+    // tb_1793480340_10647_1: картинка тоже несёт вопрос (запись без скобок).
+    if ((mediaKind !== "video" && mediaKind !== "image") || !currentFilePath) return;
     if (questionCardDismissedRef.current || activeQuestionRef.current) return;
     try {
       const { entry, index } = resolveActiveEntry(loadPlaylist()?.entries, { path: currentFilePath });
@@ -4853,7 +4878,7 @@ function App() {
   // tb_1791662784_27409_3: автопереход плейлиста — общий для onEnded и
   // OUT-хвоста ножниц (черновой монтаж: последнее OUT ведёт на следующее
   // видео). Возвращает false, когда идти некуда (нет плейлиста/следующего).
-  function advanceToNextEntry(): boolean {
+  function advanceToNextEntry(opts?: { fromStart?: boolean }): boolean {
     // 0.10.19: shuttle level must die with the clip,
     // or the next file inherits a lying badge.
     stopShuttleRef.current();
@@ -4867,7 +4892,11 @@ function App() {
     // tb_1791865711_84020_5: переход от курсора записи (путь + вопрос), а не
     // от findIndex-первого совпадения пути — дубли path уводили назад.
     const cursor = currentEntryRef.current.path ? currentEntryRef.current : { path: currentFilePath };
-    const found = getNextEntryFromCursor(pl, cursor, loadPlaybackMode());
+    // tb_1793480340_10647_1: fromStart — play после паузы на последнем OUT
+    // начинает плейлист заново (первая запись), а не ищет следующую.
+    const found = opts?.fromStart && pl.entries.length > 0
+      ? { entry: pl.entries[0], index: 0 }
+      : getNextEntryFromCursor(pl, cursor, loadPlaybackMode());
     if (!found) return false;
     const next = found.entry;
     const nextQuestionId = (next as QuestionPlaylistEntry).question_id ?? null;
@@ -5670,6 +5699,14 @@ function App() {
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
+      // tb_1793480340_10647_1: стоим на OUT последней записи плейлиста вопросов
+      // (ножницы ON) — play начинает плейлист заново. Раньше пересечения OUT при
+      // старте с самой отметки не было, и плейхед шёл по щели за скобками.
+      const tail = playlistTailPauseRef.current;
+      if (tail && inOutPlayOnRef.current && tail.path === currentFilePathRef.current && Math.abs(video.currentTime - tail.at) < 0.1) {
+        playlistTailPauseRef.current = null;
+        if (advanceToNextEntry({ fromStart: true })) return;
+      }
       if (video.currentTime > 0 && video.currentTime < 0.05) {
         video.currentTime = 0;
       }
@@ -5751,6 +5788,9 @@ function App() {
     const fps = resolveXmlFps(containerFps, probeResult?.fps, estimatedFps);
     const at = Math.max(0, Number(videoRef.current?.currentTime ?? currentTime ?? 0));
     const filterQuery = initialFilter === "comment" ? "&filter=comments" : "";
+    // tb_1793125816_99982_1: окно, открытое по уже существующей панели,
+    // не должно ждать следующего timeupdate ради верного якоря.
+    publishCommentAnchor(currentMediaKey, at);
     void openPanelWindow("panel-comments", "comments", "", 380, 560, withContentHash(currentMediaKey ? `media=${encodeURIComponent(currentMediaKey)}&fps=${fps}&at=${at.toFixed(2)}${filterQuery}` : undefined));
   }
 
@@ -6053,6 +6093,8 @@ function App() {
                           onPlay={() => { setIsPlaying(true); setMediaProblem(""); }}
                           onPause={(event) => {
                             setIsPlaying(false);
+                            // tb_1793125816_99982_1: пауза — финальная точка якоря.
+                            publishCommentAnchor(currentMediaKeyRef.current, Number(event.currentTarget.currentTime || 0));
                             // tb_1791233024_7043_1: пауза — точная запись позиции для Resume.
                             recordPlaybackPositionExact(currentFilePathRef.current, Number(event.currentTarget.currentTime || 0));
                             // tb_1792532431_93509_9: пауза — событие отчёта о показе.
@@ -6080,6 +6122,8 @@ function App() {
                           onTimeUpdate={(event) => {
                             const t = Number(event.currentTarget.currentTime || 0);
                             setCurrentTime(t);
+                            // tb_1793125816_99982_1: окно Comments живёт текущим кадром.
+                            publishCommentAnchor(currentMediaKeyRef.current, t);
                             // tb_1791233024_7043_1: троттл записи позиции (5с внутри record).
                             recordPlaybackPosition(currentFilePathRef.current, t);
                             // tb_1791143015_70644_7: In–Out Play одного видео.
@@ -6146,6 +6190,11 @@ function App() {
                                 inOutPrevTRef.current = 0;
                               } else {
                                 const pauseAt = action?.kind === "tail" ? action.at : null;
+                                // tb_1793480340_10647_1: пауза на OUT последней записи
+                                // плейлиста вопросов — запоминаем место: play отсюда
+                                // начнёт плейлист заново, а не уйдёт в щель за OUT.
+                                playlistTailPauseRef.current =
+                                  pauseAt !== null && qTail ? { path: currentFilePathRef.current ?? "", at: pauseAt } : null;
                                 if (pauseAt !== null) {
                                   inOutPrevTRef.current = pauseAt;
                                   try {
@@ -6181,6 +6230,8 @@ function App() {
                           onSeeked={(event) => {
                             const t = Number(event.currentTarget.currentTime || 0);
                             setCurrentTime(t);
+                            // tb_1793125816_99982_1: сик на паузе не даёт timeupdate.
+                            publishCommentAnchor(currentMediaKeyRef.current, t);
                             // tb_1792441299_49541_7: preview живёт до момента,
                             // когда декодер реально догнал точку.
                             const preview = scrubPreviewRef.current;
@@ -6493,13 +6544,29 @@ function App() {
                           ) : null}
                         </div>
                       </div>
+                      <button
+                        className="seek-zone seek-zone-left"
+                        type="button"
+                        data-testid="seek-backward"
+                        aria-label="Seek backward"
+                        onClick={() => seekBy(-1)}
+                      />
+                      <button
+                        className="seek-zone seek-zone-right"
+                        type="button"
+                        data-testid="seek-forward"
+                        aria-label="Seek forward"
+                        onClick={() => seekBy(1)}
+                      />
+                    </>
+                  ) : null}
                       {/* tb_1791764026_23730_1: вопрос — компактной карточкой
                           (план Б). Пилюлю не трогает. Текст режется ellipsis,
                           полный — в title.
                           tb_1791839608_26192_1: карточка в центре под пилюлей —
                           правый верх отдан тосту (приказ оператора). Без
                           маркеров вопроса кнопки гаснут + подсказка. */}
-                      {mediaKind === "video" && activeQuestion && questionPathRef.current === currentFilePath ? (
+                      {(mediaKind === "video" || mediaKind === "image") && activeQuestion && questionPathRef.current === currentFilePath ? (
                         <div
                           ref={questionCardRef}
                           data-testid="question-card"
@@ -6561,8 +6628,8 @@ function App() {
                               className="question-card-side-verdict"
                               data-testid="question-answer-favorite"
                               onClick={() => void answerQuestion("favorite")}
-                              disabled={!questionHasMarkers(activeQuestion?.question_id)}
-                              title={questionHasMarkers(activeQuestion?.question_id) ? "Confirm" : "No question markers — reimport the playlist"}
+                              disabled={!questionHasMarkers(activeQuestion?.question_id) || answerOutside}
+                              title={!questionHasMarkers(activeQuestion?.question_id) ? "No question markers — reimport the playlist" : answerOutside ? `Playhead is outside this question (${formatQuestionBrackets(activeQuestion)})` : "Confirm"}
                             >
                               Confirm
                             </button>
@@ -6571,8 +6638,8 @@ function App() {
                               className="question-card-side-verdict"
                               data-testid="question-answer-negative"
                               onClick={() => void answerQuestion("negative")}
-                              disabled={!questionHasMarkers(activeQuestion?.question_id)}
-                              title={questionHasMarkers(activeQuestion?.question_id) ? "Reject" : "No question markers — reimport the playlist"}
+                              disabled={!questionHasMarkers(activeQuestion?.question_id) || answerOutside}
+                              title={!questionHasMarkers(activeQuestion?.question_id) ? "No question markers — reimport the playlist" : answerOutside ? `Playhead is outside this question (${formatQuestionBrackets(activeQuestion)})` : "Reject"}
                             >
                               Reject
                             </button>
@@ -6581,8 +6648,8 @@ function App() {
                               className="question-card-side-verdict"
                               data-testid="question-answer-comment"
                               onClick={() => void answerQuestion("comment")}
-                              disabled={!questionHasMarkers(activeQuestion?.question_id)}
-                              title={questionHasMarkers(activeQuestion?.question_id) ? "Not sure (comment)" : "No question markers — reimport the playlist"}
+                              disabled={!questionHasMarkers(activeQuestion?.question_id) || answerOutside}
+                              title={!questionHasMarkers(activeQuestion?.question_id) ? "No question markers — reimport the playlist" : answerOutside ? `Playhead is outside this question (${formatQuestionBrackets(activeQuestion)})` : "Not sure (comment)"}
                             >
                               Not sure
                             </button>
@@ -6613,25 +6680,13 @@ function App() {
                             <div className="question-card-side-row" data-testid="question-no-markers">
                               <span className="question-card-side-hint">No question markers for this entry — answers won&apos;t save. Reimport the playlist.</span>
                             </div>
+                          ) : answerOutside ? (
+                            <div className="question-card-side-row" data-testid="question-outside">
+                              <span className="question-card-side-hint">Playhead is outside this question ({formatQuestionBrackets(activeQuestion)}) — move into it to answer.</span>
+                            </div>
                           ) : null}
                         </div>
                       ) : null}
-                      <button
-                        className="seek-zone seek-zone-left"
-                        type="button"
-                        data-testid="seek-backward"
-                        aria-label="Seek backward"
-                        onClick={() => seekBy(-1)}
-                      />
-                      <button
-                        className="seek-zone seek-zone-right"
-                        type="button"
-                        data-testid="seek-forward"
-                        aria-label="Seek forward"
-                        onClick={() => seekBy(1)}
-                      />
-                    </>
-                  ) : null}
                 </>
               ) : intrinsicSize.width > 0 && intrinsicSize.height > 0 ? (
                 <div className="synthetic-stage">

@@ -11,6 +11,7 @@ import {
   selectMarkersToClear,
 } from "./lib/markerHistory";
 import { resolvePlayerHotkey } from "./lib/playerHotkeys";
+import { COMMENT_ANCHOR_EVENT, COMMENT_ANCHOR_KEY, parseCommentAnchor, selectCommentAnchor, type CommentAnchor } from "./lib/commentAnchor";
 import { markerBelongsToMedia, notifyMarkersReloaded, MEDIA_CHANGED_EVENT, MARKERS_CHANGED_EVENT, resolveEffectiveMedia, type MediaChangedPayload } from "./lib/markersSync";
 import {
   buildReplyMarkerFull,
@@ -224,6 +225,9 @@ function CommentsStandalone() {
   const markersRef = useRef(markers);
   markersRef.current = markers;
   const historyRef = useRef(createMarkerHistory<BareMarker>());
+  // tb_1793125816_99982_1: живой якорь из главного окна. Save берёт его,
+  // ?at= остаётся точкой открытия (и fallback на чужой/старый якорь).
+  const liveAnchorRef = useRef<CommentAnchor | null>(null);
   // tb_1791654032_27281_1: подпись как в главном окне — запомненное имя,
   // дефолт пассивно тянем из Tauri (os_username), без полей в UI.
   const authorRef = useRef<string>(loadCommentAuthorName());
@@ -252,6 +256,45 @@ function CommentsStandalone() {
     return () => {
       window.removeEventListener("storage", reload);
       window.removeEventListener("focus", reload);
+    };
+  }, []);
+
+  // tb_1793125816_99982_1: главное окно публикует текущий плейхед. В браузере
+  // это LS-ключ (storage ловит чужой документ), в Tauri — событие: storage
+  // между вебвью не ходит.
+  useEffect(() => {
+    const accept = (anchor: CommentAnchor | null) => {
+      if (anchor) liveAnchorRef.current = anchor;
+    };
+    try {
+      accept(parseCommentAnchor(window.localStorage.getItem(COMMENT_ANCHOR_KEY)));
+    } catch {
+      // storage недоступен — живой якорь придёт событием
+    }
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== COMMENT_ANCHOR_KEY) return;
+      try {
+        accept(parseCommentAnchor(event.newValue ?? window.localStorage.getItem(COMMENT_ANCHOR_KEY)));
+      } catch {
+        accept(parseCommentAnchor(event.newValue));
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    let unlisten: (() => void) | null = null;
+    if ("__TAURI_INTERNALS__" in window) {
+      void import("@tauri-apps/api/event").then(({ listen }) => {
+        listen<{ media?: unknown; sec?: unknown }>(COMMENT_ANCHOR_EVENT, (event) => {
+          const payload = event.payload;
+          const sec = Number(payload?.sec);
+          const anchorMedia = typeof payload?.media === "string" ? payload.media : "";
+          if (!anchorMedia || !Number.isFinite(sec) || sec < 0) return;
+          liveAnchorRef.current = { media: anchorMedia, sec, at: Date.now() };
+        }).then((fn) => { unlisten = fn; }).catch(() => {});
+      }).catch(() => {});
+    }
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      unlisten?.();
     };
   }, []);
 
@@ -342,7 +385,8 @@ function CommentsStandalone() {
   }, []);
 
   // tb_1791654032_27281_1: новый коммент рождается ТОЛЬКО по Save (окно при
-  // открытии пустых не создаёт). Якорь — ?at= (позиция M), привязка — ?media=.
+  // открытии пустых не создаёт). Якорь — живой плейхед главного окна
+  // (tb_1793125816_99982_1), иначе ?at= (позиция M), привязка — ?media=.
   const handleCreate = useCallback((text: string) => {
     const clean = text.trim();
     if (!clean || !media) return;
@@ -351,7 +395,11 @@ function CommentsStandalone() {
       media,
       contentHash,
       author: ensureAuthor(),
-      at: Math.max(0, selectAtFromSearch(search)),
+      at: selectCommentAnchor({
+        live: liveAnchorRef.current,
+        media,
+        urlAt: selectAtFromSearch(search),
+      }),
       text: clean,
     });
     historyRef.current = historyPush(historyRef.current, prev);
