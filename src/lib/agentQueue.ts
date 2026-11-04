@@ -40,13 +40,51 @@ export interface AgentAckError {
   message: string;
 }
 
+/**
+ * tb_1793543005_43420_1: итог open_playlist для агента. `done` без него
+ * ничего не доказывает (живой случай 01.11: 0.26.4 ответил `done` на
+ * плейлист из 43 картинок-вопросов и не показал ни одной карточки).
+ */
+export interface OpenPlaylistResult {
+  /** записей в плейлисте */
+  entries: number;
+  /** записей с question_id */
+  questions: number;
+  /** маркеров, созданных именно этим открытием (повторное открытие — 0) */
+  materialized: number;
+  warnings: string[];
+}
+
 export interface AgentAck {
   ack_version: typeof QUEUE_ACK_VERSION;
   id: string;
   verb: string | null;
   status: "done" | "error" | "expired";
   at: string;
+  /** какая сборка плеера ответила; у ack плеера ≤0.26.6 и у ack, которые пишет Rust, поля нет */
+  player_version: string;
+  result?: OpenPlaylistResult;
   error?: AgentAckError;
+}
+
+/** Версия плеера: одна правда с package.json (vite define), как About и appVersion.test. */
+export function playerVersion(): string {
+  return typeof __APP_VERSION__ === "string" ? __APP_VERSION__ : "dev";
+}
+
+/** Ошибка глагола со своим кодом в ack (иначе всё сваливается в execution_failed). */
+export class AgentVerbError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "AgentVerbError";
+    this.code = code;
+  }
+}
+
+export function ackErrorFor(err: unknown): AgentAckError {
+  if (err instanceof AgentVerbError) return { code: err.code, message: err.message };
+  return { code: "execution_failed", message: err instanceof Error ? err.message : String(err) };
 }
 
 export interface AgentCommandEvent {
@@ -200,6 +238,7 @@ export function buildAck(input: {
   verb?: string | null;
   status: AgentAck["status"];
   error?: AgentAckError;
+  result?: OpenPlaylistResult;
   at?: string;
 }): AgentAck {
   const ack: AgentAck = {
@@ -208,9 +247,60 @@ export function buildAck(input: {
     verb: input.verb ?? null,
     status: input.status,
     at: input.at ?? new Date().toISOString(),
+    player_version: playerVersion(),
   };
+  if (input.result) ack.result = input.result;
   if (input.error) ack.error = { code: input.error.code, message: input.error.message };
   return ack;
+}
+
+/**
+ * Итог открытия плейлиста: сколько записей и вопросов, сколько маркеров
+ * создано, что не так (вопрос без path, дубль question_id, файла нет).
+ * Чистая функция — файлы проверяет App и отдаёт сюда missingPaths.
+ */
+export function summarizeOpenedPlaylist(
+  entries: unknown,
+  opts: { materialized: number; missingPaths?: readonly string[] },
+): OpenPlaylistResult {
+  const list = Array.isArray(entries) ? entries : [];
+  const warnings: string[] = [];
+  const perQuestion = new Map<string, number>();
+  let questions = 0;
+  for (const raw of list) {
+    if (!raw || typeof raw !== "object") continue;
+    const entry = raw as { question_id?: unknown; path?: unknown };
+    const qid = typeof entry.question_id === "string" ? entry.question_id.trim() : "";
+    if (!qid) continue;
+    questions += 1;
+    perQuestion.set(qid, (perQuestion.get(qid) ?? 0) + 1);
+    if (typeof entry.path !== "string" || !entry.path) warnings.push(`question ${qid}: no path`);
+  }
+  for (const [qid, n] of perQuestion) {
+    if (n > 1) warnings.push(`duplicate question_id ${qid} (×${n})`);
+  }
+  for (const path of opts.missingPaths ?? []) warnings.push(`path not found: ${path}`);
+  if (questions > 0 && opts.materialized === 0) {
+    warnings.push(`${questions} question(s) already in markers, no new markers created`);
+  }
+  return { entries: list.length, questions, materialized: opts.materialized, warnings };
+}
+
+export type OpenPlaylistVerdict = { ok: true } | { ok: false; code: string; message: string };
+
+/** Открывать нечего — ack `error` с причиной, а не тихий `done`. */
+export function openPlaylistVerdict(result: OpenPlaylistResult, isQuestion: boolean): OpenPlaylistVerdict {
+  if (result.entries === 0) {
+    return { ok: false, code: "empty_playlist", message: "open_playlist: в плейлисте нет записей — показывать нечего" };
+  }
+  if (isQuestion && result.questions === 0) {
+    return {
+      ok: false,
+      code: "no_questions",
+      message: "open_playlist: вопрос-плейлист без единого question_id — карточек не будет",
+    };
+  }
+  return { ok: true };
 }
 
 export function serializeAck(ack: AgentAck): string {
@@ -220,7 +310,14 @@ export function serializeAck(ack: AgentAck): string {
 /** Строка для человека — не молчание (приёмка очереди). */
 export function describeAck(ack: AgentAck): string {
   const verb = ack.verb ?? "command";
-  if (ack.status === "done") return `Agent: ${verb} — done.`;
+  if (ack.status === "done") {
+    const r = ack.result;
+    if (!r) return `Agent: ${verb} — done.`;
+    const parts = [`${r.entries} entries`];
+    if (r.questions > 0) parts.push(`${r.questions} questions → ${r.materialized} markers`);
+    if (r.warnings.length > 0) parts.push(`${r.warnings.length} warning${r.warnings.length === 1 ? "" : "s"}`);
+    return `Agent: ${verb} — done: ${parts.join(", ")}.`;
+  }
   if (ack.status === "expired") return `Agent: ${verb} — expired, not executed.`;
   return `Agent: ${verb} — ${ack.error?.code ?? "error"}: ${ack.error?.message ?? "failed"}.`;
 }

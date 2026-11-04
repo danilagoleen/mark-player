@@ -42,6 +42,8 @@ import { SCRUB_PREVIEW_TIMEOUT_MS, isScrubSettled } from "./lib/scrubSeek";
 import { PLAYER_SEEK_REQUEST_KEY, parseSeekRequest } from "./lib/markerSeek";
 import { publishCommentAnchor } from "./lib/commentAnchor";
 import { clampCardPosition, loadCardPosition, saveCardPosition, type CardPoint } from "./lib/questionCard";
+import { answerButtonsFor } from "./lib/questionCardButtons";
+import { planSendToAgent, type AnswerOutcome } from "./lib/sendToAgentPlan";
 import { parseCutsheet, resolveCutsheetForMedia, type CutsheetSegment } from "./lib/cutsheet";
 import { PLAYER_PLAY_REQUEST_KEY, PLAYLIST_RELOAD_EVENT, notifyPlaylistReloaded, parsePlayRequest } from "./lib/playlistPlay";
 import { buildUIManifest, type UIManifest } from "./lib/uiManifest";
@@ -54,14 +56,19 @@ import {
   inlinePlaylistForCommand,
   isAgentCommandExpired,
   numericArg,
+  openPlaylistVerdict,
   parseAgentCommand,
   readQuestionCommandId,
   rememberAck,
   rememberQuestionCommandId,
   serializeAck,
+  summarizeOpenedPlaylist,
+  AgentVerbError,
+  ackErrorFor,
   type AgentAck,
   type AgentCommand,
   type AgentCommandEvent,
+  type OpenPlaylistResult,
 } from "./lib/agentQueue";
 import { DOOR_IDS, checkModuleDoor, doorClickTransition, doorEndpoint, doorLabel, type DoorId, type ModuleDoor } from "./lib/moduleDoors";
 import type { ProbeResult } from "./lib/nativeWindow";
@@ -99,7 +106,9 @@ import {
   buildReplyMarkerFull,
   resolveReplyAuthorForParent,
 } from "./lib/markerReply";
-import { markerDedupKey, materializePlaylistQuestions, materializedMarkerId, materializedMarkerPrefix } from "./lib/questionMaterialize";
+import { markerDedupKey, materializePlaylistQuestions, materializedMarkerId, materializedMarkerPrefix, type QuestionMaterializeIO } from "./lib/questionMaterialize";
+import { appendMarkersPersisted } from "./lib/markersPersist";
+import { healKey, shouldHealQuestionMarkers } from "./lib/questionHeal";
 import {
   VOLUME_STEP,
   createFrameCalibrator,
@@ -907,7 +916,7 @@ function App() {
   const followBlockedRef = useRef<string | null>(null);
   // tb_1791819024_26192_2: дабл-клик по вердикту — один ответ (scn-03 ×2).
   const answerBusyRef = useRef(false);
-  const lastAnswerRef = useRef<{ qid: string; verdict: AnswerVerdict; at: number }>({ qid: "", verdict: "comment", at: 0 });
+  const lastAnswerRef = useRef<{ qid: string; verdict: AnswerVerdict; choice?: string; at: number }>({ qid: "", verdict: "comment", at: 0 });
   const questionRangeRef = useRef<{ start: number; end: number } | null>(null);
   const questionPathRef = useRef<string | null>(null);
   // tb_1792439791_49541_5: ручной сик за пределы скобок вопроса — это намерение
@@ -915,7 +924,6 @@ function App() {
   // в окно вопроса (или пока не активируют другой вопрос).
   const questionSnapSuspendedRef = useRef(false);
   const questionSnapKeyRef = useRef<string | null>(null);
-  const [questionChoice, setQuestionChoice] = useState<string | null>(null);
   const [questionComment, setQuestionComment] = useState("");
   // tb_1792634443_73606_2: прогресс ответов этого плейлиста — источник
   // answers.json (санитайз при открытии). Нужен карточке для «Вопрос 1/2».
@@ -961,7 +969,6 @@ function App() {
     questionPathRef.current = null;
     followBlockedRef.current = null;
     setActiveQuestion(null);
-    setQuestionChoice(null);
     setQuestionComment("");
   }
   function dismissQuestionCard(): void {
@@ -1104,9 +1111,13 @@ function App() {
   // tb_1791819024_26192_2: подписи кнопок для тоста сохранения (оператор
   // должен видеть, что записалось: мимо кнопки видно сразу).
   const ANSWER_BUTTON_LABEL: Record<AnswerVerdict, string> = { favorite: "Confirm", negative: "Reject", comment: "Not sure" };
-  async function answerQuestion(verdict: AnswerVerdict): Promise<void> {
+  // tb_1793558199_43420_2: choice приходит с кнопкой-вариантом (один ряд ответов);
+  // у трёх базовых кнопок его нет. Двойной клик гасит пара verdict+choice.
+  // tb_1793586334_43420_1: возвращает исход (saved / failed / ignored), чтобы
+  // «Send to agent» не слала ack поверх несохранённого комментария.
+  async function answerQuestion(verdict: AnswerVerdict, choice?: string): Promise<AnswerOutcome> {
     const q = activeQuestion;
-    if (!q || !q.question_id) return;
+    if (!q || !q.question_id) return "ignored";
     const qid = q.question_id;
     // tb_1793480340_10647_1: ответ принимается только внутри скобок вопроса
     // карточки. Позицию берём у элемента (state отстаёт на тик), на картинке
@@ -1115,16 +1126,16 @@ function App() {
     const gate = answerGate(q, mediaKind === "image" ? undefined : videoRef.current?.currentTime);
     if (!gate.ok) {
       setContextToast(`Answer NOT saved: playhead is outside this question (${formatQuestionBrackets(q)}).`);
-      return;
+      return "failed";
     }
     // Дабл-клик — один ответ (scn-03 ×2 с разрывом 0.09с).
-    if (answerBusyRef.current) return;
+    if (answerBusyRef.current) return "ignored";
     const last = lastAnswerRef.current;
-    if (last.qid === qid && last.verdict === verdict && Date.now() - last.at < 1500) return;
+    if (last.qid === qid && last.verdict === verdict && last.choice === choice && Date.now() - last.at < 1500) return "ignored";
     answerBusyRef.current = true;
     const recordAnswer = () => {
       answerBusyRef.current = false;
-      lastAnswerRef.current = { qid, verdict, at: Date.now() };
+      lastAnswerRef.current = { qid, verdict, choice, at: Date.now() };
     };
     const comment = questionComment.trim();
     const t = videoRef.current?.currentTime;
@@ -1136,7 +1147,9 @@ function App() {
       mediaMarkers.find((m) => m.marker_id === materializedMarkerId(qid, WHOLE_FILE_MARKER_SUFFIX)) ??
       mediaMarkers.find((m) => m.marker_id.startsWith(materializedMarkerPrefix(qid))) ??
       null;
-    const replyText = formatAnswerReplyText({ verdict, choice: questionChoice ?? undefined, comment: comment || undefined });
+    const replyText = formatAnswerReplyText({ verdict, choice, comment: comment || undefined });
+    // в тосте — то, что оператор нажал: вариант (model) или подпись кнопки (Confirm)
+    const savedLabel = choice ?? ANSWER_BUTTON_LABEL[verdict];
     const now = new Date().toISOString();
     const replyAuthor = resolveReplyAuthorForParent(commentAuthorRef.current, replyParent);
     const reply = replyParent && currentMediaKey
@@ -1167,7 +1180,7 @@ function App() {
       // Comments only», врало: ничего никуда не писалось). С гардом кнопок
       // сюда не попасть из UI, ветка — страховка.
       setContextToast("Answer NOT saved: no question markers for this entry — reimport the playlist.");
-      return;
+      return "failed";
     }
     pushMarkerHistory();
     const updated = [...markersRef.current, reply as PlayerTimeMarker];
@@ -1220,12 +1233,12 @@ function App() {
           // tb_1792532431_93509_9: ответ — событие отчёта (answers из маркеров).
           void sessionReporter.answered();
           recordAnswer();
-          setContextToast(`Saved ${ANSWER_BUTTON_LABEL[verdict]} (${verdict}) → ${qid} + reply in Comments.`);
-          return;
+          setContextToast(`Saved ${savedLabel} (${verdict}) → ${qid} + reply in Comments.`);
+          return "saved";
         } catch {
           answerBusyRef.current = false;
           setContextToast("Answer: could not write answers file.");
-          return;
+          return "failed";
         }
       }
     }
@@ -1241,25 +1254,59 @@ function App() {
     recordAnswer();
     setContextToast(
       isTauriRuntimeSync()
-        ? `Saved ${ANSWER_BUTTON_LABEL[verdict]} (${verdict}) → ${qid} locally (open the question playlist from file for answers.json) + reply in Comments.`
-        : `Saved ${ANSWER_BUTTON_LABEL[verdict]} (${verdict}) → ${qid} (web outbox) + reply in Comments.`,
+        ? `Saved ${savedLabel} (${verdict}) → ${qid} locally (open the question playlist from file for answers.json) + reply in Comments.`
+        : `Saved ${savedLabel} (${verdict}) → ${qid} (web outbox) + reply in Comments.`,
     );
+    return "saved";
   }
   // tb_1792634443_73606_2: явный сигнал агенту даже при неполных ответах
   // (контракт Commander 22.10, кнопка в карточке).
+  // tb_1793586334_43420_1: оператор жал кнопку как «сохранить комментарий», а
+  // она только копировала answers.json — текст из поля пропадал (плейлист r2,
+  // 02.11: 16 вопросов из 44 без записи). Теперь набранный комментарий
+  // сначала пишется ответом verdict=comment (путь «Not sure»), и только после
+  // успешной записи уходит ack с обновлённым документом. Пустое поле — как раньше.
   async function sendAnswersToAgent(): Promise<void> {
     const playlistPath = readQuestionPlaylistPath();
+    const plan = planSendToAgent({
+      comment: questionComment,
+      hasPlaylistPath: !!playlistPath,
+      hasAnswersDoc: !!answersDocRef.current,
+      hasActiveQuestion: !!activeQuestion?.question_id,
+    });
+    if (plan.action === "refuse" || !playlistPath) {
+      setContextToast(
+        plan.action === "refuse" && plan.reason === "no_answers"
+          ? "Send to agent: no answers yet — answer a question first."
+          : "Send to agent: open the question playlist from a file first (the comment stays in the field).",
+      );
+      return;
+    }
+    const savedComment = plan.action === "save_comment_then_ack";
+    if (savedComment) {
+      const outcome = await answerQuestion("comment");
+      if (outcome !== "saved") {
+        // failed — тост с причиной уже поставил answerQuestion; ignored —
+        // тихий отказ (занято / дубль), говорим сами. Ack не шлём, текст цел.
+        if (outcome === "ignored") setContextToast("Send to agent: comment NOT saved (another answer is in progress) — press again.");
+        return;
+      }
+    }
     const doc = answersDocRef.current;
-    if (!playlistPath || !doc) {
-      setContextToast("Send to agent: open a question playlist and answer first.");
+    if (!doc) {
+      setContextToast(
+        savedComment
+          ? "Comment saved locally; nothing sent — open the question playlist from file to write answers.json."
+          : "Send to agent: no answers yet — answer a question first.",
+      );
       return;
     }
     try {
       const commandId = readQuestionCommandId(playlistPath) ?? commandIdForPlaylistId(doc.playlist_id);
       const target = await writeAnswersAckFile(doc, commandId, "operator");
-      setContextToast(`Sent to agent: ${target}`);
+      setContextToast(savedComment ? `Comment saved + sent to agent: ${target}` : `Sent to agent: ${target}`);
     } catch {
-      setContextToast("Send to agent: could not write ack file.");
+      setContextToast(savedComment ? "Comment saved, but could not write the ack file." : "Send to agent: could not write ack file.");
     }
   }
   // tb_1792634443_73606_2: панель плейлиста импортировала/пересобрала
@@ -1278,6 +1325,33 @@ function App() {
     } catch {
       // файла ещё нет — состояние прежнее
     }
+  }
+  // tb_1791840835_63972_1: ввод-вывод материализации для меню File и очереди
+  // агента (панель Playlist держит свой). tb_1793567711_43420_2: маркеры
+  // пишем в LS СИНХРОННО до эмита markers:changed — главное окно получает
+  // собственное эхо (setMarkers(readStoredMarkers())), и пока запись шла
+  // эффектом после рендера, эхо стирало свежие маркеры (0.26.7, f1: ack
+  // materialized=35, в LS ни одного qmat_focus_*).
+  function questionMaterializeIO(onAppended?: (count: number) => void): QuestionMaterializeIO {
+    return {
+      // tb_1791861762_84020_3: дедуп по паре id+медиа — тот же вопрос на
+      // другом видео материализуется заново, а не режется как дубль.
+      readStoredKeys: () => new Set(markersRef.current.map((m) => markerDedupKey(m.marker_id, m.media_path, m.anchor_sec))),
+      appendMarkers: (fresh) => {
+        onAppended?.(fresh.length);
+        let storage: Storage | null = null;
+        try {
+          storage = typeof localStorage === "undefined" ? null : localStorage;
+        } catch {
+          storage = null;
+        }
+        const merged = appendMarkersPersisted(markersRef.current, fresh as unknown as PlayerTimeMarker[], storage, MARKERS_STORAGE_KEY);
+        markersRef.current = merged;
+        setMarkers(merged);
+      },
+      resolveMediaUrl: (p) => toAssetUrl(p),
+      notifyChanged: () => notifyMarkersChanged(),
+    };
   }
   // tb_1791839608_26192_1: гард карточки — ответу нужен маркер-родитель.
   // Без qmat кнопки гаснут (кейс 0.25.57: Confirm молча ничего не создал).
@@ -1314,7 +1388,6 @@ function App() {
       questionCardDismissedRef.current = false;
       lastDismissedQuestionRef.current = null;
       setActiveQuestion(norm);
-      setQuestionChoice(null);
       setQuestionComment("");
       questionPathRef.current = path;
       questionRangeRef.current =
@@ -1330,7 +1403,7 @@ function App() {
   // (кейс Beta v01: 28 ответов с question_id=mrg-01). Ввод бережём как
   // follow: недописанный ответ — блок + один тост, а не снос.
   function switchCardToQuestion(path: string, questionId: string | null, entry?: unknown, entryIndex?: number | null): void {
-    if (questionComment.trim() !== "" || questionChoice !== null) {
+    if (questionComment.trim() !== "") {
       if (questionId && followBlockedRef.current !== questionId) {
         followBlockedRef.current = questionId;
         setContextToast(`Question ${questionId} is here — finish or clear your input to switch.`);
@@ -1798,6 +1871,47 @@ function App() {
   // позицию берём из живого video.currentTime.
   const markersRef = useRef(markers);
   markersRef.current = markers;
+  // tb_1793567711_43420_2: самоисцеление карточки. Вопрос в загруженном
+  // плейлисте есть, маркеров qmat нет (потеряны, LS почищен, импорт не дошёл) —
+  // материализуем плейлист заново (дедуп пропустит всё лежащее), оператор
+  // ничего не переимпортирует. Одна попытка на пару «вопрос + медиа».
+  const healAttemptedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const qid = activeQuestion?.question_id;
+    if (!qid) return;
+    const playlist = loadPlaylist();
+    const questionPlaylist = Boolean(playlist && isQuestionPlaylist(playlist));
+    const inPlaylist = Boolean(
+      playlist?.entries?.some((e) => (e as QuestionEntry).question_id === qid),
+    );
+    const check = {
+      qid,
+      hasMarkers: questionHasMarkers(qid),
+      isQuestionPlaylist: questionPlaylist,
+      inPlaylist,
+      attempted: healAttemptedRef.current,
+      mediaKey: currentMediaKey,
+    };
+    if (!playlist || !shouldHealQuestionMarkers(check)) return;
+    healAttemptedRef.current.add(healKey(qid, currentMediaKey));
+    let restored = 0;
+    void materializePlaylistQuestions(
+      playlist,
+      typeof playlist.name === "string" && playlist.name ? playlist.name : "playlist",
+      questionMaterializeIO((n) => {
+        restored += n;
+      }),
+    )
+      .then(() => {
+        if (restored > 0) {
+          setContextToast(`Restored ${restored} question marker${restored === 1 ? "" : "s"} for this playlist.`);
+        }
+      })
+      .catch(() => {
+        // лечение не вышло — гард карточки остаётся прежним (плашка + Reimport)
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeQuestion?.question_id, currentMediaKey, mediaMarkers]);
   // tb_1792532431_93509_9: отчёт о показе <плейлист>.session.json — одна
   // правда для агента о том, где человек остановился (разведка §5).
   // answers.json НЕ трогаем: его пишет answerQuestion, писатель там один.
@@ -4672,7 +4786,7 @@ function App() {
     }
     if (!hit?.question_id) return;
     if (hit.question_id === activeQuestion?.question_id && questionPathRef.current === currentFilePath) return;
-    if (questionComment.trim() !== "" || questionChoice !== null) {
+    if (questionComment.trim() !== "") {
       if (followBlockedRef.current !== hit.question_id) {
         followBlockedRef.current = hit.question_id;
         setContextToast(`Question ${hit.question_id} is here — finish or clear your input to switch.`);
@@ -4681,7 +4795,7 @@ function App() {
     }
     followBlockedRef.current = null;
     activateQuestionFor(currentFilePath, hit.question_id, hit);
-  }, [currentTime, currentFilePath, mediaKind, activeQuestion, questionComment, questionChoice]);
+  }, [currentTime, currentFilePath, mediaKind, activeQuestion, questionComment]);
 
   // tb_1792634247_72740_2: первый запуск/открытие записи — карточка видна
   // сразу, не дожидаясь тика follow внутри скобок. Закрытую X не воскрешаем.
@@ -5268,7 +5382,11 @@ function App() {
 
   // tb_1792536109_79489_5: общий путь открытия плейлиста ПО ПУТИ, без
   // диалога — им пользуются меню и очередь команд агента (рекон §7).
-  async function openPlaylistPath(path: string): Promise<{ line: string; openedBase: string | null }> {
+  // tb_1793543005_43420_1: вместе с текстом тоста отдаём итог (записи, вопросы,
+  // созданные маркеры, предупреждения) — из него агент получает ack, а не «done».
+  async function openPlaylistPath(
+    path: string,
+  ): Promise<{ line: string; openedBase: string | null; result: OpenPlaylistResult; isQuestion: boolean }> {
     const { readTextFile } = await import("@tauri-apps/plugin-fs");
     const { deserializePlaylist } = await import("./lib/playlist");
     const text = await readTextFile(path);
@@ -5282,7 +5400,7 @@ function App() {
       parsed = await importBetaBundleText(text, path);
     }
     if (!parsed) {
-      throw new Error(`Not a playlist: ${fileLabel} (needs {entries: [...]} or a Beta bundle).`);
+      throw new AgentVerbError("not_a_playlist", `Not a playlist: ${fileLabel} (needs {entries: [...]} or a Beta bundle).`);
     }
     savePlaylist(parsed);
     // tb_1791521998_11250_5: ответы лягут рядом с этим файлом
@@ -5340,14 +5458,37 @@ function App() {
     // (раньше клало записи без маркеров — карточка молчала по гарду;
     // имя — fileLabel, поля name у файла Беты нет). Персист — эффектом
     // markers→LS, чужие окна — событием.
-    const loadedLine = await materializePlaylistQuestions(parsed, fileLabel, {
-      // tb_1791861762_84020_3: дедуп по паре id+медиа — тот же вопрос на
-      // другом видео материализуется заново, а не режется как дубль.
-      readStoredKeys: () => new Set(markersRef.current.map((m) => markerDedupKey(m.marker_id, m.media_path, m.anchor_sec))),
-      appendMarkers: (fresh) => setMarkers((prev) => [...prev, ...(fresh as unknown as PlayerTimeMarker[])]),
-      resolveMediaUrl: (p) => toAssetUrl(p),
-      notifyChanged: () => notifyMarkersChanged(),
-    });
+    let materializedNow = 0;
+    const loadedLine = await materializePlaylistQuestions(
+      parsed,
+      fileLabel,
+      questionMaterializeIO((n) => {
+        materializedNow += n;
+      }),
+    );
+    // tb_1793543005_43420_1: файлы записей, которых нет на диске. Не смогли
+    // спросить (нет доступа) — молчим, ложное «не найден» хуже тишины.
+    const missingPaths: string[] = [];
+    if (isTauriRuntimeSync()) {
+      try {
+        const { exists } = await import("@tauri-apps/plugin-fs");
+        const paths = new Set<string>();
+        for (const e of parsed.entries ?? []) {
+          if (e && typeof e.path === "string" && e.path) paths.add(e.path);
+          if (paths.size >= 500) break;
+        }
+        for (const p of paths) {
+          try {
+            if (!(await exists(p))) missingPaths.push(p);
+          } catch {
+            // вне доступа плагина — не считаем пропажей
+          }
+        }
+      } catch {
+        // плагин недоступен — проверку пропускаем
+      }
+    }
+    const result = summarizeOpenedPlaylist(parsed.entries, { materialized: materializedNow, missingPaths });
     // tb_1792025130_97848_4: импорт обычного мульти-видео листа раньше
     // визуально ничего не делал (видео не открывалось — только тост).
     // Слово оператора 15.10: сразу показывать первое playable-видео
@@ -5363,30 +5504,35 @@ function App() {
       }
     }
     await openPanelWindow("panel-playlist", "playlist", "Playlist", 360, 500);
-    return { line: `${loadedLine}${answersNote}`, openedBase };
+    return { line: `${loadedLine}${answersNote}`, openedBase, result, isQuestion: questionPlaylist };
   }
 
   // tb_1792536109_79489_5: глаголы очереди — исполнение (Rust уже проверил
   // путь, срок жизни и структуру; здесь только действие и ack).
-  async function executeAgentVerb(cmd: AgentCommand, playlistsDir: string): Promise<void> {
+  async function executeAgentVerb(cmd: AgentCommand, playlistsDir: string): Promise<OpenPlaylistResult | void> {
     const args = cmd.args;
     switch (cmd.verb) {
       case "open_playlist": {
+        // tb_1793543005_43420_1: итог открытия уходит в ack; «открывать нечего»
+        // — ошибка с причиной, а не тихий done.
+        const finish = (opened: { result: OpenPlaylistResult; isQuestion: boolean }): OpenPlaylistResult => {
+          const verdict = openPlaylistVerdict(opened.result, opened.isQuestion);
+          if (!verdict.ok) throw new AgentVerbError(verdict.code, verdict.message);
+          return opened.result;
+        };
         const direct = typeof args.path === "string" ? args.path : "";
         if (direct) {
           rememberQuestionCommandId(direct, cmd.id);
-          await openPlaylistPath(direct);
-          return;
+          return finish(await openPlaylistPath(direct));
         }
         const doc = inlinePlaylistForCommand(cmd);
-        if (!doc) throw new Error("open_playlist: нужен args.path или непустой args.entries");
+        if (!doc) throw new AgentVerbError("empty_playlist", "open_playlist: нужен args.path или непустой args.entries");
         const { mkdir, writeTextFile } = await import("@tauri-apps/plugin-fs");
         await mkdir(playlistsDir, { recursive: true });
         const file = `${playlistsDir}/${doc.id}.playlist.json`;
         await writeTextFile(file, JSON.stringify(doc, null, 2));
         rememberQuestionCommandId(file, cmd.id);
-        await openPlaylistPath(file);
-        return;
+        return finish(await openPlaylistPath(file));
       }
       case "open_file": {
         const path = typeof args.path === "string" ? args.path : "";
@@ -5457,17 +5603,14 @@ function App() {
       });
     } else {
       try {
-        await executeAgentVerb(parsed.cmd, event.playlists_dir);
-        ack = buildAck({ id: parsed.cmd.id, verb: parsed.cmd.verb, status: "done" });
+        const result = await executeAgentVerb(parsed.cmd, event.playlists_dir);
+        ack = buildAck({ id: parsed.cmd.id, verb: parsed.cmd.verb, status: "done", result: result ?? undefined });
       } catch (err) {
         ack = buildAck({
           id: parsed.cmd.id,
           verb: parsed.cmd.verb,
           status: "error",
-          error: {
-            code: "execution_failed",
-            message: err instanceof Error ? err.message : String(err),
-          },
+          error: ackErrorFor(err),
         });
       }
     }
@@ -6600,18 +6743,6 @@ function App() {
                               {questionFilePos.answered ? " · answered" : ""}
                             </div>
                           ) : null}
-                          {(activeQuestion.choices ?? []).map((choice) => (
-                            <button
-                              key={choice}
-                              type="button"
-                              className="question-card-side-choice"
-                              data-testid="question-choice"
-                              aria-pressed={questionChoice === choice}
-                              onClick={() => setQuestionChoice((prev) => (prev === choice ? null : choice))}
-                            >
-                              {choice}
-                            </button>
-                          ))}
                           <div className="question-card-side-row">
                             <input
                               className="question-card-side-input"
@@ -6622,37 +6753,24 @@ function App() {
                               aria-label="Answer comment"
                             />
                           </div>
-                          <div className="question-card-side-row">
-                            <button
-                              type="button"
-                              className="question-card-side-verdict"
-                              data-testid="question-answer-favorite"
-                              onClick={() => void answerQuestion("favorite")}
-                              disabled={!questionHasMarkers(activeQuestion?.question_id) || answerOutside}
-                              title={!questionHasMarkers(activeQuestion?.question_id) ? "No question markers — reimport the playlist" : answerOutside ? `Playhead is outside this question (${formatQuestionBrackets(activeQuestion)})` : "Confirm"}
-                            >
-                              Confirm
-                            </button>
-                            <button
-                              type="button"
-                              className="question-card-side-verdict"
-                              data-testid="question-answer-negative"
-                              onClick={() => void answerQuestion("negative")}
-                              disabled={!questionHasMarkers(activeQuestion?.question_id) || answerOutside}
-                              title={!questionHasMarkers(activeQuestion?.question_id) ? "No question markers — reimport the playlist" : answerOutside ? `Playhead is outside this question (${formatQuestionBrackets(activeQuestion)})` : "Reject"}
-                            >
-                              Reject
-                            </button>
-                            <button
-                              type="button"
-                              className="question-card-side-verdict"
-                              data-testid="question-answer-comment"
-                              onClick={() => void answerQuestion("comment")}
-                              disabled={!questionHasMarkers(activeQuestion?.question_id) || answerOutside}
-                              title={!questionHasMarkers(activeQuestion?.question_id) ? "No question markers — reimport the playlist" : answerOutside ? `Playhead is outside this question (${formatQuestionBrackets(activeQuestion)})` : "Not sure (comment)"}
-                            >
-                              Not sure
-                            </button>
+                          {/* tb_1793558199_43420_2: ОДИН ряд ответов. Есть choices —
+                              кнопки это сами варианты (клик = verdict + choice),
+                              нет — Confirm / Reject / Not sure. */}
+                          <div className="question-card-side-row question-card-side-answers">
+                            {answerButtonsFor(activeQuestion.choices).map((btn) => (
+                              <button
+                                key={btn.key}
+                                type="button"
+                                className="question-card-side-verdict"
+                                data-testid={btn.testId}
+                                data-choice={btn.choice}
+                                onClick={() => void answerQuestion(btn.verdict, btn.choice)}
+                                disabled={!questionHasMarkers(activeQuestion?.question_id) || answerOutside}
+                                title={!questionHasMarkers(activeQuestion?.question_id) ? "No question markers — reimport the playlist" : answerOutside ? `Playhead is outside this question (${formatQuestionBrackets(activeQuestion)})` : btn.label}
+                              >
+                                {btn.label}
+                              </button>
+                            ))}
                           </div>
                           <div className="question-card-side-row">
                             {questionFilePos?.next?.question_id && currentFilePath ? (
@@ -6671,7 +6789,7 @@ function App() {
                               className="question-card-side-verdict"
                               data-testid="question-send-agent"
                               onClick={() => void sendAnswersToAgent()}
-                              title="Copy answers.json to ack/ for the agent (works with incomplete answers too)"
+                              title="Save the typed comment (as Not sure), then copy answers.json to ack/ for the agent (works with incomplete answers too)"
                             >
                               Send to agent
                             </button>

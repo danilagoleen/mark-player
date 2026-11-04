@@ -3,6 +3,8 @@ import { MessageSquare, Pencil, Reply, Trash2 } from "lucide-react";
 import { formatTimecode } from "../../srtUtils";
 import { pairInOutRanges } from "../../lib/selectionDuration";
 import { requestPlayerSeek } from "../../lib/markerSeek";
+import { answerReplyView } from "../../lib/answerReplyView";
+import { loadPlaylist } from "../../lib/playlist";
 import { MiniWindow } from "./MiniWindow";
 
 interface PlayerTimeMarker {
@@ -18,6 +20,9 @@ interface PlayerTimeMarker {
   author?: string;
   // tb_1791585558_31907_1: ответ — ссылка на родителя (без неё — корень).
   reply_to?: string;
+  // tb_1793586334_43420_1: у маркера вопроса (qmat_*) — ключ вопроса плейлиста;
+  // по нему берутся варианты ответа, чтобы ответ-вариант не рисовался как ★.
+  question_id?: string;
 }
 
 export type KindFilter = "all" | "favorite" | "negative" | "in" | "out" | "comment";
@@ -284,6 +289,17 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
     for (const list of map.values()) list.sort((a, b) => Number(a.start_sec || 0) - Number(b.start_sec || 0));
     return map;
   }, [allRows]);
+  // tb_1793586334_43420_1: варианты вопросов из плейлиста (тот же localStorage,
+  // что у главного окна). Нет плейлиста / вариантов — нитка рисуется как была.
+  const choicesByQuestion = useMemo(() => {
+    const map = new Map<string, string[]>();
+    const entries = (loadPlaylist()?.entries ?? []) as Array<{ question_id?: unknown; choices?: unknown }>;
+    for (const e of entries) {
+      if (typeof e?.question_id !== "string" || !Array.isArray(e.choices)) continue;
+      map.set(e.question_id, e.choices.filter((c): c is string => typeof c === "string"));
+    }
+    return map;
+  }, [allRows]);
 
   const expandedContent = (
     <div style={{ ...S.overlay, fontSize: bodyFont }} data-testid="comment-zoom-root" data-zoom={zoom}>
@@ -401,10 +417,16 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
               ) : null}
               {(repliesByParent.get(row.marker_id) ?? []).map((rep) => {
                 const repAuthor = (rep.author ?? "").trim();
-                const repText = (rep.text ?? "").trim() || (rep.label ?? "").trim() || "reply";
+                const rawRepText = (rep.text ?? "").trim() || (rep.label ?? "").trim() || "reply";
+                // tb_1793586334_43420_1: ответ-вариант (student / other …) — без ★ и
+                // «(favorite)»: такого варианта у вопроса нет. Вопрос родителя — по
+                // полю question_id, у старых qmat — по id (qmat_<вопрос>_in|out|whole).
+                const parentQid = row.question_id ?? /^qmat_(.+)_(?:in|out|whole)$/.exec(row.marker_id)?.[1] ?? "";
+                const view = answerReplyView(rawRepText, choicesByQuestion.get(parentQid));
+                const repText = view.text;
                 // tb_1791837678_26192_1: вердикт видно в нитке — глиф вида
                 // у не-комментов (★/✕ ответов), комменты без шума.
-                const repGlyph = rep.kind !== "comment" ? `${KIND_GLYPH[rep.kind] ?? "•"} ` : "";
+                const repGlyph = rep.kind !== "comment" && view.showKindGlyph ? `${KIND_GLYPH[rep.kind] ?? "•"} ` : "";
                 return (
                   <div
                     key={rep.marker_id}

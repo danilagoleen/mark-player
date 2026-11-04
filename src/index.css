@@ -395,8 +395,8 @@ select {
   backdrop-filter: blur(20px);
 }
 /* tb_1791764026_23730_1: вопрос — компактная карточка справа вверху,
- * вплотную к тулбару (план Б). Пилюлю не трогает. Текст режется
- * ellipsis (данные целы, полный вопрос — в title).
+ * вплотную к тулбару (план Б). Пилюлю не трогает. Текст вопроса
+ * переносится (до 4 строк; полный — в title), см. .question-card-side-text.
  * tb_1791839608_26192_1: переезд в центр под пилюлю — правый верх отдан
  * тосту (оператор: тост там где должен быть, карточка уехала). */
 .question-card-side {
@@ -435,9 +435,14 @@ select {
   min-width: 0;
   font-weight: 600;
   font-size: 13px;
-  white-space: nowrap;
+  /* tb_1793558199_43420_2: вопрос переносится на несколько строк (до 4),
+     а не режется в одну — после ухода второго ряда кнопок места хватает. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 .question-card-side-x {
   flex: none;
@@ -458,7 +463,13 @@ select {
   font-size: 11px;
   opacity: 0.75;
 }
-.question-card-side-choice,
+/* tb_1793558199_43420_2: единый ряд ответов — кнопки переносятся на новую
+   строку, если вариантов много (master / model / other / student / not_sure). */
+.question-card-side-answers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 .question-card-side-verdict {
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.2);
@@ -468,9 +479,6 @@ select {
   padding: 2px 8px;
   font-size: 12px;
   white-space: nowrap;
-}
-.question-card-side-choice[aria-pressed="true"] {
-  background: rgba(255, 255, 255, 0.22);
 }
 /* tb_1791839608_26192_1: гард — кнопки без маркеров гаснут, подсказка видна. */
 .question-card-side-verdict:disabled {

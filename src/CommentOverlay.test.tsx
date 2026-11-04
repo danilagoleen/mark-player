@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import { CommentOverlay } from "./components/chat/CommentOverlay";
 import { requestPlayerSeek } from "./lib/markerSeek";
@@ -423,6 +423,67 @@ describe("CommentOverlay threads survive kind filter", () => {
     expect(container.querySelectorAll('[data-testid="comment-reply"]')).toHaveLength(1);
     expect(container.textContent).toContain("вопрос?");
     expect(container.textContent).not.toContain("[answer] (negative)");
+  });
+});
+
+// tb_1793586334_43420_1: ответ-вариант (student / other …) шёл с verdict=favorite,
+// и нитка рисовала ★ и «(favorite)», хотя такого варианта у вопроса нет
+// (оператор 02.11). Варианты вопроса — из плейлиста в localStorage.
+describe("CommentOverlay: ответы-варианты без ★ и «(favorite)»", () => {
+  const PLAYLIST_KEY = "vetka_player_lab_playlist_v1";
+  const WHO = {
+    id: "who",
+    entries: [
+      { path: "/a.png", question_id: "who-01", choices: ["master", "model", "student", "other", "not_sure"] },
+      { path: "/b.png", question_id: "yn-01" },
+    ],
+  };
+  const THREAD = [
+    { marker_id: "qmat_who-01_whole", kind: "comment", start_sec: 0, text: "Кто это?", question_id: "who-01" },
+    { marker_id: "ans_a", kind: "favorite", start_sec: 0, text: "[answer] student (favorite)", reply_to: "qmat_who-01_whole" },
+    { marker_id: "ans_b", kind: "favorite", start_sec: 0, text: "[answer] other: ассорти шума (favorite)", reply_to: "qmat_who-01_whole" },
+    { marker_id: "qmat_yn-01_whole", kind: "comment", start_sec: 1, text: "Да?", question_id: "yn-01" },
+    { marker_id: "ans_c", kind: "favorite", start_sec: 1, text: "[answer] сошлось (favorite)", reply_to: "qmat_yn-01_whole" },
+  ];
+  // Node 25 кладёт в globalThis нерабочий localStorage поверх jsdom — свой стор в памяти.
+  const mem = new Map<string, string>();
+  beforeEach(() => {
+    mem.clear();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => mem.get(k) ?? null,
+      setItem: (k: string, v: string) => void mem.set(k, v),
+      removeItem: (k: string) => void mem.delete(k),
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  function renderThread() {
+    const { container } = render(
+      <CommentOverlay marker={null} markers={THREAD} onClose={() => {}} onUpdateText={() => {}} onDeleteMarker={() => {}} standalone />,
+    );
+    return Array.from(container.querySelectorAll('[data-testid="comment-reply"]')).map((el) => el.textContent ?? "");
+  }
+  it("вариант без комментария и вариант с комментарием: ни ★, ни «(favorite)»", () => {
+    localStorage.setItem(PLAYLIST_KEY, JSON.stringify(WHO));
+    const [a, b] = renderThread();
+    expect(a).toContain("[answer] student");
+    expect(a).not.toContain("★");
+    expect(a).not.toContain("(favorite)");
+    expect(b).toContain("[answer] other: ассорти шума");
+    expect(b).not.toContain("★");
+    expect(b).not.toContain("(favorite)");
+  });
+  it("Confirm на вопросе без вариантов: ★ и приписка вердикта остаются", () => {
+    localStorage.setItem(PLAYLIST_KEY, JSON.stringify(WHO));
+    const replies = renderThread();
+    expect(replies[2]).toContain("★");
+    expect(replies[2]).toContain("(favorite)");
+  });
+  it("плейлиста нет в localStorage: ничего не меняется", () => {
+    const [a] = renderThread();
+    expect(a).toContain("★");
+    expect(a).toContain("(favorite)");
   });
 });
 
