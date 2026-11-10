@@ -11,8 +11,8 @@ import readme from "../../README.md?raw";
 // Без node: импортов (@types/node нет в src-tsconfig): JSON напрямую,
 // Cargo.toml и App.tsx — через ?raw (vite/client уже подключён в vite-env.d.ts).
 
-const EXPECTED_VERSION = "0.26.9";
-const EXPECTED_DISPLAY = "Mark Player 0.26.9 beta";
+const EXPECTED_VERSION = "0.26.10";
+const EXPECTED_DISPLAY = "Mark Player 0.26.10 beta";
 
 describe("version stamp 0.17", () => {
   it("package.json carries the stamp", () => {
@@ -39,5 +39,41 @@ describe("version stamp 0.17", () => {
   it("README title + Download filenames carry the stamp", () => {
     expect(readme).toContain(`# Mark Player ${EXPECTED_VERSION} beta`);
     expect(readme).toContain(`Mark.Player_${EXPECTED_VERSION}_`);
+  });
+});
+
+// tb_1794347727_83767_1 (слово оператора 11.11, скриншот GitHub): раздел «Versioning»
+// публичного README называл схему MAJOR.MINOR.PATCH, но тут же звал второе число
+// «major line», третье «minor step», считал сотыми и тысячными и перечислял
+// внутренние файлы. Читателю нужно одно: что значит 26 и что значит 9.
+describe("README: раздел Versioning понятен читателю", () => {
+  const start = readme.indexOf("## Versioning");
+  const next = readme.indexOf("\n## ", start + 1);
+  const section = start >= 0 ? readme.slice(start, next > start ? next : undefined) : "";
+
+  it("раздел есть и не пустой", () => {
+    expect(section.length).toBeGreaterThan(80);
+  });
+
+  it("без путающих слов: hundredths / thousandths / «major line» / «minor step» / MAJOR.MINOR.PATCH", () => {
+    for (const word of ["hundredths", "thousandths", "major line", "minor step", "MAJOR.MINOR.PATCH"]) {
+      expect(section.toLowerCase()).not.toContain(word.toLowerCase());
+    }
+  });
+
+  it("называет пример версии из заголовка и объясняет среднее и последнее число", () => {
+    const [major, minor, patch] = EXPECTED_VERSION.split(".");
+    expect(section).toContain(`\`${EXPECTED_VERSION}\``);
+    expect(section).toContain(`\`${minor}\``);
+    expect(section).toContain(`\`${patch}\``);
+    expect(section).toMatch(/middle number/i);
+    expect(section).toMatch(/last number/i);
+    expect(major).toBe("0");
+  });
+
+  it("внутренней кухни (имена файлов, appVersion.test.ts) в публичном тексте раздела нет", () => {
+    expect(section).not.toContain("appVersion");
+    expect(section).not.toContain("tauri.conf");
+    expect(section).not.toContain("package.json");
   });
 });

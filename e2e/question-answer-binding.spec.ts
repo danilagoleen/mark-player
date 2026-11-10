@@ -226,6 +226,65 @@ test("«Send to agent» без пути плейлиста отказывает 
   expect(await replies(page)).toHaveLength(0);
 });
 
+// tb_1794347727_83767_1 (родитель tb_1794347625_83718_2): оператор ставит СВОИ
+// маркеры внутри in/out записи (reelsD-201336, 11.11: comment и negative жили
+// только в .sos.json, ig_D висел pending). «Send to agent» обязана отдать их
+// агенту вместе с ответами карточки. В web файла answers.json нет — проверяем
+// аутбокс плейлиста: то же слияние, те же записи (origin = operator_marker).
+test("«Send to agent» отдаёт и СОБСТВЕННЫЕ маркеры оператора внутри in/out: negative и comment с текстом", async ({ page, context }) => {
+  const PLAYLIST_PATH = "/tmp/e2e-own-markers.playlist.json";
+  const OUTBOX_KEY = "vetka_player_lab_question_answers_outbox_v1";
+  await openFirstEntry(page, context, VIDEO_QS);
+  await page.evaluate((p) => window.localStorage.setItem("vetka_player_lab_question_playlist_path_v1", p), PLAYLIST_PATH);
+
+  // Свой comment в скобках B (1.5–3) — через окно Comments, как делает оператор.
+  // Окно открываем ДО остальных маркеров: init-скрипт контекста из openFirstEntry
+  // заново пишет seed-маркеры при загрузке КАЖДОЙ страницы и стёр бы поставленное раньше.
+  const media = await page.evaluate(() => window.vetkaPlayerLab?.getFileName());
+  const comments = await context.newPage();
+  await comments.goto(`${BASE_URL}/comments.html?media=${encodeURIComponent(media ?? "")}&fps=30&at=2.20&filter=comments`);
+  await comments.getByTestId("comment-new-input").fill("кожа уходит в пересвет");
+  await comments.getByTestId("comment-new-save").click();
+  await expect(comments.getByTestId("comment-row")).toHaveCount(1);
+
+  // Свой negative в скобках A (0–1.5): кнопка ✗ пилюли ложится на playhead.
+  await page.bringToFront();
+  await page.waitForTimeout(500); // storage-событие из окна Comments доходит до плеера не мгновенно
+  await pauseAndSeek(page, 0.6);
+  await page.getByTestId("marker-negative").click();
+  await expect
+    .poll(async () =>
+      page.evaluate(() =>
+        (JSON.parse(window.localStorage.getItem("vetka_player_lab_markers_v1") || "[]") as { kind?: string; reply_to?: string }[])
+          .filter((m) => !m.reply_to && (m.kind === "negative" || m.kind === "comment")).map((m) => m.kind).sort()),
+    )
+    .toEqual(["comment", "negative"]);
+
+  const ownRecords = () =>
+    page.evaluate(({ key, path }) => {
+      const store = JSON.parse(window.localStorage.getItem(key) || "null") as
+        | { byPlaylist?: Record<string, { question_id: string; verdict: string; comment?: string; origin?: string }[]> }
+        | null;
+      return (store?.byPlaylist?.[path] ?? [])
+        .filter((r) => r.origin === "operator_marker")
+        .map((r) => ({ question_id: r.question_id, verdict: r.verdict, comment: r.comment ?? "" }))
+        .sort((a, b) => a.question_id.localeCompare(b.question_id));
+    }, { key: OUTBOX_KEY, path: PLAYLIST_PATH });
+
+  // повторная отправка безвредна (слияние идемпотентно)
+  await expect
+    .poll(async () => {
+      await page.getByTestId("question-send-agent").click();
+      return ownRecords();
+    })
+    .toEqual([
+      { question_id: "qa", verdict: "negative", comment: "" },
+      { question_id: "qb", verdict: "comment", comment: "кожа уходит в пересвет" },
+    ]);
+  // не плодим дубли от повторных нажатий
+  expect(await ownRecords()).toHaveLength(2);
+});
+
 test("да/нет-вопрос с choices confirm/reject/not_sure: три кнопки вариантов, отдельного ряда question-answer-* нет", async ({ page, context }) => {
   const qs: Q[] = [
     { question_id: "yn1", question: "Один ли человек?", path: IMAGE_URL, choices: ["confirm", "reject", "not_sure"] },

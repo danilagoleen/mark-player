@@ -7,6 +7,7 @@
 // открывается как раньше. Время — СЕКУНДЫ от начала файла, не таймкод.
 
 import type { Playlist, PlaylistEntry } from "./playlist";
+import { isAgentAuthor } from "./commentAuthor";
 
 export const QUESTION_PLAYLIST_SCHEMA = "vetka.cut.question_playlist/1";
 
@@ -99,6 +100,17 @@ export interface AnswerRecord {
   /** кто ответил, по умолчанию "operator" */
   confirmed_by?: string;
   answered_at: string;
+  /**
+   * tb_1794347727_83767_1: "operator_marker" — запись сделана из СОБСТВЕННОГО
+   * маркера оператора (favorite / negative / comment), который он поставил
+   * внутри in/out записи, а не кнопкой карточки. У ответов карточки поля нет.
+   */
+  origin?: "operator_marker";
+  /** id маркера оператора (только origin = operator_marker). */
+  marker_id?: string;
+  /** границы маркера-диапазона (negative с длиной); у точечного маркера нет. */
+  marker_start_sec?: number;
+  marker_end_sec?: number;
 }
 
 export const DEFAULT_CONFIRMED_BY = "operator";
@@ -210,6 +222,11 @@ export interface ExtractableMarker {
   created_at?: string | null;
   /** поле qmat-маркера; у старых — только id-префикс (см. legacy). */
   question_id?: string | null;
+  // tb_1794347727_83767_1: для собственных маркеров оператора — вид маркера,
+  // файл (media_path тот же, что у маркеров вопроса) и время правки.
+  kind?: string | null;
+  media_path?: string | null;
+  updated_at?: string | null;
 }
 
 export interface AnswersExtractOptions {
@@ -230,6 +247,207 @@ function finiteNum(v: unknown): number | undefined {
  */
 export const WHOLE_FILE_MARKER_SUFFIX = "whole";
 
+/** Значение AnswerRecord.origin для записи из собственного маркера оператора. */
+export const OPERATOR_MARKER_ORIGIN = "operator_marker" as const;
+
+/**
+ * Скобки вопроса по маркеру-родителю ответа: in = start родителя, out = текущая
+ * позиция маркера <префикс>_out (человек мог его сдвинуть), у легаси-родителя —
+ * конец его диапазона. Вопрос на весь файл (_whole) скобок не имеет.
+ */
+function parentBracket(
+  parentId: string,
+  parent: ExtractableMarker,
+  byId: Map<string, ExtractableMarker>,
+): { in_sec?: number; out_sec?: number } {
+  const bracket: { in_sec?: number; out_sec?: number } = {};
+  if (parentId.endsWith(`_${WHOLE_FILE_MARKER_SUFFIX}`)) return bracket;
+  const inSec = finiteNum(parent.start_sec);
+  const outMarker = parentId.endsWith("_in") ? byId.get(`${parentId.slice(0, -3)}_out`) : undefined;
+  let outSec = finiteNum(outMarker?.start_sec) ?? finiteNum(outMarker?.anchor_sec);
+  if (outSec === undefined) {
+    const rangeEnd = finiteNum(parent.end_sec);
+    if (rangeEnd !== undefined && inSec !== undefined && rangeEnd > inSec) outSec = rangeEnd;
+  }
+  if (inSec !== undefined && inSec >= 0) bracket.in_sec = inSec;
+  if (outSec !== undefined && outSec >= 0 && (inSec === undefined || outSec > inSec)) bracket.out_sec = outSec;
+  return bracket;
+}
+
+/**
+ * tb_1794347727_83767_1: участок файла, на котором живёт вопрос плейлиста, —
+ * выводится из ЕГО ЖЕ маркеров (qmat_<вопрос>_in/_out/_whole): у них тот же
+ * media_path, что у собственных маркеров оператора на этом файле, а скобки —
+ * текущие (человек двигает qmat). Плейлист для этого не нужен.
+ */
+interface QuestionScope {
+  qid: string;
+  mediaPath: string;
+  /** скобки; у вопроса «на весь файл» — whole, границ нет */
+  whole: boolean;
+  inSec: number;
+  /** одинокий IN — до конца файла */
+  outSec: number;
+  /** когда вопрос задан (created_at его маркера); NaN — неизвестно */
+  askedMs: number;
+}
+
+function collectQuestionScopes(
+  markers: ExtractableMarker[],
+  byId: Map<string, ExtractableMarker>,
+  opts?: AnswersExtractOptions,
+): QuestionScope[] {
+  const scopes: QuestionScope[] = [];
+  const seen = new Set<string>();
+  for (const m of markers) {
+    if (!m || typeof m !== "object" || typeof m.marker_id !== "string") continue;
+    const id = m.marker_id;
+    if (!id.startsWith("qmat_")) continue;
+    const whole = id.endsWith(`_${WHOLE_FILE_MARKER_SUFFIX}`);
+    if (!whole && !id.endsWith("_in")) continue;
+    const fieldQid = typeof m.question_id === "string" ? m.question_id.trim() : "";
+    const legacyQid = fieldQid ? undefined : opts?.resolveLegacyQuestionId?.(id);
+    const qid = fieldQid || (typeof legacyQid === "string" ? legacyQid : "");
+    const mediaPath = typeof m.media_path === "string" ? m.media_path : "";
+    if (!qid || !mediaPath) continue;
+    const key = `${qid}\u0000${mediaPath}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const bracket = whole ? {} : parentBracket(id, m, byId);
+    scopes.push({
+      qid,
+      mediaPath,
+      whole,
+      inSec: bracket.in_sec ?? 0,
+      outSec: bracket.out_sec ?? Number.POSITIVE_INFINITY,
+      askedMs: typeof m.created_at === "string" ? Date.parse(m.created_at) : Number.NaN,
+    });
+  }
+  return scopes;
+}
+
+/**
+ * Вопросы, чьи маркеры-родители лежат в переданных маркерах. Только по ним
+ * mergeAnswerRecords вправе зеркалить маркеры оператора (правка, удаление):
+ * если маркеров вопроса в хранилище нет (недогруженное хранилище, другая
+ * машина), записи оператора в файле остаются как были.
+ */
+export function questionScopeFromMarkers(
+  markers: ExtractableMarker[],
+  opts?: AnswersExtractOptions,
+): string[] {
+  if (!Array.isArray(markers)) return [];
+  const byId = new Map<string, ExtractableMarker>();
+  for (const m of markers) {
+    if (m && typeof m === "object" && typeof m.marker_id === "string") byId.set(m.marker_id, m);
+  }
+  return [...new Set(collectQuestionScopes(markers, byId, opts).map((s) => s.qid))];
+}
+
+const OPERATOR_VERDICT_KINDS: readonly string[] = ["favorite", "negative", "comment"];
+
+/**
+ * Время собственного маркера: created_at; у comment-маркеров его нет — время
+ * зашито в id (`comment_<base36 Date.now()>_<rand>`); затем updated_at.
+ * null — времени не узнать (запись всё равно берём, answered_at пустой).
+ */
+function operatorMarkerTime(m: ExtractableMarker): { ms: number; iso: string } | null {
+  if (typeof m.created_at === "string" && m.created_at) {
+    const ms = Date.parse(m.created_at);
+    if (Number.isFinite(ms)) return { ms, iso: m.created_at };
+  }
+  const fromId = /^[A-Za-z]+_([0-9a-z]{6,10})_[0-9a-z]+$/.exec(m.marker_id)?.[1];
+  if (fromId) {
+    const ms = parseInt(fromId, 36);
+    // разумное окно 2001..2100: случайный хвост id за время не принимаем
+    if (Number.isFinite(ms) && ms > 1e12 && ms < 4.1e12) return { ms, iso: new Date(ms).toISOString() };
+  }
+  if (typeof m.updated_at === "string" && m.updated_at) {
+    const ms = Date.parse(m.updated_at);
+    if (Number.isFinite(ms)) return { ms, iso: m.updated_at };
+  }
+  return null;
+}
+
+/** Какому вопросу на файле принадлежит точка t: окно, которое НАЧИНАЕТСЯ, затем «весь файл», затем закрытый конец. */
+function scopeAt(scopes: QuestionScope[], t: number): QuestionScope | null {
+  let halfOpen: QuestionScope | null = null;
+  let whole: QuestionScope | null = null;
+  let closedEnd: QuestionScope | null = null;
+  for (const s of scopes) {
+    if (s.whole) {
+      whole ??= s;
+    } else if (t >= s.inSec && t < s.outSec) {
+      halfOpen ??= s;
+    } else if (t === s.outSec) {
+      closedEnd ??= s;
+    }
+  }
+  return halfOpen ?? whole ?? closedEnd;
+}
+
+/**
+ * tb_1794347727_83767_1: СОБСТВЕННЫЕ маркеры оператора (favorite / negative /
+ * comment без reply_to, не agent:, не qmat_), поставленные внутри in/out записи
+ * на её файле, — ответы на этот вопрос. Раньше в answers.json шли только
+ * ответы на маркеры агента, а свои заметки оператора жили лишь в
+ * <видео>.sos.json (кейс reelsD-201336, 11.11: ig_D висел pending при своём
+ * negative + comment). Маркер старше самого вопроса (прошлый прогон на том же
+ * файле) вопросу не приписывается. in/out/chat — навигация, не вердикт.
+ */
+function operatorMarkerRecords(
+  markers: ExtractableMarker[],
+  byId: Map<string, ExtractableMarker>,
+  opts?: AnswersExtractOptions,
+): AnswerRecord[] {
+  const byMedia = new Map<string, QuestionScope[]>();
+  for (const s of collectQuestionScopes(markers, byId, opts)) {
+    const list = byMedia.get(s.mediaPath);
+    if (list) list.push(s);
+    else byMedia.set(s.mediaPath, [s]);
+  }
+  if (byMedia.size === 0) return [];
+  const out: AnswerRecord[] = [];
+  for (const m of markers) {
+    if (!m || typeof m !== "object" || typeof m.marker_id !== "string") continue;
+    if (m.marker_id.startsWith("qmat_")) continue;
+    if (typeof m.reply_to === "string" && m.reply_to) continue;
+    if (typeof m.question_id === "string" && m.question_id.trim()) continue;
+    if (isAgentAuthor(m.author)) continue;
+    const kind = typeof m.kind === "string" ? m.kind : "";
+    if (!OPERATOR_VERDICT_KINDS.includes(kind)) continue;
+    const text = typeof m.text === "string" ? m.text.trim() : "";
+    if (kind === "comment" && !text) continue;
+    const scopes = typeof m.media_path === "string" ? byMedia.get(m.media_path) : undefined;
+    if (!scopes) continue;
+    const t = finiteNum(m.anchor_sec) ?? finiteNum(m.start_sec);
+    if (t === undefined || t < 0) continue;
+    const scope = scopeAt(scopes, t);
+    if (!scope) continue;
+    const when = operatorMarkerTime(m);
+    if (when && Number.isFinite(scope.askedMs) && when.ms < scope.askedMs) continue;
+    const record: AnswerRecord = {
+      question_id: scope.qid,
+      verdict: kind as AnswerVerdict,
+      answered_at: when?.iso ?? "",
+    };
+    if (text) record.comment = text;
+    record.t_sec = t;
+    const start = finiteNum(m.start_sec);
+    const end = finiteNum(m.end_sec);
+    if (start !== undefined && end !== undefined && end > start) {
+      record.marker_start_sec = start;
+      record.marker_end_sec = end;
+    }
+    const author = typeof m.author === "string" ? m.author.trim() : "";
+    record.confirmed_by = author || DEFAULT_CONFIRMED_BY;
+    record.origin = OPERATOR_MARKER_ORIGIN;
+    record.marker_id = m.marker_id;
+    out.push(record);
+  }
+  return out;
+}
+
 /**
  * tb_1791809796_24701_1: answers.json = выжимка из маркеров. Прямые дети qmat —
  * ответы: с префиксом [answer] — разбор вердикта/choice/comment, без — свободный
@@ -237,6 +455,8 @@ export const WHOLE_FILE_MARKER_SUFFIX = "whole";
  * playhead), answered_at = created_at, скобки = текущий диапазон родителя
  * (человек двигает сам qmat). Несколько ответов на вопрос — все (последний
  * главнее — дело потребителя, см. resolveAnswers). Плеер ответы не стирает.
+ * tb_1794347727_83767_1: следом — собственные маркеры оператора внутри in/out
+ * записи (origin = operator_marker), см. operatorMarkerRecords.
  */
 export function answersFromMarkers(
   markers: ExtractableMarker[],
@@ -289,22 +509,12 @@ export function answersFromMarkers(
     // вопроса — отдельный маркер <префикс>_out (текущая позиция: человек мог
     // его сдвинуть); легаси-родитель с настоящим диапазоном — как раньше.
     // Вопрос на весь файл (_whole) скобок не имеет — in/out не пишем.
-    if (!parentId.endsWith(`_${WHOLE_FILE_MARKER_SUFFIX}`)) {
-      const inSec = finiteNum(parent.start_sec);
-      const outMarker = parentId.endsWith("_in") ? byId.get(`${parentId.slice(0, -3)}_out`) : undefined;
-      let outSec = finiteNum(outMarker?.start_sec) ?? finiteNum(outMarker?.anchor_sec);
-      if (outSec === undefined) {
-        const rangeEnd = finiteNum(parent.end_sec);
-        if (rangeEnd !== undefined && inSec !== undefined && rangeEnd > inSec) outSec = rangeEnd;
-      }
-      if (inSec !== undefined && inSec >= 0) record.in_sec = inSec;
-      if (outSec !== undefined && outSec >= 0 && (inSec === undefined || outSec > inSec)) record.out_sec = outSec;
-    }
+    Object.assign(record, parentBracket(parentId, parent, byId));
     const author = typeof m.author === "string" ? m.author.trim() : "";
     record.confirmed_by = author || DEFAULT_CONFIRMED_BY;
     out.push(record);
   }
-  return out;
+  return [...out, ...operatorMarkerRecords(markers, byId, opts)];
 }
 
 /**
@@ -429,15 +639,37 @@ function answerRecordKey(r: AnswerRecord): string {
     r.t_sec ?? "",
     r.in_sec ?? "",
     r.out_sec ?? "",
+    r.marker_id ?? "",
   ].join("|");
+}
+
+export interface MergeAnswersOptions {
+  /**
+   * tb_1794347727_83767_1: вопросы, чьи маркеры сейчас лежат в хранилище
+   * (questionScopeFromMarkers). Записи origin = operator_marker по этим
+   * вопросам файл не копит, а ЗЕРКАЛИТ маркеры оператора: правка текста
+   * заменяет запись, удалённый маркер уходит. Остальное — только дописывание.
+   */
+  replaceOperatorMarkersIn?: Iterable<string>;
 }
 
 /**
  * tb_1791819024_26192_2: файл = старое + выжимка (дедуп по содержимому).
  * «Плеер ответы не стирает»: легаси 0.25.54 цело, повторы не плодятся.
+ * Исключение — собственные маркеры оператора (см. MergeAnswersOptions): это
+ * не ответы-события, а отражение его маркеров, которые он правит и удаляет.
  */
-export function mergeAnswerRecords(existing: AnswerRecord[], fresh: AnswerRecord[]): AnswerRecord[] {
-  const out = Array.isArray(existing) ? [...existing] : [];
+export function mergeAnswerRecords(
+  existing: AnswerRecord[],
+  fresh: AnswerRecord[],
+  opts?: MergeAnswersOptions,
+): AnswerRecord[] {
+  const mirrored = new Set<string>();
+  for (const id of opts?.replaceOperatorMarkersIn ?? []) if (id) mirrored.add(String(id));
+  const base = Array.isArray(existing) ? existing : [];
+  const out = mirrored.size > 0
+    ? base.filter((r) => !(r && r.origin === OPERATOR_MARKER_ORIGIN && mirrored.has(String(r.question_id))))
+    : [...base];
   const seen = new Set(out.map(answerRecordKey));
   if (Array.isArray(fresh)) {
     for (const r of fresh) {

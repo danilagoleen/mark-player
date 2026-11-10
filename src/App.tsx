@@ -74,7 +74,7 @@ import { DOOR_IDS, checkModuleDoor, doorClickTransition, doorEndpoint, doorLabel
 import type { ProbeResult } from "./lib/nativeWindow";
 import { dirOfPath, joinForDialog } from "./lib/exportPaths";
 import { createEmptyPlaylist, savePlaylist, loadPlaylist, addEntry, getNextEntryFromCursor, loadPlaybackMode, sanitizePlaylistFilename, trackOpenedFile, type QuestionPlaylistEntry } from "./lib/playlist";
-import { WHOLE_FILE_MARKER_SUFFIX, answerGate, formatQuestionBrackets, answersFromMarkers, buildAnswersDocument, filterAnswersToPlaylist, findQuestionEntryAtTime, formatAnswerReplyText, lerpQuestionBox, mergeAnswerRecords, normalizeQuestionEntry, parseAnswersDocument, questionFilePosition, readAnswersOutbox, readQuestionPlaylistPath, rememberQuestionPlaylistPath, resolveActiveEntry, resolveAnswers, resolveQuestionSnapTime, writeAnswersOutbox, isQuestionPlaylist, type AnswerRecord, type AnswersDocument, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
+import { WHOLE_FILE_MARKER_SUFFIX, answerGate, formatQuestionBrackets, answersFromMarkers, buildAnswersDocument, filterAnswersToPlaylist, findQuestionEntryAtTime, formatAnswerReplyText, lerpQuestionBox, mergeAnswerRecords, normalizeQuestionEntry, parseAnswersDocument, questionFilePosition, questionScopeFromMarkers, readAnswersOutbox, readQuestionPlaylistPath, rememberQuestionPlaylistPath, resolveActiveEntry, resolveAnswers, resolveQuestionSnapTime, writeAnswersOutbox, isQuestionPlaylist, type AnswerRecord, type AnswersDocument, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
 import { writeAnswersAckFile, writeAnswersDocumentFile, sanitizeAnswersFileOnDisk } from "./lib/questionAnswersFile";
 import { createSessionReporter, type SessionReporter } from "./lib/sessionReporter";
 import { isSameMediaPath, resolveMediaContentHash } from "./lib/mediaOpen";
@@ -1103,6 +1103,33 @@ function App() {
       // ignore — карточка остаётся
     }
   }
+  // tb_1794347727_83767_1: выжимка ответов из маркеров — ОДНА на все места
+  // записи (карточка, «Send to agent», пересборка). Кроме ответов карточки в
+  // неё входят СОБСТВЕННЫЕ маркеры оператора внутри in/out записи
+  // (origin = operator_marker); scope — вопросы, чьи маркеры сейчас в
+  // хранилище: только по ним слияние зеркалит правки и удаления этих маркеров.
+  function extractAnswerRecords(markersNow: PlayerTimeMarker[]) {
+    const playlist = loadPlaylist();
+    const entries = Array.isArray(playlist?.entries) ? playlist.entries as QuestionEntry[] : [];
+    const extractOpts = {
+      resolveLegacyQuestionId: (parentId: string) =>
+        entries.find((e) => e.question_id && parentId.startsWith(materializedMarkerPrefix(e.question_id)))?.question_id,
+      choicesOf: (questionId: string) => {
+        const hit = entries.find((e) => e.question_id === questionId);
+        return Array.isArray(hit?.choices) ? hit.choices as string[] : undefined;
+      },
+    };
+    const questionIds = entries
+      .map((e) => e.question_id)
+      .filter((x): x is string => typeof x === "string" && x.length > 0);
+    return {
+      entries,
+      records: answersFromMarkers(markersNow, extractOpts),
+      scope: questionScopeFromMarkers(markersNow, extractOpts),
+      questionIds,
+      playlistId: typeof playlist?.id === "string" && playlist.id ? playlist.id : "playlist",
+    };
+  }
   // tb_1791809796_24701_1: канон «одна правда — маркеры». Ответ = reply-маркер
   // на qmat (общий конструктор lib/markerReply, anchor = playhead); answers.json
   // — чистая выжимка answersFromMarkers из всех маркеров, второго пути записи
@@ -1185,21 +1212,8 @@ function App() {
     pushMarkerHistory();
     const updated = [...markersRef.current, reply as PlayerTimeMarker];
     setMarkers(updated);
-    const playlist = loadPlaylist();
-    const entries = Array.isArray(playlist?.entries) ? playlist.entries as QuestionEntry[] : [];
-    const records = answersFromMarkers(updated, {
-      resolveLegacyQuestionId: (parentId) =>
-        entries.find((e) => e.question_id && parentId.startsWith(materializedMarkerPrefix(e.question_id)))?.question_id,
-      choicesOf: (questionId) => {
-        const hit = entries.find((e) => e.question_id === questionId);
-        return Array.isArray(hit?.choices) ? hit.choices as string[] : undefined;
-      },
-    });
+    const { entries, records, scope, questionIds, playlistId } = extractAnswerRecords(updated);
     setQuestionComment("");
-    const questionIds = entries
-      .map((e) => e.question_id)
-      .filter((x): x is string => typeof x === "string" && x.length > 0);
-    const playlistId = typeof playlist?.id === "string" && playlist.id ? playlist.id : "playlist";
     if (isTauriRuntimeSync()) {
       const playlistPath = readQuestionPlaylistPath();
       if (playlistPath) {
@@ -1217,7 +1231,7 @@ function App() {
           // tb_1792634443_73606_2: документ с прогрессом, только свои
           // question_id (buildAnswersDocument фильтрует). Агент читает файл
           // как источник истины — чужих ответов там больше нет.
-          const doc = buildAnswersDocument(mergeAnswerRecords(existing, records), {
+          const doc = buildAnswersDocument(mergeAnswerRecords(existing, records, { replaceOperatorMarkersIn: scope }), {
             playlistId,
             questionIds,
           });
@@ -1249,7 +1263,7 @@ function App() {
       ...entries.map((e) => e.question_id).filter((x): x is string => !!x),
       ...records.map((r) => r.question_id),
     ]);
-    writeAnswersOutbox(mergeAnswerRecords(filterAnswersToPlaylist(readAnswersOutbox(), ownIds), records));
+    writeAnswersOutbox(mergeAnswerRecords(filterAnswersToPlaylist(readAnswersOutbox(), ownIds), records, { replaceOperatorMarkersIn: scope }));
     void sessionReporter.answered();
     recordAnswer();
     setContextToast(
@@ -1258,6 +1272,38 @@ function App() {
         : `Saved ${savedLabel} (${verdict}) → ${qid} (web outbox) + reply in Comments.`,
     );
     return "saved";
+  }
+  // tb_1794347727_83767_1: пересборка answers.json из ВСЕХ маркеров (ответы
+  // карточки + собственные маркеры оператора внутри in/out) — тем же слиянием,
+  // что при ответе карточки. Вне Tauri файла нет: слияние уходит в аутбокс,
+  // результат null.
+  async function refreshAnswersDocFromMarkers(playlistPath: string): Promise<AnswersDocument | null> {
+    const { records, scope, questionIds, playlistId } = extractAnswerRecords(markersRef.current);
+    if (!isTauriRuntimeSync()) {
+      const ownIds = new Set<string>([...questionIds, ...records.map((r) => r.question_id)]);
+      writeAnswersOutbox(
+        mergeAnswerRecords(filterAnswersToPlaylist(readAnswersOutbox(playlistPath), ownIds), records, { replaceOperatorMarkersIn: scope }),
+        playlistPath,
+      );
+      return null;
+    }
+    const fs = await import("@tauri-apps/plugin-fs");
+    const { answersPathFor, parseAnswersFile } = await import("./lib/questionPlaylist");
+    let existing: AnswerRecord[] = [];
+    try {
+      existing = parseAnswersFile(await fs.readTextFile(answersPathFor(playlistPath)));
+    } catch {
+      // файла ещё нет — выжимка первая
+    }
+    const doc = buildAnswersDocument(mergeAnswerRecords(existing, records, { replaceOperatorMarkersIn: scope }), {
+      playlistId,
+      questionIds,
+    });
+    await writeAnswersDocumentFile(playlistPath, doc);
+    answersDocRef.current = doc;
+    answersCompleteRef.current = doc.complete;
+    setAnsweredQuestionIds(new Set(doc.answered_question_ids));
+    return doc;
   }
   // tb_1792634443_73606_2: явный сигнал агенту даже при неполных ответах
   // (контракт Commander 22.10, кнопка в карточке).
@@ -1268,10 +1314,15 @@ function App() {
   // успешной записи уходит ack с обновлённым документом. Пустое поле — как раньше.
   async function sendAnswersToAgent(): Promise<void> {
     const playlistPath = readQuestionPlaylistPath();
+    // tb_1794347727_83767_1: ответом считается и СОБСТВЕННЫЙ маркер оператора
+    // внутри in/out записи — «no answers yet» без единой кнопки карточки
+    // было бы враньём (reelsD-201336: ig_D отвечен только своими маркерами).
+    const fromMarkers = playlistPath ? extractAnswerRecords(markersRef.current) : null;
+    const hasMarkerAnswers = !!fromMarkers && filterAnswersToPlaylist(fromMarkers.records, fromMarkers.questionIds).length > 0;
     const plan = planSendToAgent({
       comment: questionComment,
       hasPlaylistPath: !!playlistPath,
-      hasAnswersDoc: !!answersDocRef.current,
+      hasAnswersDoc: !!answersDocRef.current || hasMarkerAnswers,
       hasActiveQuestion: !!activeQuestion?.question_id,
     });
     if (plan.action === "refuse" || !playlistPath) {
@@ -1292,19 +1343,36 @@ function App() {
         return;
       }
     }
-    const doc = answersDocRef.current;
+    // Комментарий уже записан answerQuestion вместе со всеми маркерами; иначе
+    // документ пересобираем из маркеров сами — свои маркеры оператора попадают
+    // в answers.json ДО ack.
+    let doc = answersDocRef.current;
+    if (!savedComment) {
+      try {
+        doc = (await refreshAnswersDocFromMarkers(playlistPath)) ?? doc;
+      } catch {
+        setContextToast("Send to agent: could not write answers file.");
+        return;
+      }
+    }
     if (!doc) {
       setContextToast(
         savedComment
           ? "Comment saved locally; nothing sent — open the question playlist from file to write answers.json."
-          : "Send to agent: no answers yet — answer a question first.",
+          : isTauriRuntimeSync()
+            ? "Send to agent: no answers yet — answer a question first."
+            : "Send to agent: answers kept in the web outbox only — the ack file needs the desktop app.",
       );
       return;
     }
     try {
       const commandId = readQuestionCommandId(playlistPath) ?? commandIdForPlaylistId(doc.playlist_id);
       const target = await writeAnswersAckFile(doc, commandId, "operator");
-      setContextToast(savedComment ? `Comment saved + sent to agent: ${target}` : `Sent to agent: ${target}`);
+      const own = doc.answers.filter((r) => r.origin === "operator_marker").length;
+      const withOwn = own > 0 ? ` (incl. ${own} own marker${own === 1 ? "" : "s"})` : "";
+      setContextToast(
+        savedComment ? `Comment saved + sent to agent${withOwn}: ${target}` : `Sent to agent${withOwn}: ${target}`,
+      );
     } catch {
       setContextToast(savedComment ? "Comment saved, but could not write the ack file." : "Send to agent: could not write ack file.");
     }
@@ -6789,7 +6857,7 @@ function App() {
                               className="question-card-side-verdict"
                               data-testid="question-send-agent"
                               onClick={() => void sendAnswersToAgent()}
-                              title="Save the typed comment (as Not sure), then copy answers.json to ack/ for the agent (works with incomplete answers too)"
+                              title="Save the typed comment (as Not sure), add your own markers made inside the question's in/out, then copy answers.json to ack/ for the agent (works with incomplete answers too)"
                             >
                               Send to agent
                             </button>

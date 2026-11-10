@@ -1,23 +1,23 @@
-# Mark Player 0.26.9 beta, by VETKA lab
+# Mark Player 0.26.10 beta, by VETKA lab
 
 <img src="docs/screenshots/icon-128.png" width="128" alt="Mark Player icon">
 
 Marker-first video review: open a file, mark the moments, land them in Premiere — frame-accurately.
 
-[⬇ Download for macOS (Apple Silicon)](https://github.com/danilagoleen/mark-player/releases/download/v0.26.9/Mark.Player_0.26.9_aarch64.dmg) ·
-[Intel Mac](https://github.com/danilagoleen/mark-player/releases/download/v0.26.9/Mark.Player_0.26.9_x64.dmg) ·
-[Windows](https://github.com/danilagoleen/mark-player/releases/download/v0.26.9/Mark.Player_0.26.9_x64-setup.exe)
+[⬇ Download for macOS (Apple Silicon)](https://github.com/danilagoleen/mark-player/releases/download/v0.26.10/Mark.Player_0.26.10_aarch64.dmg) ·
+[Intel Mac](https://github.com/danilagoleen/mark-player/releases/download/v0.26.10/Mark.Player_0.26.10_x64.dmg) ·
+[Windows](https://github.com/danilagoleen/mark-player/releases/download/v0.26.10/Mark.Player_0.26.10_x64-setup.exe)
 
 [![Watch it in action (1 min) — mark the moments, land them in Premiere](docs/promo/promo_poster.jpg)](https://github.com/user-attachments/assets/098c218f-5e4e-4c8f-ab3b-382bffc51d17)
 
 ## Versioning
 
-`MAJOR.MINOR.PATCH` — the second number is the major line, the third is the
-minor step. A major release moves the hundredths (`0.26` → `0.27`); every
-shipped change moves the thousandths (`0.26.1`, `0.26.2`, …). Two different
-builds must never carry the same stamp: `package.json`, `tauri.conf.json`
-(version + window title), `Cargo.toml` and the README download links move
-together, and `appVersion.test.ts` keeps them in sync.
+Versions look like `0.26.10`. Mark Player is in beta, so the first number stays `0`.
+
+- The **middle number** (`26`) is the release line. It goes up when a bigger batch
+  of changes ships (`0.26.x` → `0.27.x`).
+- The **last number** (`10`) is the build. It goes up with every shipped change,
+  so two different builds never carry the same version.
 
 ## Screenshots
 
@@ -67,9 +67,9 @@ Marilyn marked the frames she didn't like. Now any producer marks right in the p
 Grab the latest beta from
 **[Releases](https://github.com/danilagoleen/mark-player/releases)**:
 
-- **macOS Apple Silicon** — `Mark.Player_0.26.9_aarch64.dmg`
-- **macOS Intel** — `Mark.Player_0.26.9_x64.dmg`
-- **Windows 10/11** — `Mark.Player_0.26.9_x64-setup.exe` (installer) or `Mark.Player_0.26.9_x64_en-US.msi`
+- **macOS Apple Silicon** — `Mark.Player_0.26.10_aarch64.dmg`
+- **macOS Intel** — `Mark.Player_0.26.10_x64.dmg`
+- **Windows 10/11** — `Mark.Player_0.26.10_x64-setup.exe` (installer) or `Mark.Player_0.26.10_x64_en-US.msi`
 
 ## Installation (macOS)
 
@@ -127,6 +127,11 @@ npm run tauri:build
 
 Native bundles land in
 `src-tauri/target/release/bundle/{dmg/*.dmg,nsis/*.exe,msi/*.msi}`.
+
+Every build carries its own version stamp: `package.json`,
+`src-tauri/tauri.conf.json` (version and window title), `src-tauri/Cargo.toml`
+and the README download links move together, and `npm test` fails if they
+disagree.
 
 ## What it does
 
