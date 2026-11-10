@@ -10,15 +10,6 @@ Marker-first video review: open a file, mark the moments, land them in Premiere 
 
 [![Watch it in action (1 min) — mark the moments, land them in Premiere](docs/promo/promo_poster.jpg)](https://github.com/user-attachments/assets/098c218f-5e4e-4c8f-ab3b-382bffc51d17)
 
-## Versioning
-
-Versions look like `0.26.10`. Mark Player is in beta, so the first number stays `0`.
-
-- The **middle number** (`26`) is the release line. It goes up when a bigger batch
-  of changes ships (`0.26.x` → `0.27.x`).
-- The **last number** (`10`) is the build. It goes up with every shipped change,
-  so two different builds never carry the same version.
-
 ## Screenshots
 
 ![Marking in action: flags on the timeline, comment window, playlist](docs/screenshots/player-marking-comments-playlist.jpg)
@@ -127,11 +118,6 @@ npm run tauri:build
 
 Native bundles land in
 `src-tauri/target/release/bundle/{dmg/*.dmg,nsis/*.exe,msi/*.msi}`.
-
-Every build carries its own version stamp: `package.json`,
-`src-tauri/tauri.conf.json` (version and window title), `src-tauri/Cargo.toml`
-and the README download links move together, and `npm test` fails if they
-disagree.
 
 ## What it does
 

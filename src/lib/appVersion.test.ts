@@ -42,38 +42,30 @@ describe("version stamp 0.17", () => {
   });
 });
 
-// tb_1794347727_83767_1 (слово оператора 11.11, скриншот GitHub): раздел «Versioning»
-// публичного README называл схему MAJOR.MINOR.PATCH, но тут же звал второе число
-// «major line», третье «minor step», считал сотыми и тысячными и перечислял
-// внутренние файлы. Читателю нужно одно: что значит 26 и что значит 9.
-describe("README: раздел Versioning понятен читателю", () => {
-  const start = readme.indexOf("## Versioning");
-  const next = readme.indexOf("\n## ", start + 1);
-  const section = start >= 0 ? readme.slice(start, next > start ? next : undefined) : "";
-
-  it("раздел есть и не пустой", () => {
-    expect(section.length).toBeGreaterThan(80);
+// tb_1794351121_83767_3 (слово оператора 11.11, скриншот GitHub): схема версий — внутренняя
+// кухня, читателю плеера она не нужна (в 0.26.10 раздел «Versioning» был не убран, а
+// переписан другими словами — это была ошибка). Версия видна в заголовке README и в
+// ссылках на скачивание; их держат тесты выше. Объяснения номера и перечня файлов
+// штампа в публичном тексте быть не должно.
+describe("README: внутренней кухни про версии в публичном тексте нет", () => {
+  it("раздела Versioning нет", () => {
+    expect(readme).not.toMatch(/^#{1,6}\s*Versioning\b/im);
   });
 
-  it("без путающих слов: hundredths / thousandths / «major line» / «minor step» / MAJOR.MINOR.PATCH", () => {
-    for (const word of ["hundredths", "thousandths", "major line", "minor step", "MAJOR.MINOR.PATCH"]) {
-      expect(section.toLowerCase()).not.toContain(word.toLowerCase());
+  it("нет объяснения схемы номера: «middle number», «last number», «release line», hundredths", () => {
+    for (const word of ["middle number", "last number", "release line", "hundredths", "thousandths", "MAJOR.MINOR.PATCH"]) {
+      expect(readme.toLowerCase()).not.toContain(word.toLowerCase());
     }
   });
 
-  it("называет пример версии из заголовка и объясняет среднее и последнее число", () => {
-    const [major, minor, patch] = EXPECTED_VERSION.split(".");
-    expect(section).toContain(`\`${EXPECTED_VERSION}\``);
-    expect(section).toContain(`\`${minor}\``);
-    expect(section).toContain(`\`${patch}\``);
-    expect(section).toMatch(/middle number/i);
-    expect(section).toMatch(/last number/i);
-    expect(major).toBe("0");
+  it("нет перечня файлов штампа версии и имени проверочного теста", () => {
+    for (const word of ["version stamp", "appVersion", "tauri.conf", "package.json", "Cargo.toml"]) {
+      expect(readme).not.toContain(word);
+    }
   });
 
-  it("внутренней кухни (имена файлов, appVersion.test.ts) в публичном тексте раздела нет", () => {
-    expect(section).not.toContain("appVersion");
-    expect(section).not.toContain("tauri.conf");
-    expect(section).not.toContain("package.json");
+  it("версия при этом на месте: заголовок и ссылки на скачивание", () => {
+    expect(readme).toContain(`# Mark Player ${EXPECTED_VERSION} beta`);
+    expect(readme).toContain(`releases/download/v${EXPECTED_VERSION}/`);
   });
 });
