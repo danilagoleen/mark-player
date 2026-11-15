@@ -9,7 +9,10 @@
 //! (docs/217_ph_cut-player/RECON_MARK_PLAYER_LARGE_MEDIA_2026-10-20.md).
 //!
 //! The same file over `http://127.0.0.1` with Range plays fine, so files at or
-//! above the threshold are routed here instead of `asset://`. Everything below
+//! above the threshold are routed here instead of `asset://`. Since 0.26.11 a
+//! second rule routes by bytes per second (size / movie duration from `mvhd`):
+//! `asset://` serves ≤1000 KB per request, which a 4K 50p source (≈143 Mbit/s)
+//! visibly cannot keep up with. Everything below
 //! uses `std` only: no new crates, no FFmpeg, no memory-mapping of the file.
 //!
 //! Security: the socket is bound to 127.0.0.1, every request must carry the
@@ -30,6 +33,19 @@ use std::time::Duration;
 /// routes only what is at or past the breakage. Mirrored by BIG_MEDIA_BYTES in
 /// src/lib/mediaDiagnostics.ts.
 pub const LOOPBACK_MIN_BYTES: u64 = 5_250_000_000;
+
+/// 0.26.11: второе правило — по байтам в секунду, а не по размеру. Tauri-овский
+/// `asset://` отдаёт ответ кусками ≤1000 КБ, и каждый кусок — отдельный запрос
+/// через веб-вью. 4К 50p с GH5 (≈143 Мбит/с = 17,9 МБ/с) — это ≈18 запросов в
+/// секунду, и оператор видел подтормаживание, которого на loopback нет.
+/// FullHD той же камеры (≈51 Мбит/с, ≈6 запросов/с) и прокси (≈14 Мбит/с) на
+/// `asset://` играют нормально. Порог лежит между ними: 12,5 МБ/с ≈ 100 Мбит/с.
+/// Сама граница НЕ измерена (замера на 70–120 Мбит/с нет) — подвинуть по замеру.
+pub const LOOPBACK_MIN_BYTES_PER_SEC: u64 = 12_500_000;
+
+/// Правило по битрейту смотрят только у файлов от этого размера: меньше —
+/// нечему «не успевать», а разбор moov стоит несколько чтений на каждое открытие.
+pub const LOOPBACK_RATE_MIN_FILE_BYTES: u64 = 32 * 1024 * 1024;
 
 const CHUNK: usize = 128 * 1024;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
@@ -83,7 +99,18 @@ impl RangeServer {
             Ok(m) => m,
             Err(_) => return Ok(None),
         };
-        if !meta.is_file() || meta.len() < LOOPBACK_MIN_BYTES {
+        if !meta.is_file() {
+            return Ok(None);
+        }
+        let len = meta.len();
+        // Длительность читаем, только когда она решает дело: размер ещё не
+        // отправил файл на loopback, но файл достаточно велик для правила 2.
+        let duration = if len >= LOOPBACK_MIN_BYTES || len < LOOPBACK_RATE_MIN_FILE_BYTES {
+            None
+        } else {
+            movie_duration_secs(path)
+        };
+        if !loopback_wanted(len, duration) {
             return Ok(None);
         }
         if !self.is_allowed(path) {
@@ -104,6 +131,147 @@ impl RangeServer {
             .iter()
             .any(|root| real.starts_with(root.as_path()))
     }
+}
+
+/// Нужен ли файлу loopback. Два правила, достаточно любого:
+/// 1) размер ≥ `LOOPBACK_MIN_BYTES` — `asset://` не отдаёт mdat (чёрный кадр);
+/// 2) файл от `LOOPBACK_RATE_MIN_FILE_BYTES` и размер/длительность ≥
+///    `LOOPBACK_MIN_BYTES_PER_SEC` — `asset://` не успевает кусками по 1000 КБ.
+/// Длительность неизвестна или нулевая — правило 2 молчит, остаётся правило 1.
+fn loopback_wanted(len: u64, duration_secs: Option<f64>) -> bool {
+    if len >= LOOPBACK_MIN_BYTES {
+        return true;
+    }
+    if len < LOOPBACK_RATE_MIN_FILE_BYTES {
+        return false;
+    }
+    match duration_secs {
+        Some(d) if d.is_finite() && d > 0.0 => {
+            len as f64 / d >= LOOPBACK_MIN_BYTES_PER_SEC as f64
+        }
+        _ => false,
+    }
+}
+
+/// Длительность фильма в секундах из бокса `mvhd` (MOV/MP4). Всё, что не
+/// читается как MOV/MP4 (другой контейнер, обрезанный файл, нулевая длительность
+/// или шкала времени), — `None`: решает правило по размеру. Не паникует.
+fn movie_duration_secs(path: &Path) -> Option<f64> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    mvhd_duration_secs(&mut file, len)
+}
+
+/// Предохранитель от зацикливания на порченых файлах: у камерного MOV верхний
+/// уровень — ftyp/wide/mdat/moov, а в moov mvhd идёт первым или почти первым.
+const MAX_BOXES: usize = 256;
+
+struct BoxHeader {
+    kind: [u8; 4],
+    start: u64,
+    header_len: u64,
+    size: u64,
+}
+
+/// Заголовок бокса на `pos`; бокс обязан целиком лежать в `[pos, limit]`.
+/// size==1 — 64-битный largesize (mdat больше 4 ГиБ), size==0 — до `limit`.
+fn read_box_header<R: Read + Seek>(r: &mut R, pos: u64, limit: u64) -> Option<BoxHeader> {
+    if pos.checked_add(8)? > limit {
+        return None;
+    }
+    r.seek(SeekFrom::Start(pos)).ok()?;
+    let mut head = [0u8; 8];
+    r.read_exact(&mut head).ok()?;
+    let small = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as u64;
+    let kind = [head[4], head[5], head[6], head[7]];
+    let (size, header_len) = match small {
+        0 => (limit - pos, 8),
+        1 => {
+            let mut big = [0u8; 8];
+            r.read_exact(&mut big).ok()?;
+            (u64::from_be_bytes(big), 16)
+        }
+        n => (n, 8),
+    };
+    if size < header_len || pos.checked_add(size)? > limit {
+        return None;
+    }
+    Some(BoxHeader {
+        kind,
+        start: pos,
+        header_len,
+        size,
+    })
+}
+
+fn mvhd_duration_secs<R: Read + Seek>(r: &mut R, len: u64) -> Option<f64> {
+    let mut pos = 0u64;
+    for _ in 0..MAX_BOXES {
+        let b = read_box_header(r, pos, len)?;
+        if &b.kind == b"moov" {
+            return mvhd_in_moov(r, b.start + b.header_len, b.start + b.size);
+        }
+        pos = b.start + b.size;
+        if pos >= len {
+            return None;
+        }
+    }
+    None
+}
+
+fn mvhd_in_moov<R: Read + Seek>(r: &mut R, mut pos: u64, end: u64) -> Option<f64> {
+    for _ in 0..MAX_BOXES {
+        let b = read_box_header(r, pos, end)?;
+        if &b.kind == b"mvhd" {
+            return parse_mvhd(r, b.start + b.header_len, b.size - b.header_len);
+        }
+        pos = b.start + b.size;
+        if pos >= end {
+            return None;
+        }
+    }
+    None
+}
+
+/// mvhd: версия 0 — `creation(4) modification(4) timescale(4) duration(4)`,
+/// версия 1 — `creation(8) modification(8) timescale(4) duration(8)`.
+fn parse_mvhd<R: Read + Seek>(r: &mut R, at: u64, payload_len: u64) -> Option<f64> {
+    r.seek(SeekFrom::Start(at)).ok()?;
+    let mut version = [0u8; 1];
+    r.read_exact(&mut version).ok()?;
+    let (timescale, duration) = match version[0] {
+        0 => {
+            if payload_len < 20 {
+                return None;
+            }
+            r.seek(SeekFrom::Current(3 + 8)).ok()?; // flags, creation, modification
+            let mut buf = [0u8; 8];
+            r.read_exact(&mut buf).ok()?;
+            (
+                u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]),
+                u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]) as u64,
+            )
+        }
+        1 => {
+            if payload_len < 32 {
+                return None;
+            }
+            r.seek(SeekFrom::Current(3 + 16)).ok()?; // flags, creation, modification
+            let mut buf = [0u8; 12];
+            r.read_exact(&mut buf).ok()?;
+            (
+                u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]),
+                u64::from_be_bytes([
+                    buf[4], buf[5], buf[6], buf[7], buf[8], buf[9], buf[10], buf[11],
+                ]),
+            )
+        }
+        _ => return None,
+    };
+    if timescale == 0 || duration == 0 {
+        return None;
+    }
+    Some(duration as f64 / timescale as f64)
 }
 
 fn allowed_roots() -> Vec<PathBuf> {
@@ -514,6 +682,213 @@ mod tests {
         let server = RangeServer::start().expect("start server");
         assert_eq!(server.url_for(&path).expect("url_for"), None);
         let _ = std::fs::remove_file(&path);
+    }
+
+    // ---- 0.26.11: правило по битрейту -------------------------------------
+    // Синтетические MOV: ftyp + mdat (разреженные нули) + moov с mvhd, как у
+    // камеры (moov в конце). Содержимое кадров разбору не нужно — только боксы.
+
+    fn be32(v: u32) -> [u8; 4] {
+        v.to_be_bytes()
+    }
+
+    fn boxed(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(8 + payload.len());
+        out.extend_from_slice(&be32((8 + payload.len()) as u32));
+        out.extend_from_slice(kind);
+        out.extend_from_slice(payload);
+        out
+    }
+
+    fn ftyp() -> Vec<u8> {
+        boxed(b"ftyp", b"qt  \0\0\0\0qt  ")
+    }
+
+    fn mvhd_v0(timescale: u32, duration: u32) -> Vec<u8> {
+        let mut p = vec![0u8; 4]; // version 0 + flags
+        p.extend_from_slice(&[0u8; 8]); // creation, modification
+        p.extend_from_slice(&be32(timescale));
+        p.extend_from_slice(&be32(duration));
+        p.extend_from_slice(&[0u8; 80]); // rate … next_track_id: разбору не нужны
+        boxed(b"mvhd", &p)
+    }
+
+    fn mvhd_v1(timescale: u32, duration: u64) -> Vec<u8> {
+        let mut p = vec![1u8, 0, 0, 0]; // version 1 + flags
+        p.extend_from_slice(&[0u8; 16]); // creation, modification (64 бит)
+        p.extend_from_slice(&be32(timescale));
+        p.extend_from_slice(&duration.to_be_bytes());
+        p.extend_from_slice(&[0u8; 80]);
+        boxed(b"mvhd", &p)
+    }
+
+    fn tmp_path(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("mark-range-{tag}-{}", std::process::id()))
+    }
+
+    /// ftyp + mdat (`mdat_payload` разреженных нулей) + moov в конце.
+    /// `wide_mdat` — размер бокса через size==1 + 64-битный largesize.
+    fn write_movie(path: &Path, mdat_payload: u64, wide_mdat: bool, moov_children: &[u8]) {
+        let mut f = std::fs::File::create(path).expect("create sample");
+        f.write_all(&ftyp()).expect("ftyp");
+        if wide_mdat {
+            f.write_all(&be32(1)).expect("mdat size marker");
+            f.write_all(b"mdat").expect("mdat kind");
+            f.write_all(&(16 + mdat_payload).to_be_bytes()).expect("mdat largesize");
+        } else {
+            f.write_all(&be32((8 + mdat_payload) as u32)).expect("mdat size");
+            f.write_all(b"mdat").expect("mdat kind");
+        }
+        let here = f.stream_position().expect("position");
+        f.set_len(here + mdat_payload).expect("sparse mdat");
+        f.seek(SeekFrom::End(0)).expect("seek end");
+        f.write_all(&boxed(b"moov", moov_children)).expect("moov");
+    }
+
+    fn duration_of(tag: &str, build: impl FnOnce(&Path)) -> Option<f64> {
+        let path = tmp_path(tag);
+        build(&path);
+        let got = movie_duration_secs(&path);
+        let _ = std::fs::remove_file(&path);
+        got
+    }
+
+    #[test]
+    fn mvhd_v0_with_moov_at_the_end_gives_the_duration() {
+        let got = duration_of("mvhd-v0", |p| write_movie(p, 1024, false, &mvhd_v0(1000, 25_920)));
+        assert!((got.expect("duration") - 25.92).abs() < 1e-9, "got {got:?}");
+    }
+
+    #[test]
+    fn mvhd_v1_gives_the_duration() {
+        let got = duration_of("mvhd-v1", |p| write_movie(p, 1024, false, &mvhd_v1(600, 6_000)));
+        assert!((got.expect("duration") - 10.0).abs() < 1e-9, "got {got:?}");
+    }
+
+    #[test]
+    fn moov_before_mdat_is_found() {
+        let got = duration_of("moov-first", |p| {
+            let mut bytes = ftyp();
+            bytes.extend(boxed(b"moov", &mvhd_v0(1000, 4_000)));
+            bytes.extend(boxed(b"mdat", &[0u8; 64]));
+            std::fs::write(p, bytes).expect("write sample");
+        });
+        assert!((got.expect("duration") - 4.0).abs() < 1e-9, "got {got:?}");
+    }
+
+    #[test]
+    fn mvhd_is_found_when_it_is_not_the_first_child_of_moov() {
+        let mut children = boxed(b"free", &[0u8; 16]);
+        children.extend(mvhd_v0(1000, 2_500));
+        let got = duration_of("mvhd-later", |p| write_movie(p, 256, false, &children));
+        assert!((got.expect("duration") - 2.5).abs() < 1e-9, "got {got:?}");
+    }
+
+    #[test]
+    fn mdat_with_a_64_bit_largesize_is_walked() {
+        let got = duration_of("wide-mdat", |p| write_movie(p, 4096, true, &mvhd_v0(1000, 3_000)));
+        assert!((got.expect("duration") - 3.0).abs() < 1e-9, "got {got:?}");
+    }
+
+    #[test]
+    fn moov_beyond_four_gib_is_reached() {
+        // Разреженный файл: на диске почти ничего, но смещение moov > 4 ГиБ.
+        let got = duration_of("past-4gib", |p| {
+            write_movie(p, 5_300_000_000, true, &mvhd_v0(600, 6_000))
+        });
+        assert!((got.expect("duration") - 10.0).abs() < 1e-9, "got {got:?}");
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_movie_gives_none() {
+        let got = duration_of("not-a-movie", |p| {
+            std::fs::write(p, vec![b'h'; 4096]).expect("write sample");
+        });
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn a_truncated_movie_gives_none() {
+        // mdat заявляет миллион байт, а файл кончается сразу после заголовка.
+        let cut_mdat = duration_of("cut-mdat", |p| {
+            let mut bytes = ftyp();
+            bytes.extend_from_slice(&be32(1_000_000));
+            bytes.extend_from_slice(b"mdat");
+            std::fs::write(p, bytes).expect("write sample");
+        });
+        assert_eq!(cut_mdat, None);
+        // moov обрезан на середине mvhd.
+        let cut_moov = duration_of("cut-moov", |p| {
+            write_movie(p, 128, false, &mvhd_v0(1000, 1_000));
+            let f = std::fs::OpenOptions::new().write(true).open(p).expect("open");
+            let len = f.metadata().expect("meta").len();
+            f.set_len(len - 40).expect("truncate");
+        });
+        assert_eq!(cut_moov, None);
+    }
+
+    #[test]
+    fn zero_duration_or_zero_timescale_gives_none() {
+        let zero_duration = duration_of("zero-dur", |p| write_movie(p, 64, false, &mvhd_v0(1000, 0)));
+        assert_eq!(zero_duration, None);
+        let zero_scale = duration_of("zero-scale", |p| write_movie(p, 64, false, &mvhd_v0(0, 5_000)));
+        assert_eq!(zero_scale, None);
+    }
+
+    #[test]
+    fn rate_rule_routes_4k_50p_but_not_fullhd_or_proxy() {
+        // P1755009: 4К 50p, ≈143 Мбит/с — 468 970 021 Б за 25,92 с.
+        assert!(loopback_wanted(468_970_021, Some(25.92)));
+        // P1755097: FullHD 50p, ≈51 Мбит/с — 1,035 ГБ за 156 с (≈6,6 МБ/с).
+        assert!(!loopback_wanted(1_035_000_000, Some(156.0)));
+        // Прокси ≈14 Мбит/с — 1 351 337 073 Б за 682,56 с.
+        assert!(!loopback_wanted(1_351_337_073, Some(682.56)));
+    }
+
+    #[test]
+    fn rate_threshold_is_inclusive() {
+        let len = LOOPBACK_MIN_BYTES_PER_SEC * 10;
+        assert!(loopback_wanted(len, Some(10.0)));
+        assert!(!loopback_wanted(len - 1, Some(10.0)));
+    }
+
+    #[test]
+    fn size_rule_is_unchanged() {
+        assert!(loopback_wanted(LOOPBACK_MIN_BYTES, None));
+        assert!(loopback_wanted(LOOPBACK_MIN_BYTES, Some(100_000.0)));
+        assert!(!loopback_wanted(LOOPBACK_MIN_BYTES - 1, None));
+    }
+
+    #[test]
+    fn small_files_and_unknown_duration_stay_on_the_asset_transport() {
+        // Меньше пола — правило по битрейту не смотрим.
+        assert!(!loopback_wanted(LOOPBACK_RATE_MIN_FILE_BYTES - 1, Some(0.1)));
+        // Длительность неизвестна или нулевая — только правило по размеру.
+        assert!(!loopback_wanted(1_000_000_000, None));
+        assert!(!loopback_wanted(1_000_000_000, Some(0.0)));
+    }
+
+    #[test]
+    fn url_for_sends_a_4k_like_movie_to_loopback() {
+        // ≈470 МБ за 26 с ≈ 18 МБ/с — как 4К 50p GH5.
+        let path = tmp_path("url-4k");
+        write_movie(&path, 470_000_000, false, &mvhd_v0(1000, 26_000));
+        let server = RangeServer::start().expect("start server");
+        let got = server.url_for(&path).expect("url_for");
+        let _ = std::fs::remove_file(&path);
+        let url = got.expect("a 4K-class bitrate must use loopback");
+        assert!(url.starts_with(&format!("http://127.0.0.1:{}/media?t=", server.port)));
+    }
+
+    #[test]
+    fn url_for_keeps_a_fullhd_like_movie_on_the_asset_transport() {
+        // ≈1 ГБ за 156 с ≈ 6,4 МБ/с — FullHD 50p той же камеры.
+        let path = tmp_path("url-fhd");
+        write_movie(&path, 1_000_000_000, false, &mvhd_v0(1000, 156_000));
+        let server = RangeServer::start().expect("start server");
+        let got = server.url_for(&path).expect("url_for");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(got, None);
     }
 
     // Ручная улика на реальном материале заказа (только чтение, 100 байт).
