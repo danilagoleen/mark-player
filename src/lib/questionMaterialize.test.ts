@@ -3,6 +3,7 @@ import {
   agentAuthorFor,
   countMaterializable,
   filterNewMarkers,
+  filterNewMarkersBySlot,
   formatRegionSuffix,
   markerDedupKey,
   materializePlaylistQuestions,
@@ -280,5 +281,95 @@ describe("tb_1791885959_77379_1: сиблинги одного path+qid не р�
     const line2 = await materializePlaylistQuestions(qp as never, "cap.json", store, "2026-10-13T00:00:00Z");
     expect(line2).toMatch(/already in markers/);
     expect(store.appended).toHaveLength(2);
+  });
+});
+
+// tb_1794800630_73214_1: дефект 2 оператора 16.11 (gold_keys_v1) — сдвинутый
+// out «возвращался»: ключ дедупа содержал текущий якорь, повторная
+// материализация дописывала исходный qmat с тем же marker_id. Теперь маркер
+// определяется СЛОТОМ (marker_id + файл), а не положением.
+describe("(c) слот-дедуп: сдвинутый маркер не плодит исходный", () => {
+  const MEDIA = "asset://P1755075.mov";
+  const built = (qid: string, inSec: number, outSec: number, media = MEDIA) =>
+    materializeQuestionEntry({ question_id: qid, question: "?", in_sec: inSec, out_sec: outSec }, { ...CTX, mediaPath: media });
+  const ref = (m: MaterializedMarker, anchor = m.anchor_sec) => ({ marker_id: m.marker_id, media_path: m.media_path, anchor_sec: anchor });
+
+  it("out сдвинут 97 → 90.54: исходный out не дописывается", () => {
+    const fresh = built("gold_P1755075", 0, 97);
+    const [inM, outM] = fresh;
+    expect(filterNewMarkersBySlot([ref(inM), ref(outM, 90.54)], fresh)).toHaveLength(0);
+  });
+  it("сдвинуты и in, и out", () => {
+    const fresh = built("gold_P1755075", 0, 97);
+    const [inM, outM] = fresh;
+    expect(filterNewMarkersBySlot([ref(inM, 12.75), ref(outM, 90.54)], fresh)).toHaveLength(0);
+  });
+  it("в хранилище нет ни одного маркера слота — дописываем оба", () => {
+    expect(filterNewMarkersBySlot([], built("gold_P1755075", 0, 97))).toHaveLength(2);
+  });
+  it("тот же вопрос на другом видео — новые маркеры", () => {
+    const old = built("gold_P1755075", 0, 97);
+    const other = built("gold_P1755075", 0, 97, "asset://other.mov");
+    expect(filterNewMarkersBySlot(old.map((m) => ref(m)), other)).toHaveLength(2);
+  });
+  it("сиблинги одного qid: A сдвинут, B на месте — ничего нового", () => {
+    const a = built("trk-10", 10, 20);
+    const b = built("trk-10", 30, 40);
+    const stored = [ref(a[0], 12), ref(a[1], 22), ref(b[0]), ref(b[1])];
+    expect(filterNewMarkersBySlot(stored, [...a, ...b])).toHaveLength(0);
+  });
+  it("сиблинги: окно B удалено, A сдвинут — дописывается только B", () => {
+    const a = built("trk-10", 10, 20);
+    const b = built("trk-10", 30, 40);
+    const fresh = filterNewMarkersBySlot([ref(a[0], 12), ref(a[1], 22)], [...a, ...b]);
+    expect(fresh.map((m) => [m.marker_id, m.anchor_sec])).toEqual([
+      ["qmat_trk-10_in", 30],
+      ["qmat_trk-10_out", 40],
+    ]);
+  });
+  it("после двух сиблингов в одном импорте повтор — ноль свежих, без схлопывания B в A", async () => {
+    const stored: MaterializedMarker[] = [];
+    const store: QuestionMaterializeIO = {
+      readStoredKeys: () => new Set(stored.map((m) => markerDedupKey(m.marker_id, m.media_path, m.anchor_sec))),
+      readStoredMarkers: () => stored.map((m) => ref(m)),
+      appendMarkers: (fresh) => { stored.push(...fresh); },
+      resolveMediaUrl: async (p) => `asset://${p}`,
+      notifyChanged: () => {},
+    };
+    const qp = {
+      schema: "vetka.cut.question_playlist/1",
+      entries: [
+        { path: "/v/big.mov", question_id: "trk-10", in_sec: 10, out_sec: 20 },
+        { path: "/v/big.mov", question_id: "trk-10", in_sec: 30, out_sec: 40 },
+      ],
+    };
+    await materializePlaylistQuestions(qp as never, "cap.json", store, "2026-10-13T00:00:00Z");
+    expect(stored.map((m) => m.anchor_sec).sort((x, y) => x - y)).toEqual([10, 20, 30, 40]);
+    await materializePlaylistQuestions(qp as never, "cap.json", store, "2026-10-13T00:00:00Z");
+    expect(stored).toHaveLength(4);
+  });
+  it("материализация: оператор сдвинул out → повторный импорт и самоисцеление не плодят маркеры", async () => {
+    const stored: MaterializedMarker[] = [];
+    const store: QuestionMaterializeIO = {
+      readStoredKeys: () => new Set(stored.map((m) => markerDedupKey(m.marker_id, m.media_path, m.anchor_sec))),
+      readStoredMarkers: () => stored.map((m) => ref(m)),
+      appendMarkers: (fresh) => { stored.push(...fresh); },
+      resolveMediaUrl: async (p) => `asset://${p}`,
+      notifyChanged: () => {},
+    };
+    const qp = {
+      schema: "vetka.cut.question_playlist/1",
+      entries: [{ path: "/v/P1755075.mov", question_id: "gold_P1755075", in_sec: 0, out_sec: 97 }],
+    };
+    await materializePlaylistQuestions(qp as never, "gold.json", store, "2026-11-16T02:00:00Z");
+    expect(stored).toHaveLength(2);
+    const outM = stored.find((m) => m.kind === "out")!;
+    outM.anchor_sec = 90.54;
+    outM.start_sec = 90.04;
+    outM.end_sec = 91.04;
+    const line = await materializePlaylistQuestions(qp as never, "gold.json", store, "2026-11-16T03:00:00Z");
+    expect(stored).toHaveLength(2);
+    expect(stored.filter((m) => m.kind === "out").map((m) => m.anchor_sec)).toEqual([90.54]);
+    expect(line).toMatch(/already in markers/);
   });
 });

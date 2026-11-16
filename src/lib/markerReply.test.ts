@@ -42,10 +42,29 @@ describe("buildReplyMarkerFull", () => {
     author: "agent:Beta",
     content_hash: null,
   };
-  it("anchor = playhead, если известен; спан — родителя", () => {
+  // tb_1794800630_73214_1: диапазон родителя в ответ больше не копируется —
+  // в gold_keys_v1 пять ответов с якорями 3.18…94.07 несли 12.25–13.25 (диапазон
+  // qmat_in на момент ответа). Свой диапазон ответа — от его якоря, как у обычного маркера.
+  it("(d) ответ не наследует диапазон родителя: start/end считаются от своего якоря", () => {
+    const movedParent = { ...parent, start_sec: 12.25, end_sec: 13.25, anchor_sec: 12.75 };
+    const r = buildReplyMarkerFull({ parent: movedParent, text: "ok", author: "", label: "l", now: "n", playheadSec: 20.9 });
+    expect(r?.anchor_sec).toBe(20.9);
+    expect(r?.start_sec).toBe(20.4);
+    expect(r?.end_sec).toBe(21.4);
+    const early = buildReplyMarkerFull({ parent: movedParent, text: "ok", author: "", label: "l", now: "n", playheadSec: 0.2 });
+    expect(early?.start_sec).toBe(0);
+    expect(early?.end_sec).toBe(0.7);
+  });
+  it("(d) без playhead: диапазон от якоря родителя, не от диапазона родителя", () => {
+    const movedParent = { ...parent, start_sec: 12.25, end_sec: 13.25, anchor_sec: 12.75 };
+    const r = buildReplyMarkerFull({ parent: movedParent, text: "ok", author: "", label: "l", now: "n" });
+    expect(r?.anchor_sec).toBe(12.75);
+    expect(r?.start_sec).toBe(12.25);
+    expect(r?.end_sec).toBe(13.25);
+  });
+  it("anchor = playhead, если известен", () => {
     const r = buildReplyMarkerFull({ parent, text: "ok", author: "", label: "l", now: "2026-10-12T00:00:00Z", playheadSec: 9.25 });
     expect(r?.anchor_sec).toBe(9.25);
-    expect(r?.start_sec).toBe(7);
     expect(r?.reply_to).toBe("qmat_mrg-01_in");
     expect(r?.created_at).toBe("2026-10-12T00:00:00Z");
     expect(r?.kind).toBe("comment");

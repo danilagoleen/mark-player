@@ -8,6 +8,7 @@
 
 import type { Playlist, PlaylistEntry } from "./playlist";
 import { isAgentAuthor } from "./commentAuthor";
+import { pairInOutRanges } from "./selectionDuration";
 
 export const QUESTION_PLAYLIST_SCHEMA = "vetka.cut.question_playlist/1";
 
@@ -105,9 +106,14 @@ export interface AnswerRecord {
    * маркера оператора (favorite / negative / comment), который он поставил
    * внутри in/out записи, а не кнопкой карточки. У ответов карточки поля нет.
    */
-  origin?: "operator_marker";
-  /** id маркера оператора (только origin = operator_marker). */
+  origin?: "operator_marker" | "operator_range";
+  /**
+   * id маркера оператора (origin = operator_marker) либо id его скобки IN
+   * (origin = operator_range, id скобки OUT — в marker_out_id).
+   */
   marker_id?: string;
+  /** id скобки OUT собственной пары оператора (только origin = operator_range). */
+  marker_out_id?: string;
   /** границы маркера-диапазона (negative с длиной); у точечного маркера нет. */
   marker_start_sec?: number;
   marker_end_sec?: number;
@@ -251,11 +257,22 @@ export const WHOLE_FILE_MARKER_SUFFIX = "whole";
 export const OPERATOR_MARKER_ORIGIN = "operator_marker" as const;
 
 /**
- * Скобки вопроса по маркеру-родителю ответа: in = start родителя, out = текущая
- * позиция маркера <префикс>_out (человек мог его сдвинуть), у легаси-родителя —
- * конец его диапазона. Вопрос на весь файл (_whole) скобок не имеет.
+ * tb_1794800630_73214_1 / tb_1794865760_47995_3: запись из пары скобок оператора
+ * внутри черты вопроса: в плейлисте опроса скобки оператора — ответ агенту, а не
+ * набросок монтажа (ножницы там играют только черту). Нейтральный диапазон
+ * (marker_start_sec/marker_end_sec) без вердикта:
+ * что он значит — «в фокусе», «не в фокусе» — определяет вопрос; verdict у
+ * записи формально "comment" (поле обязательное), оценкой не является.
  */
-function parentBracket(
+export const OPERATOR_RANGE_ORIGIN = "operator_range" as const;
+
+/**
+ * Черта вопроса (in_sec/out_sec) по маркеру-родителю ответа: in = start родителя,
+ * out = текущая позиция маркера <префикс>_out (читается и сдвинутая старым
+ * плеером), у легаси-родителя — конец его диапазона. Вопрос на весь файл
+ * (_whole) черты не имеет.
+ */
+function parentLine(
   parentId: string,
   parent: ExtractableMarker,
   byId: Map<string, ExtractableMarker>,
@@ -277,8 +294,9 @@ function parentBracket(
 /**
  * tb_1794347727_83767_1: участок файла, на котором живёт вопрос плейлиста, —
  * выводится из ЕГО ЖЕ маркеров (qmat_<вопрос>_in/_out/_whole): у них тот же
- * media_path, что у собственных маркеров оператора на этом файле, а скобки —
- * текущие (человек двигает qmat). Плейлист для этого не нужен.
+ * media_path, что у собственных маркеров оператора на этом файле, а черта —
+ * по текущим маркерам как есть (до 0.26.12 её можно было сдвинуть, теперь нет).
+ * Плейлист для этого не нужен.
  */
 interface QuestionScope {
   qid: string;
@@ -313,7 +331,7 @@ function collectQuestionScopes(
     const key = `${qid}\u0000${mediaPath}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const bracket = whole ? {} : parentBracket(id, m, byId);
+    const bracket = whole ? {} : parentLine(id, m, byId);
     scopes.push({
       qid,
       mediaPath,
@@ -445,6 +463,69 @@ function operatorMarkerRecords(
     record.marker_id = m.marker_id;
     out.push(record);
   }
+  out.push(...operatorRangeRecords(markers, byMedia));
+  return out;
+}
+
+/**
+ * tb_1794800630_73214_1: пара скобок in/out оператора (не qmat, не агент, без
+ * question_id) внутри черты вопроса на её файле — нейтральный диапазон
+ * (origin = operator_range, marker_start_sec/marker_end_sec) без вердикта: что он
+ * значит («в фокусе», «не в фокусе»), определяет сам вопрос. Пара принадлежит
+ * черте, в которой НАЧИНАЕТСЯ. Одинокая скобка и пара вне черт не доставляются; пара
+ * старше вопроса (прошлый прогон на том же файле) вопросу не приписывается.
+ */
+function operatorRangeRecords(
+  markers: ExtractableMarker[],
+  byMedia: Map<string, QuestionScope[]>,
+): AnswerRecord[] {
+  const ownByMedia = new Map<string, { id: string; kind: "in" | "out"; t: number; m: ExtractableMarker }[]>();
+  for (const m of markers) {
+    if (!m || typeof m !== "object" || typeof m.marker_id !== "string") continue;
+    if (m.marker_id.startsWith("qmat_")) continue;
+    if (typeof m.reply_to === "string" && m.reply_to) continue;
+    if (typeof m.question_id === "string" && m.question_id.trim()) continue;
+    if (isAgentAuthor(m.author)) continue;
+    const kind: "in" | "out" | null = m.kind === "in" ? "in" : m.kind === "out" ? "out" : null;
+    if (!kind || typeof m.media_path !== "string" || !byMedia.has(m.media_path)) continue;
+    const t = finiteNum(m.anchor_sec) ?? finiteNum(m.start_sec);
+    if (t === undefined || t < 0) continue;
+    const list = ownByMedia.get(m.media_path);
+    const entry = { id: m.marker_id, kind, t, m };
+    if (list) list.push(entry);
+    else ownByMedia.set(m.media_path, [entry]);
+  }
+  const out: AnswerRecord[] = [];
+  for (const [mediaPath, list] of ownByMedia) {
+    const scopes = byMedia.get(mediaPath);
+    if (!scopes) continue;
+    const byId = new Map(list.map((e) => [e.id, e.m]));
+    const { pairs } = pairInOutRanges(list.map((e) => ({ marker_id: e.id, kind: e.kind, anchor_sec: e.t })));
+    for (const pair of pairs) {
+      const scope = scopeAt(scopes, pair.start);
+      if (!scope) continue;
+      const inM = byId.get(pair.inId);
+      const outM = byId.get(pair.outId);
+      if (!inM || !outM) continue;
+      const times = [operatorMarkerTime(inM), operatorMarkerTime(outM)];
+      if (Number.isFinite(scope.askedMs) && times.some((w) => w !== null && w.ms < scope.askedMs)) continue;
+      const known = times.filter((w): w is { ms: number; iso: string } => w !== null);
+      const latest = known.length > 0 ? known.reduce((a, b) => (b.ms > a.ms ? b : a)) : null;
+      const author = typeof inM.author === "string" ? inM.author.trim() : "";
+      out.push({
+        question_id: scope.qid,
+        verdict: "comment",
+        answered_at: latest?.iso ?? "",
+        t_sec: pair.start,
+        marker_start_sec: pair.start,
+        marker_end_sec: pair.end,
+        confirmed_by: author || DEFAULT_CONFIRMED_BY,
+        origin: OPERATOR_RANGE_ORIGIN,
+        marker_id: pair.inId,
+        marker_out_id: pair.outId,
+      });
+    }
+  }
   return out;
 }
 
@@ -452,8 +533,9 @@ function operatorMarkerRecords(
  * tb_1791809796_24701_1: answers.json = выжимка из маркеров. Прямые дети qmat —
  * ответы: с префиксом [answer] — разбор вердикта/choice/comment, без — свободный
  * текст (verdict comment, Commander). t_sec = anchor ответа (карточка ставит
- * playhead), answered_at = created_at, скобки = текущий диапазон родителя
- * (человек двигает сам qmat). Несколько ответов на вопрос — все (последний
+ * playhead), answered_at = created_at, in_sec/out_sec = текущая черта родителя
+ * (по маркерам как есть; сдвинутую старым плеером читаем, новый не двигает).
+ * Несколько ответов на вопрос — все (последний
  * главнее — дело потребителя, см. resolveAnswers). Плеер ответы не стирает.
  * tb_1794347727_83767_1: следом — собственные маркеры оператора внутри in/out
  * записи (origin = operator_marker), см. operatorMarkerRecords.
@@ -509,7 +591,7 @@ export function answersFromMarkers(
     // вопроса — отдельный маркер <префикс>_out (текущая позиция: человек мог
     // его сдвинуть); легаси-родитель с настоящим диапазоном — как раньше.
     // Вопрос на весь файл (_whole) скобок не имеет — in/out не пишем.
-    Object.assign(record, parentBracket(parentId, parent, byId));
+    Object.assign(record, parentLine(parentId, parent, byId));
     const author = typeof m.author === "string" ? m.author.trim() : "";
     record.confirmed_by = author || DEFAULT_CONFIRMED_BY;
     out.push(record);
@@ -640,6 +722,7 @@ function answerRecordKey(r: AnswerRecord): string {
     r.in_sec ?? "",
     r.out_sec ?? "",
     r.marker_id ?? "",
+    r.marker_out_id ?? "",
   ].join("|");
 }
 
@@ -668,7 +751,14 @@ export function mergeAnswerRecords(
   for (const id of opts?.replaceOperatorMarkersIn ?? []) if (id) mirrored.add(String(id));
   const base = Array.isArray(existing) ? existing : [];
   const out = mirrored.size > 0
-    ? base.filter((r) => !(r && r.origin === OPERATOR_MARKER_ORIGIN && mirrored.has(String(r.question_id))))
+    ? base.filter(
+        (r) =>
+          !(
+            r &&
+            (r.origin === OPERATOR_MARKER_ORIGIN || r.origin === OPERATOR_RANGE_ORIGIN) &&
+            mirrored.has(String(r.question_id))
+          ),
+      )
     : [...base];
   const seen = new Set(out.map(answerRecordKey));
   if (Array.isArray(fresh)) {

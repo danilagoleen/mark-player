@@ -5,6 +5,7 @@ import { pairInOutRanges } from "../../lib/selectionDuration";
 import { requestPlayerSeek } from "../../lib/markerSeek";
 import { answerReplyView } from "../../lib/answerReplyView";
 import { loadPlaylist } from "../../lib/playlist";
+import { summarizeHiddenByFilter } from "../../lib/markerFilterHint";
 import { MiniWindow } from "./MiniWindow";
 
 interface PlayerTimeMarker {
@@ -252,6 +253,10 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
     [markers, kindFilter],
   );
 
+  // tb_1794846994_51008_1: окно не молчит о скрытом фильтром — оператор ставил
+  // ★/✗ клавишами и видел в списке только ответы карточки.
+  const hidden = useMemo(() => summarizeHiddenByFilter(markers, allRows), [markers, allRows]);
+
   const spanById = useMemo(() => {
     const inOut = allRows
       .filter((m) => m.kind === "in" || m.kind === "out")
@@ -491,6 +496,21 @@ export function CommentOverlay({ marker, markers, onClose, onUpdateText, onDelet
             </button>
           )}
         </div>
+        {hidden.total > 0 ? (
+          <button
+            type="button"
+            data-testid="comment-hidden-hint"
+            title="Show all markers"
+            onClick={() => setKindFilter("all")}
+            style={{
+              background: "rgba(255,255,255,0.06)", border: "none", borderBottom: HAIRLINE,
+              color: "rgba(255,255,255,0.85)", fontSize: 12, textAlign: "left" as const,
+              padding: "6px 16px", cursor: "pointer", fontFamily: SANS,
+            }}
+          >
+            {hidden.total} hidden by the filter ({hidden.text}) — show all
+          </button>
+        ) : null}
         <div className="cm-list" style={{ flex: 1, overflow: "auto" }}>
           {expandedContent}
         </div>

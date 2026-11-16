@@ -240,10 +240,88 @@ export function filterNewMarkers(
   return markers.filter((m) => !existingKeys.has(markerDedupKey(m.marker_id, m.media_path, m.anchor_sec)));
 }
 
+/** Лежащий в хранилище маркер — ровно то, что нужно слот-дедупу. */
+export interface StoredMarkerRef {
+  marker_id: string;
+  media_path?: string | null;
+  anchor_sec?: number | null;
+}
+
+function slotKey(markerId: string, mediaPath: string | null | undefined): string {
+  return markerId + "\u0000" + (mediaPath ?? "");
+}
+
+/**
+ * tb_1794800630_73214_1 (дефект 2 оператора, gold_keys_v1): дедуп по СЛОТУ
+ * (marker_id + файл), а не по текущему якорю. Сдвинутый человеком qmat — тот же
+ * слот: исходный маркер повторной материализацией не дописывается (раньше —
+ * «OUT возвращается и дублируется», и answers.json отдавал исходные скобки).
+ * Сиблинги (один qid, два окна на одном файле: одинаковый marker_id, разные
+ * якоря) различаются так: сначала точные совпадения якоря, затем оставшиеся
+ * лежащие маркеры слота забирают БЛИЖАЙШИЕ по якорю строящиеся (сдвинутое
+ * окно), остальное — действительно новое. Вызывать один раз на весь импорт,
+ * иначе окно B схлопнется в окно A.
+ */
+export function filterNewMarkersBySlot(
+  stored: StoredMarkerRef[],
+  markers: MaterializedMarker[],
+): MaterializedMarker[] {
+  const storedBySlot = new Map<string, number[]>();
+  for (const s of Array.isArray(stored) ? stored : []) {
+    if (!s || typeof s.marker_id !== "string") continue;
+    const key = slotKey(s.marker_id, s.media_path);
+    const anchor = typeof s.anchor_sec === "number" && Number.isFinite(s.anchor_sec) ? s.anchor_sec : Number.NaN;
+    const list = storedBySlot.get(key);
+    if (list) list.push(anchor);
+    else storedBySlot.set(key, [anchor]);
+  }
+  const builtBySlot = new Map<string, number[]>();
+  markers.forEach((m, i) => {
+    const key = slotKey(m.marker_id, m.media_path);
+    const list = builtBySlot.get(key);
+    if (list) list.push(i);
+    else builtBySlot.set(key, [i]);
+  });
+  const keep = new Set<number>();
+  for (const [key, indexes] of builtBySlot) {
+    const lying = [...(storedBySlot.get(key) ?? [])];
+    const rest: number[] = [];
+    for (const idx of indexes) {
+      const at = lying.indexOf(markers[idx].anchor_sec);
+      if (at >= 0) lying.splice(at, 1);
+      else rest.push(idx);
+    }
+    while (rest.length > 0 && lying.length > 0) {
+      let bi = 0;
+      let bj = 0;
+      let best = Number.POSITIVE_INFINITY;
+      let found = false;
+      for (let i = 0; i < rest.length; i += 1) {
+        for (let j = 0; j < lying.length; j += 1) {
+          const d = Math.abs(markers[rest[i]].anchor_sec - lying[j]);
+          const dist = Number.isFinite(d) ? d : Number.POSITIVE_INFINITY;
+          if (!found || dist < best) {
+            best = dist;
+            bi = i;
+            bj = j;
+            found = true;
+          }
+        }
+      }
+      rest.splice(bi, 1);
+      lying.splice(bj, 1);
+    }
+    for (const idx of rest) keep.add(idx);
+  }
+  return markers.filter((_, i) => keep.has(i));
+}
+
 /** Ввод-вывод материализации: панель Playlist и меню File дают свои реализации. */
 export interface QuestionMaterializeIO {
   /** Ключи уже лежащих в хранилище маркеров (markerDedupKey — дедуп повторного импорта). */
   readStoredKeys(): Set<string>;
+  /** Лежащие маркеры (слот-дедуп): предпочтительнее readStoredKeys. */
+  readStoredMarkers?(): StoredMarkerRef[];
   /** Дописать свежие маркеры в хранилище. */
   appendMarkers(markers: MaterializedMarker[]): void;
   /** media_path маркера из пути записи (в Tauri — asset-URL). */
@@ -271,9 +349,13 @@ export async function materializePlaylistQuestions(
   }
   const qp = parsed as QuestionPlaylist;
   const author = agentAuthorFor(qp.source?.by);
-  const existingKeys = io.readStoredKeys();
+  // tb_1794800630_73214_1: слот-дедуп, если сторона дала лежащие маркеры;
+  // иначе — прежний дедуп по ключу с якорем.
+  const storedMarkers = io.readStoredMarkers ? io.readStoredMarkers() : null;
+  const existingKeys = storedMarkers ? new Set<string>() : io.readStoredKeys();
   const stamp = now ?? new Date().toISOString();
-  const fresh: MaterializedMarker[] = [];
+  let fresh: MaterializedMarker[] = [];
+  const allBuilt: MaterializedMarker[] = [];
   let questions = 0;
   for (const rawEntry of qp.entries) {
     const norm = normalizeQuestionEntry(rawEntry);
@@ -286,11 +368,16 @@ export async function materializePlaylistQuestions(
       author,
       now: stamp,
     });
+    if (storedMarkers) {
+      allBuilt.push(...built);
+      continue;
+    }
     for (const m of filterNewMarkers(existingKeys, built)) {
       fresh.push(m);
       existingKeys.add(markerDedupKey(m.marker_id, m.media_path, m.anchor_sec));
     }
   }
+  if (storedMarkers) fresh = filterNewMarkersBySlot(storedMarkers, allBuilt);
   if (fresh.length > 0) {
     io.appendMarkers(fresh);
     io.notifyChanged();

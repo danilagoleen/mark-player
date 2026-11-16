@@ -341,6 +341,23 @@ describe("exportMarkersToXmeml", () => {
     expect(xml).toContain("<comment>check</comment>");
   });
 
+  // tb_1794800630_73214_1: слои скобок — зона вопроса и своя пара внутри неё
+  // дают ДВА клипа, а не один «съеденный».
+  it("zone cut and own pair inside the zone both reach the timeline clips", () => {
+    const markers = [
+      { marker_id: "qmat_q1_in", kind: "in", start_sec: 1, end_sec: 1, label: "", text: "" },
+      { marker_id: "own_in", kind: "in", start_sec: 4, end_sec: 4, label: "", text: "" },
+      { marker_id: "own_out", kind: "out", start_sec: 6, end_sec: 6, label: "", text: "" },
+      { marker_id: "qmat_q1_out", kind: "out", start_sec: 18, end_sec: 18, label: "", text: "" },
+    ];
+    const xml = exportMarkersToXmeml(markers, opts);
+    // own: 4–6 с = кадры 100–150; зона: 1–18 с = кадры 25–450
+    expect(xml).toContain("<in>100</in>");
+    expect(xml).toContain("<out>150</out>");
+    expect(xml).toContain("<in>25</in>");
+    expect(xml).toContain("<out>450</out>");
+  });
+
   // [signal: нецелый fps → ntsc] [project: cut-player]
   it("marks ntsc TRUE for non-integer fps", () => {
     const xml = exportMarkersToXmeml([], { ...opts, fps: 23.976 });
@@ -684,6 +701,38 @@ describe("exportCommentsToText", () => {
     );
     expect(txt).toContain("Cut 00:00:02:00 → 00:00:05:00");
     expect(txt).toContain("Cut 00:00:40:00 → end");
+  });
+
+  // tb_1794800630_73214_1: своя пара внутри зоны вопроса на весь клип — теперь
+  // возможна (гард вложенности смотрит только свои пары); выгрузка не должна
+  // терять зону: каждый слой держит свой открытый IN.
+  it("zone and own brackets are separate layers: own pair inside the zone keeps the zone cut", () => {
+    const txt = exportCommentsToText(
+      [
+        { marker_id: "qmat_q1_in", kind: "in", start_sec: 0, end_sec: 0, label: "", text: "" },
+        { marker_id: "own_in", kind: "in", start_sec: 15, end_sec: 15, label: "", text: "" },
+        { marker_id: "own_out", kind: "out", start_sec: 20, end_sec: 20, label: "", text: "" },
+        { marker_id: "qmat_q1_out", kind: "out", start_sec: 97, end_sec: 97, label: "", text: "" },
+      ],
+      25,
+    );
+    expect(txt).toContain("Cut 00:00:15:00 → 00:00:20:00");
+    expect(txt).toContain("Cut 00:00:00:00 → 00:01:37:00");
+    expect(txt).not.toContain("→ end");
+  });
+
+  it("two question zones do not glue into one cut", () => {
+    const txt = exportCommentsToText(
+      [
+        { marker_id: "qmat_A_in", kind: "in", start_sec: 10, end_sec: 10, label: "", text: "" },
+        { marker_id: "qmat_B_in", kind: "in", start_sec: 30, end_sec: 30, label: "", text: "" },
+        { marker_id: "qmat_A_out", kind: "out", start_sec: 40, end_sec: 40, label: "", text: "" },
+        { marker_id: "qmat_B_out", kind: "out", start_sec: 60, end_sec: 60, label: "", text: "" },
+      ],
+      25,
+    );
+    expect(txt).toContain("Cut 00:00:10:00 → 00:00:40:00");
+    expect(txt).toContain("Cut 00:00:30:00 → 00:01:00:00");
   });
 
   it("shows real ranges, keeps default anchor halo a point", () => {

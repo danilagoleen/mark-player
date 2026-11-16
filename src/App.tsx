@@ -26,23 +26,26 @@ import {
 } from "./lib/fullscreenLayout";
 import { sumSelectionSeconds, pairInOutRanges } from "./lib/selectionDuration";
 import {
-  buildPlaybackSegments,
   firstInAnchor,
   isManualSeekSuppressed,
   markManualSeek,
   outCrossAction,
   questionOutCrossed,
   readInOutPlayEnabled,
-  wouldNestInPair,
   writeInOutPlayEnabled,
   INOUT_PLAY_STORAGE_KEY,
 } from "./lib/inOutPlayback";
+// tb_1794800630_73214_1: два инструмента — черта вопроса агента и скобки монтажа.
+import { isMarkerDraggable, isQuestionLineMarker, bracketMarks, scissorsSegments, wouldNestInBracketPair } from "./lib/bracketLayers";
 import { pushTransportTrace, shouldHideTransport, type TransportTraceEntry } from "./lib/transportVisibility";
 import { SCRUB_PREVIEW_TIMEOUT_MS, isScrubSettled } from "./lib/scrubSeek";
 import { PLAYER_SEEK_REQUEST_KEY, parseSeekRequest } from "./lib/markerSeek";
 import { publishCommentAnchor } from "./lib/commentAnchor";
 import { clampCardPosition, loadCardPosition, saveCardPosition, type CardPoint } from "./lib/questionCard";
 import { answerButtonsFor } from "./lib/questionCardButtons";
+import { commentsPanelFilterQuery } from "./lib/markerFilterHint";
+import { listenInOutPlayChanged, notifyInOutPlayChanged } from "./lib/inOutPlayBridge";
+import { QuestionHypothesisLine } from "./components/QuestionHypothesisLine";
 import { planSendToAgent, type AnswerOutcome } from "./lib/sendToAgentPlan";
 import { parseCutsheet, resolveCutsheetForMedia, type CutsheetSegment } from "./lib/cutsheet";
 import { PLAYER_PLAY_REQUEST_KEY, PLAYLIST_RELOAD_EVENT, notifyPlaylistReloaded, parsePlayRequest } from "./lib/playlistPlay";
@@ -1405,6 +1408,9 @@ function App() {
       // tb_1791861762_84020_3: дедуп по паре id+медиа — тот же вопрос на
       // другом видео материализуется заново, а не режется как дубль.
       readStoredKeys: () => new Set(markersRef.current.map((m) => markerDedupKey(m.marker_id, m.media_path, m.anchor_sec))),
+      // tb_1794800630_73214_1: слот-дедуп (marker_id + файл) — сдвинутая человеком
+      // скобка вопроса не «возвращается» повторной материализацией.
+      readStoredMarkers: () => markersRef.current.map((m) => ({ marker_id: m.marker_id, media_path: m.media_path, anchor_sec: m.anchor_sec })),
       appendMarkers: (fresh) => {
         onAppended?.(fresh.length);
         let storage: Storage | null = null;
@@ -1486,18 +1492,46 @@ function App() {
     inOutPlayOnRef.current = next;
     setInOutPlayOn(next);
     writeInOutPlayEnabled(next);
+    // tb_1794846994_51008_1: окно Playlist узнаёт событием (storage между вебвью Tauri не ходит).
+    void notifyInOutPlayChanged(next);
     setContextToast(next ? "In–Out Play: on." : "In–Out Play: off.");
   }
   // tb_1791346266_38729_2: единый источник пар — pairInOutRanges
   // (sequential, как движок и экспорт): пилюля, хрон и гард не разъезжаются.
-  const inOutRanges = useMemo(() => {
-    const { pairs } = pairInOutRanges(
-      mediaMarkers
-        .filter((m) => m.kind === "in" || m.kind === "out")
-        .map((m) => ({ marker_id: m.marker_id, kind: m.kind, anchor_sec: m.anchor_sec })),
-    );
-    return pairs.map((p) => ({ start: p.start, end: p.end }));
-  }, [mediaMarkers]);
+  // tb_1794800630_73214_1: два слоя. Префиксы вопросов загруженного плейлиста —
+  // черты остальных (старый плейлист на том же файле) не участвуют. Плейлиста-
+  // вопроса нет — null: черты лежат на файле как есть. Пересчёт по числу
+  // маркеров, не по каждому сдвигу, иначе JSON плейлиста разбирался бы на каждый тик.
+  const knownLinePrefixes = useMemo(() => {
+    const pl = loadPlaylist();
+    if (!pl || !isQuestionPlaylist(pl)) return null;
+    const set = new Set<string>();
+    for (const e of pl.entries ?? []) {
+      const qid = (e as QuestionEntry).question_id;
+      if (typeof qid === "string" && qid.trim()) set.add(materializedMarkerPrefix(qid.trim()));
+    }
+    return set;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeQuestion?.question_id, currentMediaKey, markers.length]);
+  const bracketPairs = useMemo(
+    () =>
+      pairInOutRanges(
+        mediaMarkers
+          .filter((m) => m.kind === "in" || m.kind === "out")
+          .map((m) => ({ marker_id: m.marker_id, kind: m.kind, anchor_sec: m.anchor_sec })),
+        { knownLinePrefixes },
+      ).pairs,
+    [mediaMarkers, knownLinePrefixes],
+  );
+  // Пары скобок: [ ] в основном ряду, хронометраж, гард. Черты — отдельной формой.
+  const inOutRanges = useMemo(
+    () => bracketPairs.filter((p) => p.layer === "bracket").map((p) => ({ start: p.start, end: p.end })),
+    [bracketPairs],
+  );
+  const lineRanges = useMemo(
+    () => bracketPairs.filter((p) => p.layer === "line").map((p) => ({ start: p.start, end: p.end, id: p.inId })),
+    [bracketPairs],
+  );
   // tb_1791146301_70644_16: хрон селекшна — сумма in-out, пересчёт на каждое
   // изменение маркеров (inOutRanges уже memo от mediaMarkers).
   const selectionSeconds = useMemo(
@@ -2901,6 +2935,9 @@ function App() {
     setContextToast("Marker deleted.");
   }
   function beginMarkerDrag(markerId: string): void {
+    // tb_1794800630_73214_1: черта вопроса агента не двигается ни при каком вызове.
+    const dragged = markersRef.current.find((m) => m.marker_id === markerId);
+    if (dragged && !isMarkerDraggable(dragged)) return;
     pushMarkerHistory();
     setDraggingMarkerId(markerId);
   }
@@ -2966,7 +3003,9 @@ function App() {
   // anchor_sec, полуширина по CSS (.transport-marker 21px, скобки ~16px).
   function timelineHitMarkers(rectWidth: number): PlayheadHitMarker[] {
     const span = Math.max(duration, 0.001);
-    return mediaMarkers.map((m) => ({
+    // tb_1794800630_73214_1: концы черты вопроса не рисуются знаками и не
+    // хватаются — черту агента оператор не двигает; в hitTest их нет.
+    return mediaMarkers.filter((m) => !isQuestionLineMarker(m)).map((m) => ({
       id: m.marker_id,
       x: (m.anchor_sec / span) * rectWidth,
       halfWidth: m.kind === "in" || m.kind === "out" ? 8 : 10.5,
@@ -4888,8 +4927,9 @@ function App() {
     const pending = advanceInSeekRef.current;
     if (!pending || pending !== currentFilePathRef.current || duration <= 0) return;
     advanceInSeekRef.current = null;
+    // tb_1794800630_73214_1: вопроса нет — стартуем со скобки монтажа, черта агента не в счёт.
     const at = firstInAnchor(
-      mediaMarkers.filter((m) => m.kind === "in").map((m) => m.anchor_sec),
+      bracketMarks(mediaMarkers).filter((m) => m.kind === "in").map((m) => m.anchor_sec),
       duration,
     );
     if (at === null) return;
@@ -4977,7 +5017,23 @@ function App() {
       setInOutPlayOn(next);
     };
     window.addEventListener("storage", onStorageToggle);
-    return () => window.removeEventListener("storage", onStorageToggle);
+    // tb_1794846994_51008_1: в Tauri 'storage' из окна Playlist не приходит —
+    // главное окно оставалось на ON и прыгало с OUT на следующий IN при
+    // выключенных ножницах. Слушаем событие моста (LS пишет сама панель).
+    let unlistenBridge: (() => void) | null = null;
+    let disposed = false;
+    void listenInOutPlayChanged((enabled) => {
+      inOutPlayOnRef.current = enabled;
+      setInOutPlayOn(enabled);
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlistenBridge = fn;
+    });
+    return () => {
+      disposed = true;
+      unlistenBridge?.();
+      window.removeEventListener("storage", onStorageToggle);
+    };
   }, []);
 
   useDragDrop({
@@ -5975,8 +6031,9 @@ function App() {
     // уровне создания — скобку внутрь закрытой пары поставить нельзя.
     if (kind === "in" || kind === "out") {
       const anchor = Math.max(0, Number(videoRef.current?.currentTime ?? currentTime ?? 0));
-      const { pairs } = pairInOutRanges(mediaMarkers);
-      if (wouldNestInPair(pairs, anchor)) {
+      // tb_1794800630_73214_1: гард только против пар СКОБОК — черта вопроса
+      // (в gold_keys_v1 весь клип) скобку внутри не запрещает.
+      if (wouldNestInBracketPair(mediaMarkers, anchor)) {
         setContextToast("In–Out Play: brackets cannot nest inside a closed pair.");
         return null;
       }
@@ -5998,7 +6055,9 @@ function App() {
     // фильтром «только комментарии» (?filter=comments); лого Марка — без.
     const fps = resolveXmlFps(containerFps, probeResult?.fps, estimatedFps);
     const at = Math.max(0, Number(videoRef.current?.currentTime ?? currentTime ?? 0));
-    const filterQuery = initialFilter === "comment" ? "&filter=comments" : "";
+    // tb_1794846994_51008_1: в плейлисте агента (на файле есть qmat_*) окно
+    // открывается со всеми маркерами — оператор отвечает ★/✗, а не только текстом.
+    const filterQuery = commentsPanelFilterQuery(initialFilter, mediaMarkers);
     // tb_1793125816_99982_1: окно, открытое по уже существующей панели,
     // не должно ждать следующего timeupdate ради верного якоря.
     publishCommentAnchor(currentMediaKey, at);
@@ -6373,14 +6432,15 @@ function App() {
                             ) {
                               // tb_1791333803_37784_1: активный лист подменяет
                               // сегменты маркеров.
-                              // tb_1791654032_27281_1: скобки вопроса живут
-                              // штатными in/out — отдельного приоритета нет.
                               const sheetSegments = cutsheetPreviewRef.current?.segments ?? null;
-                              const segments = sheetSegments ?? buildPlaybackSegments(
-                                mediaMarkers.filter((m) => m.kind === "in").map((m) => m.anchor_sec),
-                                mediaMarkers.filter((m) => m.kind === "out").map((m) => m.anchor_sec),
-                                duration,
-                              );
+                              // tb_1794865760_47995_3 (слово оператора 17.11): в
+                              // плейлисте опроса ножницы играют ТОЛЬКО черту
+                              // активного вопроса этого файла — скобки оператора
+                              // там ответ агенту (operator_range), а не монтаж.
+                              // Черты нет — скобки монтажа играют как обычно.
+                              const lineOfActive =
+                                activeQuestion && questionPathRef.current === currentFilePathRef.current ? activeQuestion : null;
+                              const segments = sheetSegments ?? scissorsSegments(mediaMarkers, lineOfActive, duration);
                               // tb_1791662784_27409_3: пересекли OUT — jump на
                               // следующий IN (черновой монтаж; loop one
                               // заворачивает на первый сегмент), tail без
@@ -6644,6 +6704,22 @@ function App() {
                                 })}
                               </div>
                               <div className="transport-progress-inout">
+                                {/* tb_1794800630_73214_1: черта вопроса агента — не знаки
+                                    [ ] и не штриховка, а одна ровная линия над дорожкой
+                                    на отрезке in..out (форма и место, без цвета). Скобки
+                                    монтажа — знаки [ ] и светлый отрезок дорожки. */}
+                                {lineRanges.map((line, i) => (
+                                  <div
+                                    key={`line-${i}`}
+                                    className="transport-line-range"
+                                    data-testid="transport-line-range"
+                                    title="Question line (agent)"
+                                    style={{
+                                      left: `${(line.start / Math.max(duration, 0.001)) * 100}%`,
+                                      width: `${((line.end - line.start) / Math.max(duration, 0.001)) * 100}%`,
+                                    }}
+                                  />
+                                ))}
                                 {inOutRanges.map((range, i) => (
                                   <div
                                     key={i}
@@ -6654,7 +6730,7 @@ function App() {
                                     }}
                                   />
                                 ))}
-                                {mediaMarkers.filter((m) => m.kind === "in" || m.kind === "out").map((marker) => (
+                                {bracketMarks(mediaMarkers).map((marker) => (
                                   <span
                                     key={marker.marker_id}
                                     className={`transport-progress-inout-marker ${marker.kind === "in" ? "in" : "out"} ${draggingMarkerId === marker.marker_id ? "dragging" : ""}`}
@@ -6805,6 +6881,9 @@ function App() {
                               ✕
                             </button>
                           </div>
+                          {/* tb_1794846994_51008_1: hypothesis агента — видимая строка
+                              «Module», а не только подсказка при наведении. */}
+                          <QuestionHypothesisLine hypothesis={activeQuestion.hypothesis} />
                           {questionFilePos && questionFilePos.total > 1 ? (
                             <div className="question-card-side-progress" data-testid="question-file-progress">
                               Question {questionFilePos.index || "?"}/{questionFilePos.total} on this file

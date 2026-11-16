@@ -463,6 +463,23 @@ select {
   font-size: 11px;
   opacity: 0.75;
 }
+/* tb_1794846994_51008_1: hypothesis агента — видимая строка «Module: …» под
+   вопросом (до 3 строк; полный текст — в title). Раньше была только подсказкой. */
+.question-card-side-hypothesis {
+  font-size: 12px;
+  opacity: 0.85;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.question-card-side-hypothesis-label {
+  font-weight: 600;
+  opacity: 0.7;
+  margin-right: 2px;
+}
 /* tb_1793558199_43420_2: единый ряд ответов — кнопки переносятся на новую
    строку, если вариантов много (master / model / other / student / not_sure). */
 .question-card-side-answers {
@@ -1210,6 +1227,18 @@ select {
   pointer-events: none;
   z-index: 1;
 
+}
+
+/* tb_1794800630_73214_1: черта вопроса агента — ровная линия над дорожкой на
+   отрезке in..out. Без цвета, без штриховки, без знаков [ ]; скобки монтажа
+   остаются знаками и светлым отрезком самой дорожки. */
+.transport-line-range {
+  position: absolute;
+  top: -2px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.72);
+  pointer-events: none;
+  z-index: 1;
 }
 
 .transport-progress-inout {

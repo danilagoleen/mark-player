@@ -100,7 +100,8 @@ export interface BuildReplyInput {
 }
 
 /**
- * Ответ — в спане родителя (группировка), anchor — playhead, если известен.
+ * Ответ связан с родителем через reply_to; anchor — playhead, если известен,
+ * диапазон — от своего anchor (не копия диапазона родителя).
  * Родителя нет — null (звонящий решает: молча пропустить или тост).
  */
 export function buildReplyMarkerFull(input: BuildReplyInput): BuiltReplyMarker | null {
@@ -110,8 +111,11 @@ export function buildReplyMarkerFull(input: BuildReplyInput): BuiltReplyMarker |
   const anchorFallback = parentAnchor >= 0 ? parentAnchor : 0;
   const ph = typeof input.playheadSec === "number" ? input.playheadSec : NaN;
   const anchor = Number.isFinite(ph) && ph >= 0 ? ph : anchorFallback;
-  const start = finiteOr(parent.start_sec, anchorFallback);
-  const end = finiteOr(parent.end_sec ?? parent.start_sec, anchorFallback);
+  // tb_1794800630_73214_1: диапазон ответа — от ЕГО якоря (как у обычного маркера,
+  // ±0.5 с), а не копия диапазона родителя: пять ответов gold_keys_v1 с якорями
+  // 3.18…94.07 несли 12.25–13.25 — диапазон qmat_in на момент ответа.
+  const start = Math.max(0, Number((anchor - 0.5).toFixed(2)));
+  const end = Number((anchor + 0.5).toFixed(2));
   return {
     marker_id: createReplyId(),
     schema_version: "cut_time_marker_v1",

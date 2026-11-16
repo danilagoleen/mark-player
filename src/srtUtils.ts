@@ -1,4 +1,35 @@
 import { formatReplyText, parseReplyText } from "./lib/commentAuthor";
+import { isQuestionLineMarker, lineGroupKey } from "./lib/selectionDuration";
+
+// tb_1794800630_73214_1: резка in/out для выгрузок (XMEML, txt, EDL). Скобки
+// монтажа и черта вопроса агента (qmat_<вопрос>_in/_out) — два слоя: каждый
+// держит свой «открытый IN», поэтому пара скобок внутри черты на весь клип не
+// съедает черту (раньше такое состояние было невозможно — гард вложенности).
+// Черта в выгрузке остаётся штатным клипом/маркером: на ней держится XML.
+// Внутри слоя семантика прежняя: новый IN заменяет незакрытый, OUT без IN
+// пропускается. Пары идут в порядке своих OUT, сироты IN — отдельно.
+function pairCuts<T extends { kind: string; marker_id?: string }>(
+  sorted: T[],
+): { pairs: { inM: T; outM: T }[]; orphans: T[] } {
+  const pending = new Map<string, T>();
+  const pairs: { inM: T; outM: T }[] = [];
+  for (const m of sorted) {
+    if (m.kind !== "in" && m.kind !== "out") continue;
+    const layer = typeof m.marker_id === "string" && isQuestionLineMarker({ marker_id: m.marker_id, kind: m.kind })
+      ? lineGroupKey(m.marker_id)
+      : "bracket";
+    if (m.kind === "in") {
+      pending.set(layer, m);
+      continue;
+    }
+    const inM = pending.get(layer);
+    if (inM) {
+      pairs.push({ inM, outM: m });
+      pending.delete(layer);
+    }
+  }
+  return { pairs, orphans: [...pending.values()] };
+}
 
 export const MARKER_PREFIX = {
   FAVORITE: "\u2605 ",
@@ -501,17 +532,14 @@ function splitSourceClips(
   const sorted = [...markers].sort((a, b) => a.start_sec - b.start_sec);
   const clips: XmemlClip[] = [];
   const clipMarkers: XmemlClipMarker[] = [];
-  let pendingIn: number | null = null;
+  const cuts = pairCuts(sorted);
+  for (const { inM, outM } of cuts.pairs) {
+    const inF = toFrames(inM.start_sec);
+    const outF = toFrames(outM.start_sec);
+    if (outF > inF) clips.push({ inF, outF });
+  }
   for (const m of sorted) {
-    if (m.kind === "in") { pendingIn = toFrames(m.start_sec); continue; }
-    if (m.kind === "out") {
-      if (pendingIn !== null) {
-        const outF = toFrames(m.start_sec);
-        if (outF > pendingIn) clips.push({ inF: pendingIn, outF });
-        pendingIn = null;
-      }
-      continue;
-    }
+    if (m.kind === "in" || m.kind === "out") continue;
     const prefix = KIND_PREFIX[m.kind] || "";
     // 0.10.27: имя — глиф + label («✗ Negative», «★ good»); слово-префикс
     // только когда label пуст (решение пользователя — символы оставить).
@@ -533,7 +561,10 @@ function splitSourceClips(
       outF: m.end_sec > m.start_sec ? toFrames(m.end_sec) : -1,
     });
   }
-  if (pendingIn !== null && pendingIn < durationFrames) clips.push({ inF: pendingIn, outF: durationFrames });
+  for (const orphan of cuts.orphans) {
+    const inF = toFrames(orphan.start_sec);
+    if (inF < durationFrames) clips.push({ inF, outF: durationFrames });
+  }
   if (clips.length === 0) clips.push({ inF: 0, outF: durationFrames });
   return { clips, clipMarkers };
 }
@@ -865,6 +896,8 @@ export async function resolvePlaylistMetadata(
 // сортировка по времени, fps из той же цепочки, что XML timebase.
 // Только EN (вердикт Белла по видимым строкам).
 export interface ReviewNoteInput {
+  /** tb_1794800630_73214_1: по id резка отличает черту вопроса от скобок монтажа. */
+  marker_id?: string;
   kind: string;
   start_sec: number;
   end_sec: number;
@@ -904,20 +937,14 @@ export function exportCommentsToText(
   if (honestyNote) L.push(honestyNote);
   const tc = (sec: number) => formatTimecode(sec, fps);
   const sorted = [...markers].sort((a, b) => a.start_sec - b.start_sec);
-  let pendingIn: ReviewNoteInput | null = null;
   const singles: ReviewNoteInput[] = [];
+  const cuts = pairCuts(sorted);
+  for (const { inM, outM } of cuts.pairs) L.push(`Cut ${tc(inM.start_sec)} → ${tc(outM.start_sec)}`);
+  for (const orphan of cuts.orphans) L.push(`Cut ${tc(orphan.start_sec)} → end`);
   for (const m of sorted) {
-    if (m.kind === "in") { pendingIn = m; continue; }
-    if (m.kind === "out") {
-      if (pendingIn !== null) {
-        L.push(`Cut ${tc(pendingIn.start_sec)} → ${tc(m.start_sec)}`);
-        pendingIn = null;
-      }
-      continue;
-    }
+    if (m.kind === "in" || m.kind === "out") continue;
     singles.push(m);
   }
-  if (pendingIn !== null) L.push(`Cut ${tc(pendingIn.start_sec)} → end`);
   for (const m of singles) {
     const name = reviewMarkerName(m.kind, m.label, m.author, m.reply_to);
     const text = (m.text || "").trim();
@@ -938,6 +965,8 @@ export function exportCommentsToText(
 //   001  001      V     C   00:00:04:00 00:00:04:01 ... |C:ResolveColorBlue |M:text |D:300
 // События точечные (1 кадр), длительность — через |D: в кадрах.
 export interface EdlMarkerInput {
+  /** tb_1794800630_73214_1: см. ReviewNoteInput.marker_id. */
+  marker_id?: string;
   kind: string;
   start_sec: number;
   end_sec: number;
@@ -1016,22 +1045,14 @@ type EdlEvent = { start: number; end: number; kind: string; name: string };
 // остальное — точечные события; сирота-in — точка.
 function computeEdlEvents(sorted: EdlMarkerInput[]): EdlEvent[] {
   const singles: EdlMarkerInput[] = [];
-  let pendingIn: EdlMarkerInput | null = null;
   const spans: { start: number; end: number }[] = [];
+  const cuts = pairCuts(sorted);
+  for (const { inM, outM } of cuts.pairs) spans.push({ start: inM.start_sec, end: outM.start_sec });
+  // сирота-in — точечный Cut (как в .txt: "Cut X → end", конца не знаем).
+  for (const orphan of cuts.orphans) spans.push({ start: orphan.start_sec, end: orphan.start_sec });
   for (const m of sorted) {
-    if (m.kind === "in") { pendingIn = m; continue; }
-    if (m.kind === "out") {
-      if (pendingIn !== null) {
-        spans.push({ start: pendingIn.start_sec, end: m.start_sec });
-        pendingIn = null;
-      }
-      continue;
-    }
+    if (m.kind === "in" || m.kind === "out") continue;
     singles.push(m);
-  }
-  if (pendingIn !== null) {
-    // сирота-in — точечный Cut (как в .txt: "Cut X → end", конца не знаем).
-    spans.push({ start: pendingIn.start_sec, end: pendingIn.start_sec });
   }
   return [
     ...spans.map((s) => ({ start: s.start, end: s.end, kind: "in", name: "Cut" })),

@@ -14,6 +14,7 @@ import { notifyMarkersChanged } from "../../lib/markersSync";
 import { notifyPlaylistReloaded } from "../../lib/playlistPlay";
 import { importBetaBundleText } from "../../lib/betaBundles";
 import { readInOutPlayEnabled, writeInOutPlayEnabled, INOUT_PLAY_STORAGE_KEY } from "../../lib/inOutPlayback";
+import { listenInOutPlayChanged, notifyInOutPlayChanged } from "../../lib/inOutPlayBridge";
 import { Download, Repeat, Repeat1, Scissors, Shuffle, Upload } from "lucide-react";
 
 interface PlaylistPanelProps {
@@ -38,12 +39,26 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
   // tb_1791819024_26192_2: ревизия списка — перемонтирование после Clear/
   // импорта (страховка от призраков WebView: строки + «Empty» сразу).
   const [listRev, setListRev] = useState(0);
+  // tb_1794846994_51008_1: 'storage' между вебвью Tauri не приходит, поэтому
+  // кроме localStorage шлём событие inout-play:changed (главное окно слушает).
+  // Источник правды при клике — localStorage: его же пишет S в главном окне.
   const toggleInOutPlay = useCallback(() => {
-    setInOutPlay((prev) => {
-      const next = !prev;
-      writeInOutPlayEnabled(next);
-      return next;
+    const next = !readInOutPlayEnabled();
+    writeInOutPlayEnabled(next);
+    setInOutPlay(next);
+    void notifyInOutPlayChanged(next);
+  }, []);
+  useEffect(() => {
+    let dead = false;
+    let unlisten: (() => void) | null = null;
+    void listenInOutPlayChanged((enabled) => setInOutPlay(enabled)).then((fn) => {
+      if (dead) fn();
+      else unlisten = fn;
     });
+    return () => {
+      dead = true;
+      unlisten?.();
+    };
   }, []);
   const updateMode = useCallback((next: PlaybackMode) => {
     setMode(next);
@@ -371,6 +386,22 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
             .map((m) => markerDedupKey(m.marker_id, typeof m.media_path === "string" ? m.media_path : null, typeof m.anchor_sec === "number" ? m.anchor_sec : null)),
         );
       },
+      // tb_1794800630_73214_1: слот-дедуп (marker_id + файл) — сдвинутая человеком
+      // скобка вопроса не «возвращается» повторным импортом.
+      readStoredMarkers: () => {
+        let stored: unknown = [];
+        try {
+          stored = JSON.parse(localStorage.getItem("vetka_player_lab_markers_v1") || "[]");
+        } catch { stored = []; }
+        const arr = Array.isArray(stored) ? stored : [];
+        return arr
+          .filter((m): m is { marker_id: string; media_path?: unknown; anchor_sec?: unknown } => !!m && typeof m === "object" && typeof (m as { marker_id?: unknown }).marker_id === "string")
+          .map((m) => ({
+            marker_id: m.marker_id,
+            media_path: typeof m.media_path === "string" ? m.media_path : null,
+            anchor_sec: typeof m.anchor_sec === "number" ? m.anchor_sec : null,
+          }));
+      },
       appendMarkers: (fresh) => {
         let arr: unknown[] = [];
         try {
@@ -563,7 +594,8 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
 }
 
 function formatDuration(seconds: number): string {
-  if (seconds <= 0) return "";
+  // tb_1794846994_51008_1: у записи агента без duration было «NaN:NaN».
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = Math.floor(seconds % 60);
