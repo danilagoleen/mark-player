@@ -4,6 +4,7 @@ import {
   answersFromMarkers,
   appendAnswerRecord,
   buildAnswersDocument,
+  countPlaylistAnswers,
   filterAnswersToPlaylist,
   parseAnswersDocument,
   questionAnswerProgress,
@@ -26,6 +27,7 @@ import {
   resolveExportAnswersText,
   resolveAnswers,
   resolveEntryIndex,
+  isQuestionAnswered,
   resolveQuestionSnapTime,
   serializeAnswersFile,
   answersPathFor,
@@ -371,6 +373,47 @@ describe("resolveQuestionSnapTime (tb_1791848907_63972_2: рывок тольк�
   });
 });
 
+describe("resolveQuestionSnapTime (tb_1795483272_27036_3: ножницы выключены, черта только метка)", () => {
+  const entries = [
+    { path: "/v/c.mp4", name: "c", duration: 300, addedAt: "x", question_id: "m1", in_sec: 0, out_sec: 10 },
+    { path: "/v/c.mp4", name: "c", duration: 300, addedAt: "x", question_id: "m2", in_sec: 10, out_sec: 20 },
+  ];
+  const m1 = { question_id: "m1", in_sec: 0, out_sec: 10 };
+  const entries9 = [{ path: "/v/c.mp4", question_id: "m9", in_sec: 30, out_sec: 40 }];
+  const m9 = { question_id: "m9", in_sec: 30, out_sec: 40 };
+  const SCISSORS_OFF = false;
+  const SCISSORS_ON = true;
+  const PLAYBACK = false; // плейхед сам идёт (timeupdate), вопрос не меняли
+  const ACTIVATION = true; // вопрос только что выбрали (клик по карточке, открытие записи)
+
+  it("S выкл, игра за OUT в щель: плейхед не отбрасывается к IN (шёл спокойно)", () => {
+    expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 25, m1, SCISSORS_OFF, PLAYBACK)).toBeNull();
+  });
+  it("S выкл, игра в щели ДО IN: плейхед не затягивается на черту", () => {
+    expect(resolveQuestionSnapTime(entries9, "/v/c.mp4", 25, m9, SCISSORS_OFF, PLAYBACK)).toBeNull();
+  });
+  it("S выкл, выбор вопроса из щели (клик по карточке): прыжок на IN остаётся", () => {
+    expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 25, m1, SCISSORS_OFF, ACTIVATION)).toBe(0);
+    expect(resolveQuestionSnapTime(entries9, "/v/c.mp4", 25, m9, SCISSORS_OFF, ACTIVATION)).toBe(30);
+  });
+  it("S выкл, внутри окна или внутри другого вопроса: null и при выборе, и при игре", () => {
+    for (const mode of [PLAYBACK, ACTIVATION]) {
+      expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 5, m1, SCISSORS_OFF, mode)).toBeNull();
+      expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 15, m1, SCISSORS_OFF, mode)).toBeNull();
+    }
+  });
+  it("S вкл не меняется (правило 17.11): щель до IN тянет на черту и при игре, за OUT молчим (tail)", () => {
+    expect(resolveQuestionSnapTime(entries9, "/v/c.mp4", 25, m9, SCISSORS_ON, PLAYBACK)).toBe(30);
+    expect(resolveQuestionSnapTime(entries9, "/v/c.mp4", 25, m9, SCISSORS_ON, ACTIVATION)).toBe(30);
+    expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 25, m1, SCISSORS_ON, PLAYBACK)).toBeNull();
+    expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 25, m1, SCISSORS_ON, ACTIVATION)).toBeNull();
+  });
+  it("без шестого аргумента режим как раньше: это выбор вопроса (старые вызовы не ломаются)", () => {
+    expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 25, m1, SCISSORS_OFF)).toBe(0);
+    expect(resolveQuestionSnapTime(entries, "/v/c.mp4", 25, m1)).toBe(0);
+  });
+});
+
 describe("tb_1791876286_57716_1: сиблинги A/B делят question_id — активация по точной записи", () => {
   // v07: пара = два entry с одним qid; trk-10 A/B делят и path (два окна).
   const v07like = [
@@ -557,5 +600,74 @@ describe("answers.json для агента (v03-4c + v03-final)", () => {
     expect(pos?.total).toBe(2);
     expect(pos?.answered).toBe(true);
     expect(pos?.next?.question_id).toBe("v03-final");
+  });
+});
+
+// tb_1794869634_47995_9: поле answers в session.json считалось по всем маркерам
+// хранилища (339 при «answered 0 из 4» в answers.json). Теперь — по вопросам
+// ЭТОГО плейлиста, тем же правилом, что answered_question_ids в answers.json.
+describe("countPlaylistAnswers: поле answers в session.json = ответы этого плейлиста", () => {
+  const rec = (question_id: string, answered_at: string, verdict: AnswerRecord["verdict"] = "favorite"): AnswerRecord => ({
+    question_id,
+    verdict,
+    answered_at,
+  });
+
+  it("ответы чужих плейлистов не считаются", () => {
+    const records = [rec("old_a", "2026-11-01T10:00:00Z"), rec("old_b", "2026-11-02T10:00:00Z"), rec("q1", "2026-11-17T10:00:00Z")];
+    expect(countPlaylistAnswers(records, ["q1", "q2", "q3", "q4"])).toBe(1);
+  });
+
+  it("плейлист без своих ответов даёт 0, сколько бы чужих ни лежало в хранилище", () => {
+    const foreign = Array.from({ length: 339 }, (_, i) => rec(`old_${i}`, "2026-11-01T10:00:00Z"));
+    expect(countPlaylistAnswers(foreign, ["q1", "q2", "q3", "q4"])).toBe(0);
+  });
+
+  it("повторный ответ на тот же вопрос — один", () => {
+    const records = [rec("q1", "2026-11-17T10:00:00Z"), rec("q1", "2026-11-17T10:05:00Z", "negative")];
+    expect(countPlaylistAnswers(records, ["q1", "q2"])).toBe(1);
+  });
+
+  it("comment тоже ответ — как в answers.json", () => {
+    const records = [rec("q2", "2026-11-17T10:00:00Z", "comment")];
+    expect(countPlaylistAnswers(records, ["q1", "q2"])).toBe(1);
+  });
+
+  it("совпадает с answered_question_ids в answers.json на тех же данных", () => {
+    const records = [rec("q1", "2026-11-17T10:00:00Z"), rec("q3", "2026-11-17T10:01:00Z"), rec("old", "2026-11-01T10:00:00Z")];
+    const ids = ["q1", "q2", "q3", "q4"];
+    const doc = buildAnswersDocument(records, { playlistId: "p", questionIds: ids });
+    expect(countPlaylistAnswers(records, ids)).toBe(doc.answered_question_ids.length);
+  });
+
+  it("пустой список вопросов, пустые id и дубли id не ломают подсчёт", () => {
+    const records = [rec("q1", "2026-11-17T10:00:00Z")];
+    expect(countPlaylistAnswers(records, [])).toBe(0);
+    expect(countPlaylistAnswers(records, ["", "q1", "q1"])).toBe(1);
+    expect(countPlaylistAnswers([], ["q1"])).toBe(0);
+  });
+});
+
+describe("isQuestionAnswered (tb_1795483216_27036_1: тот же ответ, что в questionAnswerProgress)", () => {
+  const rec = (over: Record<string, unknown>) =>
+    ({ question_id: "q1", verdict: "favorite", answered_at: "2026-11-24T02:00:00.000Z", ...over }) as never;
+  it("вердикт, комментарий и operator_range — ответ", () => {
+    expect(isQuestionAnswered([rec({ verdict: "favorite" })], "q1")).toBe(true);
+    expect(isQuestionAnswered([rec({ verdict: "negative" })], "q1")).toBe(true);
+    expect(isQuestionAnswered([rec({ verdict: "comment", comment: "не уверен" })], "q1")).toBe(true);
+    expect(
+      isQuestionAnswered(
+        [rec({ verdict: "comment", origin: "operator_range", marker_start_sec: 12, marker_end_sec: 15 })],
+        "q1",
+      ),
+    ).toBe(true);
+  });
+  it("нет записей или ответ на чужой вопрос — не ответ", () => {
+    expect(isQuestionAnswered([], "q1")).toBe(false);
+    expect(isQuestionAnswered([rec({ question_id: "q2" })], "q1")).toBe(false);
+  });
+  it("пустой question_id и мусор вместо записей — не ответ, не падаем", () => {
+    expect(isQuestionAnswered([rec({})], "")).toBe(false);
+    expect(isQuestionAnswered(null as never, "q1")).toBe(false);
   });
 });

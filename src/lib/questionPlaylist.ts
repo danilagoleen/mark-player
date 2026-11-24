@@ -693,8 +693,14 @@ export function formatQuestionBrackets(entry: { in_sec?: unknown; out_sec?: unkn
  * tb_1791871361_84020_1: scissorsOwnTail — ножницы ON. Выход playhead за OUT
  * активного вопроса при игре вперёд — владения tail-advance (следующее
  * видео уже едет async-аттачем); снап назад к in_sec гонялся с аттачем
- * и давал 3-5 повторов одной записи — здесь молчим (null). Ножницы OFF
- * и щель ДО in — как раньше.
+ * и давал 3-5 повторов одной записи — здесь молчим (null). Щель ДО in — как раньше.
+ * tb_1795483272_27036_3 (слово оператора 24.11): при выключенных ножницах
+ * черта вопроса только метка. Эффект бежит на каждом тике игры, поэтому
+ * activation=false (плейхед идёт сам, вопрос не меняли) при S выкл молчит:
+ * ни возврата к in_sec за OUT, ни затягивания из щели до IN. Прыжок на in_sec
+ * остаётся только при выборе вопроса (activation=true: клик по карточке,
+ * открытие записи). Без шестого аргумента это выбор вопроса, как было раньше.
+ * Ножницы ON не зависят от activation (правило 17.11).
  */
 export function resolveQuestionSnapTime(
   entries: unknown,
@@ -702,8 +708,10 @@ export function resolveQuestionSnapTime(
   nowT: number,
   active: { question_id?: string | null; in_sec?: number; out_sec?: number } | null,
   scissorsOwnTail?: boolean,
+  activation: boolean = true,
 ): number | null {
   if (!active || typeof active.in_sec !== "number" || !Number.isFinite(active.in_sec)) return null;
+  if (!scissorsOwnTail && !activation) return null;
   if (findQuestionEntryAtTime(entries, path, nowT)) return null;
   const outT = typeof active.out_sec === "number" ? active.out_sec : NaN;
   if (nowT >= active.in_sec && (Number.isNaN(outT) || nowT <= outT)) return null;
@@ -1114,6 +1122,31 @@ export function questionAnswerProgress(
     pendingQuestionIds,
     complete: ids.length > 0 && pendingQuestionIds.length === 0,
   };
+}
+
+/**
+ * tb_1795483216_27036_1: есть ли на вопрос действующий ответ (вердикт, комментарий
+ * или operator_range). Правило то же, что у прогресса плейлиста
+ * (questionAnswerProgress), чтобы стоп на OUT и «Вопрос N/M» не расходились.
+ */
+export function isQuestionAnswered(records: AnswerRecord[], questionId: string): boolean {
+  const id = typeof questionId === "string" ? questionId.trim() : "";
+  if (!id) return false;
+  const own = filterAnswersToPlaylist(records, [id]);
+  return questionAnswerProgress(own, [id]).complete;
+}
+
+/**
+ * tb_1794869634_47995_9: сколько вопросов ЭТОГО плейлиста имеют действующий
+ * ответ. Число то же, что `answered_question_ids.length` в answers.json:
+ * чужие question_id (ответы старых плейлистов в общем хранилище маркеров)
+ * отфильтрованы, повторный ответ на вопрос считается один раз.
+ * Идёт в поле `answers` отчёта session.json.
+ */
+export function countPlaylistAnswers(records: AnswerRecord[], questionIds: Iterable<string>): number {
+  const ids = uniqueIds(questionIds);
+  const own = filterAnswersToPlaylist(records, ids);
+  return questionAnswerProgress(own, ids).answeredQuestionIds.length;
 }
 
 export function buildAnswersDocument(records: AnswerRecord[], opts: AnswersDocOptions): AnswersDocument {

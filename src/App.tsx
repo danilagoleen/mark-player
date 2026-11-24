@@ -30,7 +30,7 @@ import {
   isManualSeekSuppressed,
   markManualSeek,
   outCrossAction,
-  questionOutCrossed,
+  questionOutDecision,
   readInOutPlayEnabled,
   writeInOutPlayEnabled,
   INOUT_PLAY_STORAGE_KEY,
@@ -77,7 +77,7 @@ import { DOOR_IDS, checkModuleDoor, doorClickTransition, doorEndpoint, doorLabel
 import type { ProbeResult } from "./lib/nativeWindow";
 import { dirOfPath, joinForDialog } from "./lib/exportPaths";
 import { createEmptyPlaylist, savePlaylist, loadPlaylist, addEntry, getNextEntryFromCursor, loadPlaybackMode, sanitizePlaylistFilename, trackOpenedFile, type QuestionPlaylistEntry } from "./lib/playlist";
-import { WHOLE_FILE_MARKER_SUFFIX, answerGate, formatQuestionBrackets, answersFromMarkers, buildAnswersDocument, filterAnswersToPlaylist, findQuestionEntryAtTime, formatAnswerReplyText, lerpQuestionBox, mergeAnswerRecords, normalizeQuestionEntry, parseAnswersDocument, questionFilePosition, questionScopeFromMarkers, readAnswersOutbox, readQuestionPlaylistPath, rememberQuestionPlaylistPath, resolveActiveEntry, resolveAnswers, resolveQuestionSnapTime, writeAnswersOutbox, isQuestionPlaylist, type AnswerRecord, type AnswersDocument, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
+import { WHOLE_FILE_MARKER_SUFFIX, answerGate, formatQuestionBrackets, answersFromMarkers, buildAnswersDocument, countPlaylistAnswers, filterAnswersToPlaylist, findQuestionEntryAtTime, formatAnswerReplyText, lerpQuestionBox, mergeAnswerRecords, normalizeQuestionEntry, parseAnswersDocument, questionFilePosition, questionScopeFromMarkers, readAnswersOutbox, readQuestionPlaylistPath, rememberQuestionPlaylistPath, resolveActiveEntry, resolveQuestionSnapTime, writeAnswersOutbox, isQuestionAnswered, isQuestionPlaylist, type AnswerRecord, type AnswersDocument, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
 import { writeAnswersAckFile, writeAnswersDocumentFile, sanitizeAnswersFileOnDisk } from "./lib/questionAnswersFile";
 import { createSessionReporter, type SessionReporter } from "./lib/sessionReporter";
 import { isSameMediaPath, resolveMediaContentHash } from "./lib/mediaOpen";
@@ -86,7 +86,7 @@ import { markerBelongsToMedia, notifyMarkersChanged, notifyMediaChanged, resolve
 import { isSameImportedMarker, matchGroupToPath, parseXmemlMarkers, type ImportedMarker } from "./lib/xmemlImport";
 import type { CutPlayerMenuAction } from "./lib/cutPlayerMenu";
 import { useDragDrop } from "./lib/useDragDrop";
-import { ReverseShuttle, getShuttleDisplay, resolveJumpTarget, resolvePlayerHotkey, resolveProportionalStep, shuttleSlotClass } from "./lib/playerHotkeys";
+import { ReverseShuttle, SHUTTLE_LADDER, SeekCoalescer, getShuttleDisplay, nextShuttleLevel, resolveJumpTarget, resolvePlayerHotkey, resolveProportionalStep, shuttleSlotClass } from "./lib/playerHotkeys";
 import {
   confirmClearMarkers,
   countSparedQuestionReplies,
@@ -897,7 +897,9 @@ function App() {
   // срабатывает эффектом ниже, одноразовый).
   const advanceInSeekRef = useRef<string | null>(null);
   // tb_1793480340_10647_1: где плеер встал на OUT последней записи плейлиста.
-  const playlistTailPauseRef = useRef<{ path: string; at: number } | null>(null);
+  // tb_1795483216_27036_1: hold = встали на OUT черты, пока нет ответа
+  // (questionId — чьего ответа ждём); play отсюда пропускает вопрос без ответа.
+  const playlistTailPauseRef = useRef<{ path: string; at: number; hold?: boolean; questionId?: string } | null>(null);
   const skipToastShownRef = useRef(false);
   const [skippedTotalSec, setSkippedTotalSec] = useState(0);
   // tb_1791333803_37784_1: превью монтажного листа одного видео (только
@@ -927,6 +929,10 @@ function App() {
   // в окно вопроса (или пока не активируют другой вопрос).
   const questionSnapSuspendedRef = useRef(false);
   const questionSnapKeyRef = useRef<string | null>(null);
+  // tb_1795483272_27036_3: вопрос только что выбрали и снап ещё не отработал.
+  // Ножницы выкл: прыжок на IN допустим только по этому взводу, игра (тики
+  // currentTime) черту не трогает.
+  const questionSnapArmedRef = useRef(false);
   const [questionComment, setQuestionComment] = useState("");
   // tb_1792634443_73606_2: прогресс ответов этого плейлиста — источник
   // answers.json (санитайз при открытии). Нужен карточке для «Вопрос 1/2».
@@ -2048,7 +2054,12 @@ function App() {
               return Array.isArray(hit?.choices) ? (hit.choices as string[]) : undefined;
             },
           });
-          answers = resolveAnswers(records).size;
+          // Только вопросы ЭТОГО плейлиста: markersRef несёт маркеры всех
+          // открытых раньше плейлистов (в живую 339 против «0 из 4» в answers.json).
+          answers = countPlaylistAnswers(
+            records,
+            entries.map((e) => e.question_id).filter((id): id is string => typeof id === "string"),
+          );
         } catch {
           answers = 0;
         }
@@ -2139,10 +2150,27 @@ function App() {
         if (videoRef.current) videoRef.current.currentTime = t;
         setCurrentTime(t);
       },
+      50,
+      // tb_1795485057_27036_5: новый шаг назад только после seeked предыдущего.
+      () => videoRef.current?.seeking ?? false,
     );
+    // Покадровые и пропорциональные шаги (зажатая стрелка шлёт ~30 в секунду):
+    // один seek в полёте, последняя цель применяется по seeked.
+    let seekCoalescer: SeekCoalescer | null = null;
+    let seekCoalescerEl: HTMLVideoElement | null = null;
+    const coalescerFor = (el: HTMLVideoElement): SeekCoalescer => {
+      if (seekCoalescer === null || seekCoalescerEl !== el) {
+        seekCoalescer?.dispose();
+        seekCoalescer = new SeekCoalescer(el);
+        seekCoalescerEl = el;
+      }
+      return seekCoalescer;
+    };
     let shuttleLevel = 0;
     const setShuttle = (next: number) => {
-      shuttleLevel = Math.max(-3, Math.min(3, next));
+      // Граница из лесенки (tb_1795483235_27036_2): новая ступень данными не режется.
+      const shuttleMax = SHUTTLE_LADDER[SHUTTLE_LADDER.length - 1];
+      shuttleLevel = Math.max(-shuttleMax, Math.min(shuttleMax, next));
       setShuttleLevel(shuttleLevel);
       const video = videoRef.current;
       if (!video) return;
@@ -2206,20 +2234,27 @@ function App() {
         case "frameStepBack":
           if (!video) break;
           event.preventDefault();
-          video.currentTime = Math.max(0, video.currentTime - frameStep);
+          {
+            const seeker = coalescerFor(video);
+            seeker.request(Math.max(0, seeker.position() - frameStep));
+          }
           markManualSeek();
           break;
         case "frameStepForward":
           if (!video) break;
           event.preventDefault();
-          video.currentTime = Math.min(duration || video.duration || 0, video.currentTime + frameStep);
+          {
+            const seeker = coalescerFor(video);
+            seeker.request(Math.min(duration || video.duration || 0, seeker.position() + frameStep));
+          }
           markManualSeek();
           break;
         case "proportionalStepBack": {
           if (!video) break;
           event.preventDefault();
           const step = resolveProportionalStep(duration || video.duration || 0);
-          video.currentTime = Math.max(0, video.currentTime - step);
+          const seeker = coalescerFor(video);
+          seeker.request(Math.max(0, seeker.position() - step));
           markManualSeek();
           break;
         }
@@ -2227,7 +2262,8 @@ function App() {
           if (!video) break;
           event.preventDefault();
           const step = resolveProportionalStep(duration || video.duration || 0);
-          video.currentTime = Math.min(duration || video.duration || 0, video.currentTime + step);
+          const seeker = coalescerFor(video);
+          seeker.request(Math.min(duration || video.duration || 0, seeker.position() + step));
           markManualSeek();
           break;
         }
@@ -2281,7 +2317,7 @@ function App() {
         case "playBack":
           if (!video) break;
           event.preventDefault();
-          setShuttle(shuttleLevel <= 0 ? shuttleLevel - 1 : -1);
+          setShuttle(nextShuttleLevel(shuttleLevel, -1));
           break;
         case "stop":
           if (!video) break;
@@ -2291,7 +2327,7 @@ function App() {
         case "playForward":
           if (!video) break;
           event.preventDefault();
-          setShuttle(shuttleLevel >= 0 ? shuttleLevel + 1 : 1);
+          setShuttle(nextShuttleLevel(shuttleLevel, 1));
           break;
         case "markIn":
           event.preventDefault();
@@ -2350,6 +2386,7 @@ function App() {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       reverse.stop();
+      seekCoalescer?.dispose();
     };
   }, [duration, previewQuality]);
 
@@ -4831,6 +4868,7 @@ function App() {
     if (!activeQuestion) {
       questionSnapSuspendedRef.current = false;
       questionSnapKeyRef.current = null;
+      questionSnapArmedRef.current = false;
       return;
     }
     if (questionPathRef.current !== currentFilePathRef.current) return;
@@ -4838,11 +4876,17 @@ function App() {
     if (questionSnapKeyRef.current !== questionKey) {
       questionSnapKeyRef.current = questionKey;
       questionSnapSuspendedRef.current = false;
+      questionSnapArmedRef.current = true;
     }
     const t = activeQuestion.in_sec;
     if (t === undefined || !(t >= 0) || !(t < duration)) return;
     const nowT = Number(videoRef.current?.currentTime ?? currentTime);
     if (!Number.isFinite(nowT)) return;
+    // tb_1795483272_27036_3: взвод снимается на первой настоящей оценке
+    // (медиа готово, позиция известна): выбор вопроса = activation, дальше
+    // тики игры при выкл ножницах черту не трогают.
+    const activation = questionSnapArmedRef.current;
+    questionSnapArmedRef.current = false;
     const inT = Number(activeQuestion.in_sec);
     const outT = Number(activeQuestion.out_sec);
     const insideWindow = Number.isFinite(inT) && Number.isFinite(outT) && nowT >= inT && nowT <= outT;
@@ -4858,8 +4902,8 @@ function App() {
     if (questionSnapSuspendedRef.current) return;
     // tb_1791871361_84020_1: ножницы ON — выход за OUT ведёт tail-advance
     // (следующее видео едет async-аттачем); снап назад гонялся с аттачем
-    // и давал 3-5 повторов одной записи. Ножницы OFF — как раньше.
-    const snap = resolveQuestionSnapTime(loadPlaylist()?.entries, currentFilePathRef.current, nowT, activeQuestion, inOutPlayOnRef.current);
+    // и давал 3-5 повторов одной записи. Ножницы OFF — только при выборе вопроса.
+    const snap = resolveQuestionSnapTime(loadPlaylist()?.entries, currentFilePathRef.current, nowT, activeQuestion, inOutPlayOnRef.current, activation);
     if (snap === null) return;
     const video = videoRef.current;
     if (video) {
@@ -4870,6 +4914,21 @@ function App() {
       }
     }
   }, [activeQuestion, duration, currentTime]);
+
+  // tb_1795483216_27036_1: плейхед держится на OUT черты агента, пока нет ответа
+  // (вердикт, комментарий или operator_range). Ответ даёт продолжение: переход
+  // на следующую запись, как при автопереходе. Последняя запись: стоим, play
+  // начнёт плейлист заново (tail-пауза).
+  useEffect(() => {
+    const held = playlistTailPauseRef.current;
+    if (!held?.hold || !held.questionId || !inOutPlayOnRef.current) return;
+    const video = videoRef.current;
+    if (!video || !video.paused) return;
+    if (held.path !== currentFilePathRef.current || Math.abs(video.currentTime - held.at) >= 0.1) return;
+    if (!isQuestionAnswered(extractAnswerRecords(markers).records, held.questionId)) return;
+    playlistTailPauseRef.current = null;
+    if (!advanceToNextEntry()) playlistTailPauseRef.current = { path: held.path, at: held.at };
+  }, [markers]);
 
   // tb_1791819024_26192_2: карточка следует за playhead внутри одного файла
   // (капча: 28 слайдов — один mp4, смена файла не стреляет). Нашли чужую
@@ -5972,6 +6031,9 @@ function App() {
       const tail = playlistTailPauseRef.current;
       if (tail && inOutPlayOnRef.current && tail.path === currentFilePathRef.current && Math.abs(video.currentTime - tail.at) < 0.1) {
         playlistTailPauseRef.current = null;
+        // tb_1795483216_27036_1: встали на OUT без ответа — Play пропускает вопрос
+        // и идёт на следующую запись; последняя запись — плейлист заново.
+        if (tail.hold && advanceToNextEntry()) return;
         if (advanceToNextEntry({ fromStart: true })) return;
       }
       if (video.currentTime > 0 && video.currentTime < 0.05) {
@@ -6452,12 +6514,25 @@ function App() {
                               // окно того же файла (v07: 11 окон на одном
                               // 50-минутном прокси шли подряд). Plain-тракт —
                               // как раньше, через outCrossAction.
-                              const qTail = questionOutCrossed(activeQuestion, currentFilePathRef.current, questionPathRef.current, prevT, t);
+                              // tb_1795483216_27036_1: на OUT ЧЕРТЫ агента без ответа
+                              // встаём и ждём (hold); скобки не держат, ножницы выкл
+                              // сюда не заходят. С ответом — автопереход как раньше.
+                              const qDecision = questionOutDecision({
+                                scissorsOn: inOutPlayOn,
+                                active: activeQuestion,
+                                path: currentFilePathRef.current,
+                                questionPath: questionPathRef.current,
+                                prevT,
+                                t,
+                                isAnswered: (qid) => isQuestionAnswered(extractAnswerRecords(markersRef.current).records, qid),
+                              });
+                              const qTail = qDecision !== "none";
+                              const qHold = qDecision === "hold";
                               const qAt = qTail && typeof activeQuestion?.out_sec === "number" ? activeQuestion.out_sec : 0;
                               const action = qTail
                                 ? { kind: "tail" as const, at: qAt }
                                 : outCrossAction(segments, prevT, t, video.loop);
-                              if (action?.kind === "tail" && advanceToNextEntry()) {
+                              if (action?.kind === "tail" && !qHold && advanceToNextEntry()) {
                                 inOutPrevTRef.current = 0;
                               } else {
                                 const pauseAt = action?.kind === "tail" ? action.at : null;
@@ -6465,7 +6540,16 @@ function App() {
                                 // плейлиста вопросов — запоминаем место: play отсюда
                                 // начнёт плейлист заново, а не уйдёт в щель за OUT.
                                 playlistTailPauseRef.current =
-                                  pauseAt !== null && qTail ? { path: currentFilePathRef.current ?? "", at: pauseAt } : null;
+                                  pauseAt !== null && qTail
+                                    ? {
+                                        path: currentFilePathRef.current ?? "",
+                                        at: pauseAt,
+                                        ...(qHold ? { hold: true, questionId: String(activeQuestion?.question_id ?? "") } : {}),
+                                      }
+                                    : null;
+                                if (qHold && pauseAt !== null) {
+                                  setContextToast("Waiting for your answer. Play skips this question.");
+                                }
                                 if (pauseAt !== null) {
                                   inOutPrevTRef.current = pauseAt;
                                   try {

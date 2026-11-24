@@ -8,6 +8,7 @@ import {
   outCrossAction,
   pauseAtOutOnCross,
   questionOutCrossed,
+  questionOutDecision,
   resolveSkipTarget,
   wouldNestInPair,
   readInOutPlayEnabled,
@@ -265,5 +266,60 @@ describe("questionOutCrossed (tb_1791885959_77379_1: out активной зап
   });
   it("скраб (>1.5с за тик) — false", () => {
     expect(questionOutCrossed(active, "/v/big.mov", "/v/big.mov", 2800, 2835)).toBe(false);
+  });
+});
+
+describe("questionOutDecision (tb_1795483216_27036_1: стоп на OUT черты агента, пока оператор не ответил)", () => {
+  const line = { question_id: "q1", in_sec: 10, out_sec: 20 };
+  const base = {
+    scissorsOn: true,
+    active: line as { out_sec?: unknown; in_sec?: unknown; question_id?: unknown } | null,
+    path: "/v/a.mp4",
+    questionPath: "/v/a.mp4",
+    prevT: 19.9,
+    t: 20.1,
+  };
+  const unanswered = () => false;
+  const answered = () => true;
+
+  it("черта + ножницы ВКЛ + нет ответа: держим на OUT", () => {
+    expect(questionOutDecision({ ...base, isAnswered: unanswered })).toBe("hold");
+  });
+  it("черта + ножницы ВКЛ + есть ответ: идём дальше (advance, как раньше)", () => {
+    expect(questionOutDecision({ ...base, isAnswered: answered })).toBe("advance");
+  });
+  it("ответ ищется по question_id активной черты", () => {
+    const seen: string[] = [];
+    questionOutDecision({ ...base, isAnswered: (id) => { seen.push(id); return false; } });
+    expect(seen).toEqual(["q1"]);
+  });
+  it("ножницы ВЫКЛ: решения нет ни с ответом, ни без (плейхед идёт спокойно)", () => {
+    expect(questionOutDecision({ ...base, scissorsOn: false, isAnswered: unanswered })).toBe("none");
+    expect(questionOutDecision({ ...base, scissorsOn: false, isAnswered: answered })).toBe("none");
+  });
+  it("скобки без черты не держат: активного вопроса нет, или у него нет out", () => {
+    expect(questionOutDecision({ ...base, active: null, isAnswered: unanswered })).toBe("none");
+    expect(questionOutDecision({ ...base, active: { question_id: "q1", in_sec: 10 }, isAnswered: unanswered })).toBe("none");
+    expect(questionOutDecision({ ...base, active: { question_id: "q1", out_sec: NaN }, isAnswered: unanswered })).toBe("none");
+  });
+  it("чужой файл (карточка не отсюда): не держим", () => {
+    expect(questionOutDecision({ ...base, questionPath: "/v/other.mp4", isAnswered: unanswered })).toBe("none");
+  });
+  it("OUT не пересечён или это скраб (>1.5с за тик): не держим", () => {
+    expect(questionOutDecision({ ...base, prevT: 18, t: 18.1, isAnswered: unanswered })).toBe("none");
+    expect(questionOutDecision({ ...base, prevT: 21, t: 21.1, isAnswered: unanswered })).toBe("none");
+    expect(questionOutDecision({ ...base, prevT: 5, t: 25, isAnswered: unanswered })).toBe("none");
+  });
+  it("черта без question_id: ответа ждать не по чему, идём дальше как раньше", () => {
+    expect(questionOutDecision({ ...base, active: { in_sec: 10, out_sec: 20 }, isAnswered: unanswered })).toBe("advance");
+    expect(questionOutDecision({ ...base, active: { question_id: "", in_sec: 10, out_sec: 20 }, isAnswered: unanswered })).toBe("advance");
+  });
+  it("ответ не вычисляется, пока решать нечего (дорогая выжимка по маркерам)", () => {
+    let calls = 0;
+    const spy = () => { calls += 1; return false; };
+    questionOutDecision({ ...base, scissorsOn: false, isAnswered: spy });
+    questionOutDecision({ ...base, prevT: 18, t: 18.1, isAnswered: spy });
+    questionOutDecision({ ...base, active: null, isAnswered: spy });
+    expect(calls).toBe(0);
   });
 });

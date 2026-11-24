@@ -1,12 +1,12 @@
-# Mark Player 0.26.12 beta, by VETKA lab
+# Mark Player 0.26.17 beta, by VETKA lab
 
 <img src="docs/screenshots/icon-128.png" width="128" alt="Mark Player icon">
 
 Marker-first video review: open a file, mark the moments, land them in Premiere — frame-accurately.
 
-[⬇ Download for macOS (Apple Silicon)](https://github.com/danilagoleen/mark-player/releases/download/v0.26.12/Mark.Player_0.26.12_aarch64.dmg) ·
-[Intel Mac](https://github.com/danilagoleen/mark-player/releases/download/v0.26.12/Mark.Player_0.26.12_x64.dmg) ·
-[Windows](https://github.com/danilagoleen/mark-player/releases/download/v0.26.12/Mark.Player_0.26.12_x64-setup.exe)
+[⬇ Download for macOS (Apple Silicon)](https://github.com/danilagoleen/mark-player/releases/download/v0.26.17/Mark.Player_0.26.17_aarch64.dmg) ·
+[Intel Mac](https://github.com/danilagoleen/mark-player/releases/download/v0.26.17/Mark.Player_0.26.17_x64.dmg) ·
+[Windows](https://github.com/danilagoleen/mark-player/releases/download/v0.26.17/Mark.Player_0.26.17_x64-setup.exe)
 
 [![Watch it in action (1 min) — mark the moments, land them in Premiere](docs/promo/promo_poster.jpg)](https://github.com/user-attachments/assets/098c218f-5e4e-4c8f-ab3b-382bffc51d17)
 
@@ -58,9 +58,9 @@ Marilyn marked the frames she didn't like. Now any producer marks right in the p
 Grab the latest beta from
 **[Releases](https://github.com/danilagoleen/mark-player/releases)**:
 
-- **macOS Apple Silicon** — `Mark.Player_0.26.12_aarch64.dmg`
-- **macOS Intel** — `Mark.Player_0.26.12_x64.dmg`
-- **Windows 10/11** — `Mark.Player_0.26.12_x64-setup.exe` (installer) or `Mark.Player_0.26.12_x64_en-US.msi`
+- **macOS Apple Silicon** — `Mark.Player_0.26.17_aarch64.dmg`
+- **macOS Intel** — `Mark.Player_0.26.17_x64.dmg`
+- **Windows 10/11** — `Mark.Player_0.26.17_x64-setup.exe` (installer) or `Mark.Player_0.26.17_x64_en-US.msi`
 
 ## Installation (macOS)
 
@@ -128,7 +128,7 @@ Native bundles land in
 - **Marker pill (top):** ★ ✗ `[` `]` 💬 — creation buttons over the picture.
 - **Volume:** `↑` / `↓` (5% steps), OSD percent top-right, `M` is Comment —
   mute lives in the Audio menu.
-- **Shuttle:** `J` back / `K` stop / `L` forward (`JJ`/`LL` = ×2), `←` / `→`
+- **Shuttle:** `J` back / `K` stop / `L` forward (first press 0.5×, then 1×, 2×, 3×), `←` / `→`
   one frame (probe → rVFC estimate → 25 fps fallback), `Shift` + `←` / `→`
   proportional step (1% of video length, 0.5–5 s), `⌘` + `←` / `→` jump to
   prev / next marker, `Home` / `End` jumps.
@@ -162,7 +162,7 @@ Native bundles land in
 | Keys | Action |
 |------|--------|
 | `Space` | Play / pause |
-| `J` / `K` / `L` | Shuttle back / stop / forward (double-tap = ×2) |
+| `J` / `K` / `L` | Shuttle back / stop / forward (each press: 0.5×, 1×, 2×, 3×) |
 | `←` / `→` | ±1 frame; `Shift` = proportional step (1% length, 0.5–5 s) |
 | `⌘←` / `⌘→` | Jump to prev / next marker |
 | `↑` / `↓` | Volume ±5% |

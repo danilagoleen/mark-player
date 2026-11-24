@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { ReverseShuttle, getShuttleDisplay, isTypingTarget, resolveJumpTarget, resolvePlayerHotkey, resolveProportionalStep, shuttleSlotClass } from "./playerHotkeys";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ReverseShuttle, SHUTTLE_LADDER, SeekCoalescer, getShuttleDisplay, isTypingTarget, nextShuttleLevel, resolveJumpTarget, resolvePlayerHotkey, resolveProportionalStep, shuttleSlotClass } from "./playerHotkeys";
 
 function key(code: string, extra: Partial<KeyboardEvent> = {}): KeyboardEvent {
   return {
@@ -205,6 +205,58 @@ describe("getShuttleDisplay", () => {
   });
 });
 
+// tb_1795483235_27036_2 (слово оператора 24.11): J/L начинают с медленной
+// ступени 0.5x в обе стороны, дальше 1x, 2x, 3x. Он не успевал рассмотреть
+// кусок и ответить агенту: плейхед убегал.
+describe("лесенка шаттла J/L: 0.5, 1, 2, 3", () => {
+  it("ступени заданы данными", () => {
+    expect([...SHUTTLE_LADDER]).toEqual([0.5, 1, 2, 3]);
+  });
+
+  it("со стопа первый L даёт 0.5x вперёд, первый J даёт 0.5x назад", () => {
+    expect(nextShuttleLevel(0, 1)).toBe(0.5);
+    expect(nextShuttleLevel(0, -1)).toBe(-0.5);
+  });
+
+  it("повторные L поднимают ступень: 0.5, 1, 2, 3 и упираются в 3", () => {
+    let level = 0;
+    const seen: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      level = nextShuttleLevel(level, 1);
+      seen.push(level);
+    }
+    expect(seen).toEqual([0.5, 1, 2, 3, 3, 3]);
+  });
+
+  it("повторные J поднимают ступень назад: -0.5, -1, -2, -3 и упираются в -3", () => {
+    let level = 0;
+    const seen: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      level = nextShuttleLevel(level, -1);
+      seen.push(level);
+    }
+    expect(seen).toEqual([-0.5, -1, -2, -3, -3, -3]);
+  });
+
+  it("обратное направление начинается с первой ступени, а не с текущей", () => {
+    expect(nextShuttleLevel(2, -1)).toBe(-0.5);
+    expect(nextShuttleLevel(3, -1)).toBe(-0.5);
+    expect(nextShuttleLevel(-3, 1)).toBe(0.5);
+    expect(nextShuttleLevel(-1, 1)).toBe(0.5);
+  });
+
+  it("нештатный уровень берёт ближайшую ступень выше, не падает", () => {
+    expect(nextShuttleLevel(1.5, 1)).toBe(2);
+    expect(nextShuttleLevel(-1.5, -1)).toBe(-2);
+    expect(nextShuttleLevel(Number.NaN, 1)).toBe(0.5);
+  });
+
+  it("бейдж честно показывает 0.5x в обе стороны", () => {
+    expect(getShuttleDisplay(0.5, true)).toEqual({ label: "Shuttle 0.5x", moving: true, badge: "▶ 0.5x" });
+    expect(getShuttleDisplay(-0.5, false)).toEqual({ label: "Rewind 0.5x", moving: true, badge: "◀ 0.5x" });
+  });
+});
+
 describe("ReverseShuttle", () => {
   it("steps currentTime back at rate", () => {
     vi.useFakeTimers();
@@ -232,6 +284,132 @@ describe("ReverseShuttle", () => {
     vi.advanceTimersByTime(200);
     rs.stop();
     expect(t).toBe(0);
+  });
+});
+
+// tb_1795485057_27036_5: кадр пропадал на стопе после серии перемоток. J ставил
+// currentTime каждые 50 мс, не дожидаясь seeked (до 20 переходов в секунду),
+// стрелки при зажатии делали то же. Правило: переход в полёте один, новый
+// только после seeked; последняя запрошенная позиция применяется всегда.
+describe("ReverseShuttle: один переход в полёте (замирающий кадр)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("пока предыдущий seek не завершён, тики не ставят новый", () => {
+    vi.useFakeTimers();
+    let t = 10;
+    let seeking = false;
+    const sets: number[] = [];
+    const rs = new ReverseShuttle(
+      () => t,
+      (v) => {
+        t = v;
+        sets.push(v);
+        seeking = true;
+      },
+      50,
+      () => seeking,
+    );
+    rs.start(1);
+    vi.advanceTimersByTime(50);
+    expect(sets).toHaveLength(1);
+    vi.advanceTimersByTime(300);
+    expect(sets).toHaveLength(1);
+    rs.stop();
+  });
+
+  it("после seeked догоняет по часам: пропущенные тики не теряют время", () => {
+    vi.useFakeTimers();
+    let t = 10;
+    let seeking = false;
+    const rs = new ReverseShuttle(
+      () => t,
+      (v) => {
+        t = v;
+        seeking = true;
+      },
+      50,
+      () => seeking,
+    );
+    rs.start(1);
+    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(150);
+    seeking = false;
+    vi.advanceTimersByTime(50);
+    rs.stop();
+    // 250 мс на 1x: 10 - 0.25
+    expect(t).toBeCloseTo(9.75, 2);
+  });
+});
+
+describe("SeekCoalescer: последняя запрошенная позиция применяется всегда", () => {
+  function fakeVideo() {
+    const listeners = new Set<() => void>();
+    let ct = 0;
+    const el = {
+      sets: [] as number[],
+      seeking: false,
+      get currentTime() {
+        return ct;
+      },
+      set currentTime(v: number) {
+        ct = v;
+        el.seeking = true;
+        el.sets.push(v);
+      },
+      addEventListener: (_type: "seeked", fn: () => void) => {
+        listeners.add(fn);
+      },
+      removeEventListener: (_type: "seeked", fn: () => void) => {
+        listeners.delete(fn);
+      },
+      land() {
+        el.seeking = false;
+        [...listeners].forEach((fn) => fn());
+      },
+      listenerCount: () => listeners.size,
+    };
+    return el;
+  }
+
+  it("первый запрос ставится сразу", () => {
+    const el = fakeVideo();
+    const c = new SeekCoalescer(el);
+    c.request(5);
+    expect(el.sets).toEqual([5]);
+  });
+
+  it("запросы в полёте схлопываются: после seeked уходит только последний", () => {
+    const el = fakeVideo();
+    const c = new SeekCoalescer(el);
+    c.request(5);
+    c.request(4);
+    c.request(3);
+    expect(el.sets).toEqual([5]);
+    el.land();
+    expect(el.sets).toEqual([5, 3]);
+    el.land();
+    expect(el.sets).toEqual([5, 3]);
+  });
+
+  it("position() отдаёт ожидающую цель, а не устаревший currentTime", () => {
+    const el = fakeVideo();
+    const c = new SeekCoalescer(el);
+    c.request(5);
+    c.request(4.96);
+    expect(c.position()).toBe(4.96);
+    el.land();
+    el.land();
+    expect(c.position()).toBe(4.96);
+  });
+
+  it("dispose снимает слушатель seeked", () => {
+    const el = fakeVideo();
+    const c = new SeekCoalescer(el);
+    expect(el.listenerCount()).toBe(1);
+    c.dispose();
+    expect(el.listenerCount()).toBe(0);
   });
 });
 

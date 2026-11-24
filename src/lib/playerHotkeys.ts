@@ -158,11 +158,85 @@ export function shuttleSlotClass(badge: string | null): string {
   return `transport-shuttle-badge${badge ? " has-badge" : " is-empty"}`;
 }
 
+/**
+ * tb_1795483235_27036_2 (слово оператора 24.11): лесенка J/L. Первое нажатие
+ * даёт медленную ступень 0.5x в обе стороны, чтобы успеть рассмотреть кусок и
+ * ответить агенту; дальше 1x, 2x, 3x. Уровень шаттла хранится как знаковая
+ * скорость (минус = назад), поэтому бейдж и playbackRate берут его как есть.
+ */
+export const SHUTTLE_LADDER = [0.5, 1, 2, 3] as const;
+
+/**
+ * Следующий уровень шаттла по нажатию J (dir = -1) или L (dir = 1).
+ * Со стопа и при смене направления начинаем с первой ступени; в своём
+ * направлении поднимаемся на ступень выше и упираемся в последнюю. Нештатный
+ * уровень (не из лесенки, NaN) не роняет: берём ближайшую ступень выше.
+ */
+export function nextShuttleLevel(current: number, dir: -1 | 1): number {
+  const first = SHUTTLE_LADDER[0];
+  const last = SHUTTLE_LADDER[SHUTTLE_LADDER.length - 1];
+  const sameDirection = Number.isFinite(current) && current !== 0 && Math.sign(current) === dir;
+  if (!sameDirection) return dir * first;
+  const magnitude = Math.abs(current);
+  const next = SHUTTLE_LADDER.find((rate) => rate > magnitude) ?? last;
+  return dir * next;
+}
+
 export function getShuttleDisplay(shuttle: number, isPlaying: boolean): ShuttleDisplay {
   if (shuttle < 0) return { label: `Rewind ${-shuttle}x`, moving: true, badge: `◀ ${-shuttle}x` };
   if (shuttle > 0) return { label: `Shuttle ${shuttle}x`, moving: true, badge: `▶ ${shuttle}x` };
   if (isPlaying) return { label: "Pause", moving: true, badge: null };
   return { label: "Play", moving: false, badge: null };
+}
+
+/**
+ * tb_1795485057_27036_5: один seek в полёте. Раньше J и стрелки ставили
+ * currentTime, не дожидаясь seeked (до 20 переходов в секунду): на длинном
+ * GOP запросы копились, и после стопа кадр не рисовался до Play. Запрос в
+ * полёте не прерываем: пока seeking, новая цель только запоминается (побеждает
+ * последняя), по seeked уходит ровно одна последняя. Так последняя
+ * запрошенная позиция применяется всегда, а очередь не растёт.
+ */
+export interface SeekTarget {
+  currentTime: number;
+  readonly seeking: boolean;
+  addEventListener(type: "seeked", listener: () => void): void;
+  removeEventListener(type: "seeked", listener: () => void): void;
+}
+
+export class SeekCoalescer {
+  private pending: number | null = null;
+
+  constructor(private el: SeekTarget) {
+    this.el.addEventListener("seeked", this.onSeeked);
+  }
+
+  private onSeeked = (): void => {
+    if (this.pending === null) return;
+    const t = this.pending;
+    this.pending = null;
+    this.el.currentTime = t;
+  };
+
+  /** Запросить позицию: сразу, если seek свободен, иначе запомнить как последнюю. */
+  request(t: number): void {
+    if (this.el.seeking) {
+      this.pending = t;
+      return;
+    }
+    this.pending = null;
+    this.el.currentTime = t;
+  }
+
+  /** Куда видео придёт: ожидающая цель, иначе текущая позиция. */
+  position(): number {
+    return this.pending ?? this.el.currentTime;
+  }
+
+  dispose(): void {
+    this.el.removeEventListener("seeked", this.onSeeked);
+    this.pending = null;
+  }
 }
 
 export class ReverseShuttle {
@@ -173,12 +247,16 @@ export class ReverseShuttle {
     private getCurrentTime: () => number,
     private setCurrentTime: (t: number) => void,
     private tickMs = 50,
+    // Идёт ли seek: тик пропускается, lastTick не двигаем, поэтому следующий
+    // свободный тик отматывает на всё накопленное время (часы не теряются).
+    private isSeeking: () => boolean = () => false,
   ) {}
 
   start(rate: number): void {
     this.stop();
     this.lastTick = performance.now();
     this.timer = setInterval(() => {
+      if (this.isSeeking()) return;
       const now = performance.now();
       const elapsed = (now - this.lastTick) / 1000;
       this.lastTick = now;

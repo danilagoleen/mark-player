@@ -150,6 +150,38 @@ export function questionOutCrossed(
 }
 
 /**
+ * tb_1795483216_27036_1 (слово оператора 24.11): агент дарит короткие куски, и
+ * плейхед уходил на следующий раньше, чем оператор успевал ответить. Решение на
+ * пересечении OUT активной ЧЕРТЫ вопроса:
+ *   none    — ничего не решаем (OUT не пересечён, скраб, чужой файл, нет черты,
+ *             ножницы выкл: плейхед идёт спокойно);
+ *   hold    — ножницы ВКЛ, ответа на вопрос ещё нет: встаём ровно на OUT и ждём;
+ *   advance — ножницы ВКЛ, ответ есть (или вопрос без question_id, ждать нечего):
+ *             автопереход на следующую запись, как раньше.
+ * Держит ТОЛЬКО черта агента и ТОЛЬКО при ножницах ВКЛ. Скобки монтажа не держат
+ * никогда: у них нет активного вопроса с out, это иной тракт (outCrossAction).
+ * isAnswered ленивая: выжимка ответов по маркерам не считается, пока решать нечего.
+ * Чистая, тестируем.
+ */
+export type QuestionOutDecision = "none" | "hold" | "advance";
+
+export function questionOutDecision(args: {
+  scissorsOn: boolean;
+  active: { out_sec?: unknown; in_sec?: unknown; question_id?: unknown } | null | undefined;
+  path: string | null | undefined;
+  questionPath: string | null | undefined;
+  prevT: number;
+  t: number;
+  isAnswered: (questionId: string) => boolean;
+}): QuestionOutDecision {
+  if (!args.scissorsOn) return "none";
+  if (!questionOutCrossed(args.active, args.path, args.questionPath, args.prevT, args.t)) return "none";
+  const qid = args.active?.question_id;
+  if (typeof qid !== "string" || qid.length === 0) return "advance";
+  return args.isAnswered(qid) ? "advance" : "hold";
+}
+
+/**
  * tb_1791661175_27409_1: пересечение OUT при выключенном loop — пауза ровно
  * на скобке. Раньше этот кейс никак не обрабатывался (resolveSkipTarget null
  * = игнор) и видео уходило за OUT — а IN при этом работал, т.к. всё до
