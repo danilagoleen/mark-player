@@ -40,8 +40,6 @@ test("testid из манифеста резолвятся в DOM", async ({ page
     "transport-play-pause",
     "transport-progress",
     "transport-mute",
-    "seek-backward",
-    "seek-forward",
     "marker-favorite",
     "marker-negative",
     "marker-in",

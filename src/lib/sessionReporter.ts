@@ -42,6 +42,12 @@ export interface SessionReporterDeps {
   snapshot: () => SessionSnapshot | null;
   now?: () => string;
   write?: (report: SessionReport) => Promise<unknown>;
+  /**
+   * tb_1795498927_72599_1: запись отчёта отказала (плейлист вне разрешённых корней
+   * записи). Раньше catch глотал это молча. Зовётся один раз на плейлист, пока
+   * запись не удастся снова: пауза, смена записи и ответ не сыплют сообщениями.
+   */
+  onWriteError?: (playlist: string, error: unknown) => void;
 }
 
 export interface SessionReporter {
@@ -62,6 +68,8 @@ export function createSessionReporter(deps: SessionReporterDeps): SessionReporte
   const nowOf = deps.now ?? (() => new Date().toISOString());
   const write = deps.write ?? ((report: SessionReport) => writeSessionReport(report));
   const state: ReporterState = { playlist: "", startedAt: "", reached: [] };
+  // плейлист, о чьём отказе записи уже сказано; сбрасывается удачной записью
+  let reportedFailureFor: string | null = null;
 
   function writeSnapshot(patch: SessionSnapshotPatch = {}): Promise<void> {
     const snap = deps.snapshot();
@@ -109,7 +117,19 @@ export function createSessionReporter(deps: SessionReporterDeps): SessionReporte
       answers: snap.answers,
       marks,
     });
-    return write(report).then(() => {}).catch(() => {});
+    return write(report)
+      .then(() => {
+        reportedFailureFor = null;
+      })
+      .catch((error: unknown) => {
+        if (reportedFailureFor === snap.playlist) return;
+        reportedFailureFor = snap.playlist;
+        try {
+          deps.onWriteError?.(snap.playlist, error);
+        } catch {
+          // сообщение об отказе не должно ронять показ
+        }
+      });
   }
 
   return {

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Playlist, PlaylistEntry, QuestionPlaylistEntry } from "../../lib/playlist";
 import type { PlaybackMode } from "../../lib/playlist";
-import { createEmptyPlaylist, loadPlaylist, removeEntry, moveEntry, serializePlaylist, loadPlaybackMode, savePlaybackMode, savePlaylist, nextLoopMode, renamePlaylist, sanitizePlaylistFilename } from "../../lib/playlist";
+import { createEmptyPlaylist, loadPlaylist, removeEntry, moveEntry, serializePlaylist, loadPlaybackMode, savePlaybackMode, savePlaylist, renamePlaylist, sanitizePlaylistFilename } from "../../lib/playlist";
+import { cycleRepeatMode, listenRepeatChanged } from "../../lib/repeatMode";
 import { buildAnswersDocument, filterAnswersToPlaylist, isQuestionPlaylist, parseAnswersFile, rememberQuestionPlaylistPath, serializeAnswersDocument, type QuestionEntry } from "../../lib/questionPlaylist";
 import { sanitizeAnswersFileOnDisk } from "../../lib/questionAnswersFile";
 import { dirOfPath, joinForDialog } from "../../lib/exportPaths";
@@ -60,9 +61,32 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
       unlisten?.();
     };
   }, []);
-  const updateMode = useCallback((next: PlaybackMode) => {
+  // tb_1795483282_27036_4: повтор — ОДИН луп с меню главного окна. Кнопка зовёт ту же
+  // cycleRepeatMode (от общего состояния, не от копии окна), а смену из главного окна
+  // (меню Loop/Repeat) слышит событием: 'storage' между вебвью Tauri не приходит.
+  const cycleRepeat = useCallback(() => {
+    const loop = cycleRepeatMode();
+    setMode((prev) => ({ ...prev, loop }));
+  }, []);
+  // Shuffle читает общее состояние заново: копия окна могла отстать по loop, и запись
+  // shuffle не должна затирать повтор, нажатый в главном окне.
+  const toggleShuffle = useCallback(() => {
+    const cur = loadPlaybackMode();
+    const next: PlaybackMode = { ...cur, shuffle: !cur.shuffle };
     setMode(next);
     savePlaybackMode(next);
+  }, []);
+  useEffect(() => {
+    let dead = false;
+    let unlisten: (() => void) | null = null;
+    void listenRepeatChanged((loop) => setMode((prev) => ({ ...prev, loop }))).then((fn) => {
+      if (dead) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      dead = true;
+      unlisten?.();
+    };
   }, []);
 
   const refresh = useCallback(() => {
@@ -560,7 +584,7 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
         <IconToggle
           label={mode.shuffle ? "Shuffle: on" : "Shuffle: off"}
           active={mode.shuffle}
-          onClick={() => updateMode({ ...mode, shuffle: !mode.shuffle })}
+          onClick={toggleShuffle}
           testId="playlist-shuffle"
         >
           <Shuffle size={16} />
@@ -568,7 +592,7 @@ export function PlaylistPanel({ currentPath, onPlay, onClose: _onClose, standalo
         <IconToggle
           label={mode.loop === "one" ? "Repeat: one" : mode.loop === "all" ? "Repeat: all" : "Repeat: off"}
           active={mode.loop !== "off"}
-          onClick={() => updateMode({ ...mode, loop: nextLoopMode(mode.loop) })}
+          onClick={cycleRepeat}
           testId="playlist-loop"
         >
           {mode.loop === "one" ? <Repeat1 size={16} /> : <Repeat size={16} />}

@@ -9,6 +9,7 @@ import {
   pauseAtOutOnCross,
   questionOutCrossed,
   questionOutDecision,
+  repeatOutAction,
   resolveSkipTarget,
   wouldNestInPair,
   readInOutPlayEnabled,
@@ -321,5 +322,87 @@ describe("questionOutDecision (tb_1795483216_27036_1: стоп на OUT черт
     questionOutDecision({ ...base, prevT: 18, t: 18.1, isAnswered: spy });
     questionOutDecision({ ...base, active: null, isAnswered: spy });
     expect(calls).toBe(0);
+  });
+});
+
+// tb_1795483282_27036_4 (слово оператора 24.11): повтор one/all на OUT. Раньше тракт скобок
+// брал video.loop (его трогало только меню), а режим панели на скобки не влиял: на черте
+// агента ONE работал (advance вернул ту же запись), на скобках нет.
+describe("repeatOutAction: решение на OUT при повторе", () => {
+  const segs = [
+    { start: 10, end: 20 },
+    { start: 30, end: 40 },
+    { start: 50, end: 60 },
+  ];
+
+  it("ONE: пересекли OUT среднего отрезка — прыжок на ЕГО начало, не на первый и не на следующий", () => {
+    expect(repeatOutAction(segs, 39.9, 40.1, "one", false)).toEqual({ kind: "jump", at: 30 });
+  });
+  it("ONE: последний отрезок крутится сам в себя, а не уходит в хвост", () => {
+    expect(repeatOutAction(segs, 59.9, 60.1, "one", false)).toEqual({ kind: "jump", at: 50 });
+    expect(repeatOutAction(segs, 59.9, 60.1, "one", true)).toEqual({ kind: "jump", at: 50 });
+  });
+  it("ONE: единственный отрезок (одна черта) — на свой IN", () => {
+    expect(repeatOutAction([{ start: 40, end: 52 }], 51.9, 52.1, "one", false)).toEqual({ kind: "jump", at: 40 });
+  });
+  it("ALL: не последний OUT — на следующий IN файла", () => {
+    expect(repeatOutAction(segs, 19.9, 20.1, "all", false)).toEqual({ kind: "jump", at: 30 });
+  });
+  it("ALL: последний OUT, в плейлисте есть куда идти — хвост (App пойдёт на следующую запись, круг замкнёт плейлист)", () => {
+    expect(repeatOutAction(segs, 59.9, 60.1, "all", false)).toEqual({ kind: "tail", at: 60 });
+  });
+  it("ALL: последний OUT, плейлиста нет или одна запись — круг по отрезкам файла", () => {
+    expect(repeatOutAction(segs, 59.9, 60.1, "all", true)).toEqual({ kind: "jump", at: 10 });
+  });
+  it("OFF: как раньше — следующий IN, хвост на последнем OUT", () => {
+    expect(repeatOutAction(segs, 19.9, 20.1, "off", false)).toEqual({ kind: "jump", at: 30 });
+    expect(repeatOutAction(segs, 59.9, 60.1, "off", false)).toEqual({ kind: "tail", at: 60 });
+    expect(repeatOutAction(segs, 59.9, 60.1, "off", true)).toEqual({ kind: "tail", at: 60 });
+  });
+  it("без пересечения, скраб и пустые сегменты — null на любом режиме", () => {
+    for (const mode of ["off", "all", "one"] as const) {
+      expect(repeatOutAction(segs, 11, 12, mode, false)).toBeNull();
+      expect(repeatOutAction(segs, 5, 45, mode, false)).toBeNull();
+      expect(repeatOutAction([], 0, 1, mode, false)).toBeNull();
+    }
+  });
+  it("совместимость: off/all без файлового круга совпадает с outCrossAction(loop=false)", () => {
+    expect(repeatOutAction(segs, 19.9, 20.1, "off", false)).toEqual(outCrossAction(segs, 19.9, 20.1, false));
+    expect(repeatOutAction(segs, 59.9, 60.1, "all", false)).toEqual(outCrossAction(segs, 59.9, 60.1, false));
+    expect(repeatOutAction(segs, 59.9, 60.1, "all", true)).toEqual(outCrossAction(segs, 59.9, 60.1, true));
+  });
+});
+
+describe("questionOutDecision с повтором (hold не проскакивается)", () => {
+  const line = { question_id: "q1", in_sec: 10, out_sec: 20 };
+  const base = {
+    scissorsOn: true,
+    active: line as { out_sec?: unknown; in_sec?: unknown; question_id?: unknown } | null,
+    path: "/v/a.mp4",
+    questionPath: "/v/a.mp4",
+    prevT: 19.9,
+    t: 20.1,
+  };
+  const unanswered = () => false;
+  const answered = () => true;
+
+  it("ALL: вопрос без ответа держит и при повторе — круг не уносит плейхед мимо вопроса", () => {
+    expect(questionOutDecision({ ...base, loop: "all", isAnswered: unanswered })).toBe("hold");
+  });
+  it("OFF и без поля loop: как раньше, hold", () => {
+    expect(questionOutDecision({ ...base, loop: "off", isAnswered: unanswered })).toBe("hold");
+    expect(questionOutDecision({ ...base, isAnswered: unanswered })).toBe("hold");
+  });
+  it("ONE: повтор одной черты не покидает вопрос, поэтому ждать на OUT незачем — advance (та же запись, назад на IN)", () => {
+    expect(questionOutDecision({ ...base, loop: "one", isAnswered: unanswered })).toBe("advance");
+    expect(questionOutDecision({ ...base, loop: "one", isAnswered: answered })).toBe("advance");
+  });
+  it("ONE не придумывает решение там, где его нет: ножницы выкл, чужой файл, нет пересечения — none", () => {
+    expect(questionOutDecision({ ...base, loop: "one", scissorsOn: false, isAnswered: unanswered })).toBe("none");
+    expect(questionOutDecision({ ...base, loop: "one", questionPath: "/v/other.mp4", isAnswered: unanswered })).toBe("none");
+    expect(questionOutDecision({ ...base, loop: "one", prevT: 18, t: 18.1, isAnswered: unanswered })).toBe("none");
+  });
+  it("ALL с ответом: advance, круг замкнёт плейлист", () => {
+    expect(questionOutDecision({ ...base, loop: "all", isAnswered: answered })).toBe("advance");
   });
 });

@@ -163,8 +163,13 @@ export function shuttleSlotClass(badge: string | null): string {
  * даёт медленную ступень 0.5x в обе стороны, чтобы успеть рассмотреть кусок и
  * ответить агенту; дальше 1x, 2x, 3x. Уровень шаттла хранится как знаковая
  * скорость (минус = назад), поэтому бейдж и playbackRate берут его как есть.
+ *
+ * tb_1795503453_72599_2 (слово оператора 24.11): лесенки по направлениям. Вперёд одна
+ * добавочная ступень 0.8x (вечерние передачи и точность склеек), назад лесенка прежняя:
+ * тонкая настройка во все стороны не нужна.
  */
-export const SHUTTLE_LADDER = [0.5, 1, 2, 3] as const;
+export const SHUTTLE_LADDER_FORWARD = [0.5, 0.8, 1, 2, 3] as const;
+export const SHUTTLE_LADDER_REVERSE = [0.5, 1, 2, 3] as const;
 
 /**
  * Следующий уровень шаттла по нажатию J (dir = -1) или L (dir = 1).
@@ -173,12 +178,13 @@ export const SHUTTLE_LADDER = [0.5, 1, 2, 3] as const;
  * уровень (не из лесенки, NaN) не роняет: берём ближайшую ступень выше.
  */
 export function nextShuttleLevel(current: number, dir: -1 | 1): number {
-  const first = SHUTTLE_LADDER[0];
-  const last = SHUTTLE_LADDER[SHUTTLE_LADDER.length - 1];
+  const ladder: readonly number[] = dir === 1 ? SHUTTLE_LADDER_FORWARD : SHUTTLE_LADDER_REVERSE;
+  const first = ladder[0];
+  const last = ladder[ladder.length - 1];
   const sameDirection = Number.isFinite(current) && current !== 0 && Math.sign(current) === dir;
   if (!sameDirection) return dir * first;
   const magnitude = Math.abs(current);
-  const next = SHUTTLE_LADDER.find((rate) => rate > magnitude) ?? last;
+  const next = ladder.find((rate) => rate > magnitude) ?? last;
   return dir * next;
 }
 

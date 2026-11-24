@@ -179,8 +179,6 @@ export function buildUIManifest(version: string, api: string[]): UIManifest {
     { testid: "transport-progress", role: "slider", label: "Seek (range input, seconds)", when: "video" },
     { testid: "transport-mute", role: "button", label: "Mute / unmute", when: "video" },
     { testid: "transport-volume", role: "slider", label: "Volume (range input 0..1, in popup)", when: "conditional" },
-    { testid: "seek-backward", role: "zone", label: "Seek backward (left screen zone)", when: "video" },
-    { testid: "seek-forward", role: "zone", label: "Seek forward (right screen zone)", when: "video" },
     { testid: "transport-selection", role: "indicator", label: "In-out total (only with in-out pairs)", when: "conditional" },
     { testid: "transport-shuttle-badge", role: "indicator", label: "Shuttle level badge", when: "always" },
   ];

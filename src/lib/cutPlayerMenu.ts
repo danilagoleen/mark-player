@@ -44,6 +44,7 @@ export type CutPlayerMenuAction =
   | "frame_step_forward"
   | "jump_to_time"
   | "speed_0_5"
+  | "speed_0_8"
   | "speed_1"
   | "speed_1_5"
   | "speed_2"
@@ -231,6 +232,8 @@ export function buildCutPlayerMenuSpec(opts?: { subtitlesVisible?: boolean; inOu
         { id: "pb_jump", label: "Jump to Time… (soon)", action: "jump_to_time", separatorBefore: true, enabled: false },
         { id: "pb_speed", label: "Speed", kind: "submenu", items: [
           { id: "pb_speed_05", label: "0.5x", action: "speed_0_5" },
+          // tb_1795486513_27036_1: один пресет 0.8x (слово оператора 24.11): вечерние передачи и точность склеек.
+          { id: "pb_speed_08", label: "0.8x", action: "speed_0_8" },
           { id: "pb_speed_1", label: "1x", action: "speed_1" },
           { id: "pb_speed_15", label: "1.5x", action: "speed_1_5" },
           { id: "pb_speed_2", label: "2x", action: "speed_2" },

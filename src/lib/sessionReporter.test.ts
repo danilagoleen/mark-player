@@ -150,6 +150,60 @@ describe("createSessionReporter: четыре события", () => {
   });
 });
 
+// tb_1795498927_72599_1: запись session.json отказала (плейлист в папке вне разрешённых
+// корней) — раньше catch глотал это молча, агент не получал отчёта, оператор не знал.
+describe("createSessionReporter: громкий отказ записи", () => {
+  function setupFailing() {
+    let fail = true;
+    const write = vi.fn(async (_report: SessionReport) => {
+      if (fail) throw new Error("forbidden path: /private/tmp/x.session.json");
+    });
+    const onWriteError = vi.fn();
+    const reporter = createSessionReporter({
+      snapshot: () => snapshot(),
+      now: () => "2026-10-21T09:12:03.120Z",
+      write,
+      onWriteError,
+    });
+    return { reporter, write, onWriteError, heal: () => (fail = false), breakAgain: () => (fail = true) };
+  }
+
+  it("отказ записи сообщается наружу с плейлистом и ошибкой, не бросается", async () => {
+    const { reporter, onWriteError } = setupFailing();
+    await expect(reporter.pause(1)).resolves.toBeUndefined();
+    expect(onWriteError).toHaveBeenCalledTimes(1);
+    const [playlist, err] = onWriteError.mock.calls[0];
+    expect(playlist).toBe(PLAYLIST);
+    expect(String((err as Error).message)).toContain("forbidden path");
+  });
+
+  it("повторные отказы того же плейлиста не сыплют сообщениями", async () => {
+    const { reporter, onWriteError } = setupFailing();
+    await reporter.pause(1);
+    await reporter.entryChange(0);
+    await reporter.answered();
+    expect(onWriteError).toHaveBeenCalledTimes(1);
+  });
+
+  it("после удачной записи следующий отказ снова сообщается", async () => {
+    const { reporter, onWriteError, heal, breakAgain } = setupFailing();
+    await reporter.pause(1);
+    heal();
+    await reporter.pause(2);
+    breakAgain();
+    await reporter.pause(3);
+    expect(onWriteError).toHaveBeenCalledTimes(2);
+  });
+
+  it("без onWriteError отказ по-прежнему не роняет показ", async () => {
+    const write = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    const reporter = createSessionReporter({ snapshot: () => snapshot(), write });
+    await expect(reporter.pause(1)).resolves.toBeUndefined();
+  });
+});
+
 describe("buildSessionReport: нет активной записи", () => {
   it("entry_index честный -1, когда path не из плейлиста", async () => {
     const report = buildSessionReport({

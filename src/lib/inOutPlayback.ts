@@ -8,6 +8,8 @@
 // прыжки — только при пересечении OUT во время проигрывания (скраб
 // свободный, старт всегда с плейхеда).
 
+import type { LoopMode } from "./playlist";
+
 export interface PlaybackSegment {
   start: number;
   end: number;
@@ -161,6 +163,11 @@ export function questionOutCrossed(
  * Держит ТОЛЬКО черта агента и ТОЛЬКО при ножницах ВКЛ. Скобки монтажа не держат
  * никогда: у них нет активного вопроса с out, это иной тракт (outCrossAction).
  * isAnswered ленивая: выжимка ответов по маркерам не считается, пока решать нечего.
+ *
+ * tb_1795483282_27036_4 (повтор one/all): loop "one" крутит ОДНУ черту и вопрос не
+ * покидает, поэтому ждать ответа на OUT незачем — hold становится advance, и App
+ * возвращает ту же запись на IN. loop "all" и "off" вопрос без ответа держат как
+ * раньше: круг не должен проскакивать вопрос, на который оператор ещё не ответил.
  * Чистая, тестируем.
  */
 export type QuestionOutDecision = "none" | "hold" | "advance";
@@ -173,9 +180,11 @@ export function questionOutDecision(args: {
   prevT: number;
   t: number;
   isAnswered: (questionId: string) => boolean;
+  loop?: LoopMode;
 }): QuestionOutDecision {
   if (!args.scissorsOn) return "none";
   if (!questionOutCrossed(args.active, args.path, args.questionPath, args.prevT, args.t)) return "none";
+  if (args.loop === "one") return "advance";
   const qid = args.active?.question_id;
   if (typeof qid !== "string" || qid.length === 0) return "advance";
   return args.isAnswered(qid) ? "advance" : "hold";
@@ -229,6 +238,34 @@ export function outCrossAction(
   if (next) return { kind: "jump", at: next.start };
   if (loop && segments.length > 0) return { kind: "jump", at: segments[0].start };
   return { kind: "tail", at: hit };
+}
+
+/**
+ * tb_1795483282_27036_4 (слово оператора 24.11): решение на OUT при повторе one/all.
+ * Раньше тракт скобок брал video.loop (его трогало только меню) — режим панели на
+ * скобки не влиял. Теперь решает общий режим:
+ *   one — вернуться на начало ТОГО отрезка, OUT которого пересекли (не на первый и не
+ *         на следующий): один фрагмент по кругу, сколько бы отрезков ни было в файле;
+ *   all — следующий IN файла; за последним OUT: плейлист из многих записей — хвост
+ *         (App уйдёт на следующую запись, круг замкнёт плейлист), плейлиста нет или
+ *         одна запись (fileWrap) — круг по отрезкам файла;
+ *   off — как раньше: следующий IN, хвост на последнем OUT.
+ * Чистая, тестируем. Совместима с outCrossAction на off/all.
+ */
+export function repeatOutAction(
+  segments: PlaybackSegment[],
+  prevT: number,
+  t: number,
+  mode: LoopMode,
+  fileWrap: boolean,
+): OutCrossAction | null {
+  if (mode !== "one") return outCrossAction(segments, prevT, t, mode === "all" && fileWrap);
+  if (!isPlaybackStep(segments, prevT, t)) return null;
+  let hit: PlaybackSegment | null = null;
+  for (const s of segments) {
+    if (prevT < s.end && s.end <= t && (hit === null || s.end > hit.end)) hit = s;
+  }
+  return hit ? { kind: "jump", at: hit.start } : null;
 }
 
 /** Скобка строго внутрь закрытой пары — ставить нельзя. */

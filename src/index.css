@@ -620,6 +620,15 @@ select {
   flex: 1 1 auto;
 }
 
+/* tb_1795498927_72599_1: файл ответов/отчёт писать нельзя: длинный текст с путём и
+   выходом висит 20с поверх обычного тоста («Loaded…» приходит следом на то же место).
+   Без цвета: смысл несёт место и размер. */
+.write-fail-toast {
+  z-index: 4;
+  max-width: min(46vw, 420px);
+  user-select: text;
+}
+
 /* VETKA-промо: тост vetka-add — 10с, плавное появление и затухание
    (стейт гаснет по VETKA_PROMO_MS синхронно с концом анимации). */
 .vetka-promo-toast {
@@ -805,7 +814,9 @@ select {
   flex: 1;
 }
 
-.seek-zone {
+/* tb_1795502027_72599_1: бывшие seek-zone. Только активация окна по клику: ни перемотки,
+   ни play/pause (оно в центре кадра). Геометрия прежняя: 34% с краёв, транспорт не закрыт. */
+.activate-zone {
   position: absolute;
   top: 0;
   bottom: 104px;
@@ -816,11 +827,11 @@ select {
   color: transparent;
 }
 
-.seek-zone-left {
+.activate-zone-left {
   left: 0;
 }
 
-.seek-zone-right {
+.activate-zone-right {
   right: 0;
 }
 

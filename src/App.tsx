@@ -29,8 +29,8 @@ import {
   firstInAnchor,
   isManualSeekSuppressed,
   markManualSeek,
-  outCrossAction,
   questionOutDecision,
+  repeatOutAction,
   readInOutPlayEnabled,
   writeInOutPlayEnabled,
   INOUT_PLAY_STORAGE_KEY,
@@ -45,6 +45,8 @@ import { clampCardPosition, loadCardPosition, saveCardPosition, type CardPoint }
 import { answerButtonsFor } from "./lib/questionCardButtons";
 import { commentsPanelFilterQuery } from "./lib/markerFilterHint";
 import { listenInOutPlayChanged, notifyInOutPlayChanged } from "./lib/inOutPlayBridge";
+// tb_1795483282_27036_4: повтор one/all — один луп на меню и кнопку панели.
+import { cycleRepeatMode, listenRepeatChanged, nativeLoopFor, repeatOneWindow, repeatToastText } from "./lib/repeatMode";
 import { QuestionHypothesisLine } from "./components/QuestionHypothesisLine";
 import { planSendToAgent, type AnswerOutcome } from "./lib/sendToAgentPlan";
 import { parseCutsheet, resolveCutsheetForMedia, type CutsheetSegment } from "./lib/cutsheet";
@@ -76,9 +78,9 @@ import {
 import { DOOR_IDS, checkModuleDoor, doorClickTransition, doorEndpoint, doorLabel, type DoorId, type ModuleDoor } from "./lib/moduleDoors";
 import type { ProbeResult } from "./lib/nativeWindow";
 import { dirOfPath, joinForDialog } from "./lib/exportPaths";
-import { createEmptyPlaylist, savePlaylist, loadPlaylist, addEntry, getNextEntryFromCursor, loadPlaybackMode, sanitizePlaylistFilename, trackOpenedFile, type QuestionPlaylistEntry } from "./lib/playlist";
+import { createEmptyPlaylist, savePlaylist, loadPlaylist, addEntry, getNextEntryFromCursor, loadPlaybackMode, sanitizePlaylistFilename, trackOpenedFile, type LoopMode, type QuestionPlaylistEntry } from "./lib/playlist";
 import { WHOLE_FILE_MARKER_SUFFIX, answerGate, formatQuestionBrackets, answersFromMarkers, buildAnswersDocument, countPlaylistAnswers, filterAnswersToPlaylist, findQuestionEntryAtTime, formatAnswerReplyText, lerpQuestionBox, mergeAnswerRecords, normalizeQuestionEntry, parseAnswersDocument, questionFilePosition, questionScopeFromMarkers, readAnswersOutbox, readQuestionPlaylistPath, rememberQuestionPlaylistPath, resolveActiveEntry, resolveQuestionSnapTime, writeAnswersOutbox, isQuestionAnswered, isQuestionPlaylist, type AnswerRecord, type AnswersDocument, type AnswerVerdict, type QuestionBox, type QuestionEntry } from "./lib/questionPlaylist";
-import { writeAnswersAckFile, writeAnswersDocumentFile, sanitizeAnswersFileOnDisk } from "./lib/questionAnswersFile";
+import { WRITE_FAIL_TOAST_MS, answersWriteFailureText, writeAnswersAckFile, writeAnswersDocumentFile, sanitizeAnswersFileOnDisk } from "./lib/questionAnswersFile";
 import { createSessionReporter, type SessionReporter } from "./lib/sessionReporter";
 import { isSameMediaPath, resolveMediaContentHash } from "./lib/mediaOpen";
 import { isAudioMedia, mediaPlayability, mediaRefusalReason } from "./lib/mediaPlayability";
@@ -86,7 +88,7 @@ import { markerBelongsToMedia, notifyMarkersChanged, notifyMediaChanged, resolve
 import { isSameImportedMarker, matchGroupToPath, parseXmemlMarkers, type ImportedMarker } from "./lib/xmemlImport";
 import type { CutPlayerMenuAction } from "./lib/cutPlayerMenu";
 import { useDragDrop } from "./lib/useDragDrop";
-import { ReverseShuttle, SHUTTLE_LADDER, SeekCoalescer, getShuttleDisplay, nextShuttleLevel, resolveJumpTarget, resolvePlayerHotkey, resolveProportionalStep, shuttleSlotClass } from "./lib/playerHotkeys";
+import { ReverseShuttle, SHUTTLE_LADDER_FORWARD, SHUTTLE_LADDER_REVERSE, SeekCoalescer, getShuttleDisplay, nextShuttleLevel, resolveJumpTarget, resolvePlayerHotkey, resolveProportionalStep, shuttleSlotClass } from "./lib/playerHotkeys";
 import {
   confirmClearMarkers,
   countSparedQuestionReplies,
@@ -717,6 +719,10 @@ function App() {
   // Open-gate 1.1: отказ гейта — отдельный янтарный тост на 6с.
   // Общий contextToast гаснет за 2.2с — отказ в нём не замечают.
   const [refusalToast, setRefusalToast] = useState("");
+  // tb_1795498927_72599_1: файл ответов или отчёт о показе рядом с плейлистом писать
+  // нельзя (плейлист вне разрешённых корней записи): отказ висит 20с с путём и
+  // выходом. Раньше он был тихий, а ответы жили только маркерами (находка Phi 24.11).
+  const [writeFailToast, setWriteFailToast] = useState("");
   // VETKA-промо: тост vetka-add — 10с с плавным затуханием (плеер работает на нас).
   const [vetkaToast, setVetkaToast] = useState("");
   // Bell №2: chat state removed — agent chat is a separate module.
@@ -887,6 +893,38 @@ function App() {
   // OFF = не работают, скрытых механизмов ноль).
   const [inOutPlayOn, setInOutPlayOn] = useState<boolean>(() => readInOutPlayEnabled());
   const inOutPlayOnRef = useRef(inOutPlayOn);
+  // tb_1795483282_27036_4 (слово оператора 24.11): повтор one/all — ОДИН луп на меню главного
+  // окна и кнопку окна Playlist. Источник правды — общий режим в localStorage (его читает
+  // advanceToNextEntry); здесь его отражение для рендера и для решений на OUT. video.loop
+  // выводится из него (nativeLoopFor), а не живёт отдельным состоянием меню.
+  const [repeatMode, setRepeatModeState] = useState<LoopMode>(() => loadPlaybackMode().loop);
+  const repeatModeRef = useRef<LoopMode>(repeatMode);
+  const [playlistEntryCount, setPlaylistEntryCount] = useState<number>(() => loadPlaylist()?.entries.length ?? 0);
+  const nativeLoop = nativeLoopFor({ mode: repeatMode, scissorsOn: inOutPlayOn, entryCount: playlistEntryCount });
+  useEffect(() => {
+    const adopt = (loop: LoopMode, announce: boolean) => {
+      if (repeatModeRef.current === loop) return;
+      repeatModeRef.current = loop;
+      setRepeatModeState(loop);
+      if (announce) setContextToast(repeatToastText(loop));
+    };
+    let dead = false;
+    let unlisten: (() => void) | null = null;
+    void listenRepeatChanged((loop) => adopt(loop, true)).then((fn) => {
+      if (dead) fn();
+      else unlisten = fn;
+    });
+    // Страховка от пропущенного события: окно вернулось в фокус или пришёл storage — сверяемся с хранилищем.
+    const resync = () => adopt(loadPlaybackMode().loop, false);
+    window.addEventListener("focus", resync);
+    window.addEventListener("storage", resync);
+    return () => {
+      dead = true;
+      unlisten?.();
+      window.removeEventListener("focus", resync);
+      window.removeEventListener("storage", resync);
+    };
+  }, []);
   const inOutPrevTRef = useRef(0);
   // tb_1792536109_79489_5: play_range из очереди команд — окно, которое
   // играет ровно до out и встаёт на паузу (не зависит от маркеров-ножниц,
@@ -1258,9 +1296,11 @@ function App() {
           recordAnswer();
           setContextToast(`Saved ${savedLabel} (${verdict}) → ${qid} + reply in Comments.`);
           return "saved";
-        } catch {
+        } catch (err) {
           answerBusyRef.current = false;
-          setContextToast("Answer: could not write answers file.");
+          // tb_1795498927_72599_1: маркер ответа уже лёг, файла нет — говорим
+          // громко, с путём и выходом, а не коротким тостом на 6с.
+          setWriteFailToast(answersWriteFailureText(playlistPath, "answer", err));
           return "failed";
         }
       }
@@ -1359,8 +1399,8 @@ function App() {
     if (!savedComment) {
       try {
         doc = (await refreshAnswersDocFromMarkers(playlistPath)) ?? doc;
-      } catch {
-        setContextToast("Send to agent: could not write answers file.");
+      } catch (err) {
+        setWriteFailToast(answersWriteFailureText(playlistPath, "send", err));
         return;
       }
     }
@@ -1858,6 +1898,7 @@ function App() {
     // мёртвой записи гаснет (revalidate). Web: storage чужого документа.
     const onPlaylistStorage = (event: StorageEvent) => {
       if (event.key !== "vetka_player_lab_playlist_v1") return;
+      setPlaylistEntryCount(loadPlaylist()?.entries.length ?? 0);
       revalidateActiveQuestion();
     };
     window.addEventListener("storage", onPlaylistStorage);
@@ -1873,6 +1914,7 @@ function App() {
           setMarkers(readStoredMarkers());
         }).then((fn) => { unlistenChanged = fn; }).catch(() => {});
         listen(PLAYLIST_RELOAD_EVENT, () => {
+          setPlaylistEntryCount(loadPlaylist()?.entries.length ?? 0);
           revalidateActiveQuestion();
           void refreshAnswersProgress();
         }).then((fn) => { unlistenPlaylist = fn; }).catch(() => {});
@@ -2031,6 +2073,9 @@ function App() {
   const sessionReporterRef = useRef<SessionReporter | null>(null);
   if (!sessionReporterRef.current) {
     sessionReporterRef.current = createSessionReporter({
+      // tb_1795498927_72599_1: session.json писать нельзя — агент не увидит, где
+      // человек остановился; говорим один раз на плейлист (повторы глушит reporter).
+      onWriteError: (playlist, err) => setWriteFailToast(answersWriteFailureText(playlist, "session", err)),
       snapshot: () => {
         if (!isTauriRuntimeSync()) return null;
         const playlistPath = readQuestionPlaylistPath();
@@ -2169,8 +2214,9 @@ function App() {
     let shuttleLevel = 0;
     const setShuttle = (next: number) => {
       // Граница из лесенки (tb_1795483235_27036_2): новая ступень данными не режется.
-      const shuttleMax = SHUTTLE_LADDER[SHUTTLE_LADDER.length - 1];
-      shuttleLevel = Math.max(-shuttleMax, Math.min(shuttleMax, next));
+      const shuttleMaxForward = SHUTTLE_LADDER_FORWARD[SHUTTLE_LADDER_FORWARD.length - 1];
+      const shuttleMaxReverse = SHUTTLE_LADDER_REVERSE[SHUTTLE_LADDER_REVERSE.length - 1];
+      shuttleLevel = Math.max(-shuttleMaxReverse, Math.min(shuttleMaxForward, next));
       setShuttleLevel(shuttleLevel);
       const video = videoRef.current;
       if (!video) return;
@@ -2190,6 +2236,9 @@ function App() {
       void video.play();
     };
     stopShuttleRef.current = () => setShuttle(0);
+    // tb_1795503453_72599_2: меню Playback → Speed идёт тем же шаттлом, что ступень на L
+    // (уровень живёт здесь, в замыкании): играет вперёд без паузы, бейдж показывает скорость.
+    setShuttleRef.current = setShuttle;
     const onKeyDown = (event: KeyboardEvent) => {
       const action = resolvePlayerHotkey(event);
       if (!action) return;
@@ -2624,6 +2673,12 @@ function App() {
     const timer = window.setTimeout(() => setContextToast(""), 6500);
     return () => window.clearTimeout(timer);
   }, [contextToast]);
+
+  useEffect(() => {
+    if (!writeFailToast) return;
+    const timer = window.setTimeout(() => setWriteFailToast(""), WRITE_FAIL_TOAST_MS);
+    return () => window.clearTimeout(timer);
+  }, [writeFailToast]);
 
   useEffect(() => {
     if (!vetkaToast) return;
@@ -4311,6 +4366,7 @@ function App() {
   };
   const menuActionRef = useRef<(action: CutPlayerMenuAction) => void>(() => {});
   const stopShuttleRef = useRef<() => void>(() => {});
+  const setShuttleRef = useRef<(level: number) => void>(() => {});
   menuActionRef.current = (action) => {
     switch (action) {
       case "open":
@@ -4481,6 +4537,9 @@ function App() {
       case "speed_0_5":
         setMenuSpeed(0.5);
         break;
+      case "speed_0_8":
+        setMenuSpeed(0.8);
+        break;
       case "speed_1":
         setMenuSpeed(1);
         break;
@@ -4491,10 +4550,12 @@ function App() {
         setMenuSpeed(2);
         break;
       case "loop_toggle": {
-        const video = videoRef.current;
-        if (!video) break;
-        video.loop = !video.loop;
-        setContextToast(video.loop ? "Loop: on." : "Loop: off.");
+        // tb_1795483282_27036_4: тот же вход, что у кнопки Repeat окна Playlist — один луп,
+        // одно состояние (раньше меню трогало только video.loop, панель жила своим режимом).
+        const loop = cycleRepeatMode();
+        repeatModeRef.current = loop;
+        setRepeatModeState(loop);
+        setContextToast(repeatToastText(loop));
         break;
       }
       case "float_on_top":
@@ -5608,8 +5669,11 @@ function App() {
         if (clean.foreignRemoved > 0) {
           answersNote = ` Removed ${clean.foreignRemoved} foreign answer${clean.foreignRemoved === 1 ? "" : "s"} (backup .bak).`;
         }
-      } catch {
-        // санитайз не удался — плейлист всё равно открываем
+      } catch (err) {
+        // санитайз не удался — плейлист всё равно открываем, но НЕ молча:
+        // tb_1795498927_72599_1 — плейлист вне разрешённых корней записи (например
+        // /private/tmp до 0.26.19) открывался, а файлов ответов рядом не появлялось.
+        if (isTauriRuntimeSync()) setWriteFailToast(answersWriteFailureText(path, "open", err));
       }
     } else {
       answersDocRef.current = null;
@@ -5942,10 +6006,11 @@ function App() {
   }
 
   function setMenuSpeed(rate: number) {
-    const video = videoRef.current;
-    if (!video) return;
-    stopShuttleRef.current();
-    video.playbackRate = rate;
+    // tb_1795503453_72599_2: раньше stopShuttle (pause) + playbackRate: выбор скорости во время
+    // воспроизведения ставил видео на паузу и скорость нигде не показывалась. Теперь тот же
+    // шаттл, что ступень на L: играет вперёд с этой скоростью, бейдж ▶ Nx, K или Space стоп.
+    if (!videoRef.current) return;
+    setShuttleRef.current(rate);
     setContextToast(`Speed: ${rate}x`);
   }
 
@@ -6365,6 +6430,9 @@ function App() {
                           controls={false}
                           playsInline
                           preload="auto"
+                          // tb_1795483282_27036_4: нативный луп только когда крутить файл целиком —
+                          // из общего режима повтора и ножниц (nativeLoopFor).
+                          loop={nativeLoop}
                           onClick={() => videoClickCtlRef.current?.click()}
                           onLoadedMetadata={(event) => {
                             const video = event.currentTarget;
@@ -6517,6 +6585,11 @@ function App() {
                               // tb_1795483216_27036_1: на OUT ЧЕРТЫ агента без ответа
                               // встаём и ждём (hold); скобки не держат, ножницы выкл
                               // сюда не заходят. С ответом — автопереход как раньше.
+                              // tb_1795483282_27036_4 (повтор one/all): ONE крутит одну черту,
+                              // не покидая вопрос, поэтому на OUT неотвеченной черты не ждёт
+                              // (advance вернёт ту же запись на IN); ALL вопрос без ответа
+                              // держит как раньше — круг не проскакивает неотвеченный вопрос.
+                              const loopMode = repeatModeRef.current;
                               const qDecision = questionOutDecision({
                                 scissorsOn: inOutPlayOn,
                                 active: activeQuestion,
@@ -6525,13 +6598,17 @@ function App() {
                                 prevT,
                                 t,
                                 isAnswered: (qid) => isQuestionAnswered(extractAnswerRecords(markersRef.current).records, qid),
+                                loop: loopMode,
                               });
                               const qTail = qDecision !== "none";
                               const qHold = qDecision === "hold";
                               const qAt = qTail && typeof activeQuestion?.out_sec === "number" ? activeQuestion.out_sec : 0;
+                              // Скобки: режим решает общий повтор, а не video.loop меню. ONE — назад на IN
+                              // того же отрезка; ALL — следующий отрезок, за последним круг замыкает
+                              // плейлист (одна запись или плейлиста нет — круг по отрезкам файла).
                               const action = qTail
                                 ? { kind: "tail" as const, at: qAt }
-                                : outCrossAction(segments, prevT, t, video.loop);
+                                : repeatOutAction(segments, prevT, t, loopMode, playlistEntryCount <= 1);
                               if (action?.kind === "tail" && !qHold && advanceToNextEntry()) {
                                 inOutPrevTRef.current = 0;
                               } else {
@@ -6600,7 +6677,32 @@ function App() {
                             setIsMuted(Boolean(event.currentTarget.muted));
                           }}
                           onEnded={() => {
-                            advanceToNextEntry();
+                            // tb_1795483282_27036_4 (повтор one/all): файл доиграл до конца.
+                            // ONE при ножницах вкл крутит ОТРЕЗОК (после последнего OUT это
+                            // последний отрезок), а не уходит на следующую запись или в начало
+                            // файла; нет отрезков — повторяется весь файл. Нет следующей записи
+                            // (плейлиста нет) при ALL/ONE — файл по кругу, а не молчаливая остановка.
+                            const loop = repeatModeRef.current;
+                            const video = videoRef.current;
+                            if (loop === "one" && inOutPlayOnRef.current && video) {
+                              const lineOfActive =
+                                activeQuestion && questionPathRef.current === currentFilePathRef.current ? activeQuestion : null;
+                              const repeatWin = repeatOneWindow({
+                                scissorsOn: true,
+                                segments: scissorsSegments(mediaMarkers, lineOfActive, duration),
+                                playhead: Number(video.currentTime || 0),
+                                duration,
+                              });
+                              if (repeatWin.source === "segment") {
+                                inOutPrevTRef.current = repeatWin.start;
+                                restartMediaAt(video, repeatWin.start);
+                                return;
+                              }
+                            }
+                            if (!advanceToNextEntry() && loop !== "off" && video) {
+                              inOutPrevTRef.current = 0;
+                              restartMediaAt(video, 0);
+                            }
                           }}
                         />
                       )}
@@ -6697,6 +6799,11 @@ function App() {
                     </div>
                   ) : null}
                   {refusalToast ? <div className="context-toast refusal-toast" data-testid="refusal-toast">{refusalToast}</div> : null}
+                  {writeFailToast ? (
+                    <div className="context-toast refusal-toast write-fail-toast" data-testid="write-fail-toast" role="alert">
+                      {writeFailToast}
+                    </div>
+                  ) : null}
                   {/* tb_1792438559_20717_1: молчащий файл — причина висит,
                       пока её не снимут: чёрный кадр сам ничего не объяснит. */}
                   {mediaProblem ? (
@@ -6915,20 +7022,13 @@ function App() {
                           ) : null}
                         </div>
                       </div>
-                      <button
-                        className="seek-zone seek-zone-left"
-                        type="button"
-                        data-testid="seek-backward"
-                        aria-label="Seek backward"
-                        onClick={() => seekBy(-1)}
-                      />
-                      <button
-                        className="seek-zone seek-zone-right"
-                        type="button"
-                        data-testid="seek-forward"
-                        aria-label="Seek forward"
-                        onClick={() => seekBy(1)}
-                      />
+                      {/* tb_1795502027_72599_1: боковые зоны кадра только активируют окно
+                          (слово оператора 24.11): клик по ним не перематывает, не делает
+                          play/pause и двойным кликом не включает fullscreen; play/pause по
+                          клику остаётся в центре кадра. Инертные div: без фокуса и без
+                          активации с клавиатуры, перемотка живёт на хоткеях и плейхеде. */}
+                      <div className="activate-zone activate-zone-left" data-testid="activate-zone-left" aria-hidden="true" />
+                      <div className="activate-zone activate-zone-right" data-testid="activate-zone-right" aria-hidden="true" />
                     </>
                   ) : null}
                       {/* tb_1791764026_23730_1: вопрос — компактной карточкой

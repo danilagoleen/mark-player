@@ -19,19 +19,23 @@
     "fs:default",
     {
       "identifier": "fs:allow-write-text-file",
-      "allow": [{ "path": "$HOME/**" }, { "path": "/Volumes/**" }, { "path": "$TEMP/**" }]
+      "allow": [{ "path": "$HOME/**" }, { "path": "/Volumes/**" }, { "path": "$TEMP/**" }, { "path": "/private/tmp/**" }, { "path": "/tmp/**" }]
     },
     {
       "identifier": "fs:allow-write-file",
-      "allow": [{ "path": "$HOME/**" }, { "path": "/Volumes/**" }, { "path": "$TEMP/**" }]
+      "allow": [{ "path": "$HOME/**" }, { "path": "/Volumes/**" }, { "path": "$TEMP/**" }, { "path": "/private/tmp/**" }, { "path": "/tmp/**" }]
     },
     {
       "identifier": "fs:allow-mkdir",
-      "allow": [{ "path": "$HOME/**" }, { "path": "/Volumes/**" }, { "path": "$TEMP/**" }]
+      "allow": [{ "path": "$HOME/**" }, { "path": "/Volumes/**" }, { "path": "$TEMP/**" }, { "path": "/private/tmp/**" }, { "path": "/tmp/**" }]
     },
     {
       "identifier": "fs:allow-read-text-file",
-      "allow": [{ "path": "$HOME/**" }, { "path": "/Volumes/**" }, { "path": "$TEMP/**" }]
+      "allow": [{ "path": "$HOME/**" }, { "path": "/Volumes/**" }, { "path": "$TEMP/**" }, { "path": "/private/tmp/**" }, { "path": "/tmp/**" }]
+    },
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [{ "path": "$HOME/**" }, { "path": "/Volumes/**" }, { "path": "$TEMP/**" }, { "path": "/private/tmp/**" }, { "path": "/tmp/**" }]
     }
   ]
 }

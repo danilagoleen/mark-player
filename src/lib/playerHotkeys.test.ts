@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ReverseShuttle, SHUTTLE_LADDER, SeekCoalescer, getShuttleDisplay, isTypingTarget, nextShuttleLevel, resolveJumpTarget, resolvePlayerHotkey, resolveProportionalStep, shuttleSlotClass } from "./playerHotkeys";
+import { ReverseShuttle, SHUTTLE_LADDER_FORWARD, SHUTTLE_LADDER_REVERSE, SeekCoalescer, getShuttleDisplay, isTypingTarget, nextShuttleLevel, resolveJumpTarget, resolvePlayerHotkey, resolveProportionalStep, shuttleSlotClass } from "./playerHotkeys";
 
 function key(code: string, extra: Partial<KeyboardEvent> = {}): KeyboardEvent {
   return {
@@ -208,9 +208,13 @@ describe("getShuttleDisplay", () => {
 // tb_1795483235_27036_2 (слово оператора 24.11): J/L начинают с медленной
 // ступени 0.5x в обе стороны, дальше 1x, 2x, 3x. Он не успевал рассмотреть
 // кусок и ответить агенту: плейхед убегал.
-describe("лесенка шаттла J/L: 0.5, 1, 2, 3", () => {
-  it("ступени заданы данными", () => {
-    expect([...SHUTTLE_LADDER]).toEqual([0.5, 1, 2, 3]);
+// tb_1795503453_72599_2 (слово оператора 24.11 после проверки 0.26.21): вперёд одна добавочная
+// ступень 0.8x («для сказок на ночь и точности склеек»), назад лесенка прежняя: тонкая настройка
+// во все стороны не нужна. Лесенки по направлениям.
+describe("лесенка шаттла J/L: вперёд 0.5, 0.8, 1, 2, 3; назад 0.5, 1, 2, 3", () => {
+  it("ступени заданы данными по направлениям", () => {
+    expect([...SHUTTLE_LADDER_FORWARD]).toEqual([0.5, 0.8, 1, 2, 3]);
+    expect([...SHUTTLE_LADDER_REVERSE]).toEqual([0.5, 1, 2, 3]);
   });
 
   it("со стопа первый L даёт 0.5x вперёд, первый J даёт 0.5x назад", () => {
@@ -218,14 +222,28 @@ describe("лесенка шаттла J/L: 0.5, 1, 2, 3", () => {
     expect(nextShuttleLevel(0, -1)).toBe(-0.5);
   });
 
-  it("повторные L поднимают ступень: 0.5, 1, 2, 3 и упираются в 3", () => {
+  it("повторные L поднимают ступень: 0.5, 0.8, 1, 2, 3 и упираются в 3", () => {
     let level = 0;
     const seen: number[] = [];
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 7; i++) {
       level = nextShuttleLevel(level, 1);
       seen.push(level);
     }
-    expect(seen).toEqual([0.5, 1, 2, 3, 3, 3]);
+    expect(seen).toEqual([0.5, 0.8, 1, 2, 3, 3, 3]);
+  });
+
+  it("с 0.8x вперёд следующая ступень 1x, а не перескок", () => {
+    expect(nextShuttleLevel(0.5, 1)).toBe(0.8);
+    expect(nextShuttleLevel(0.8, 1)).toBe(1);
+  });
+
+  it("назад 0.8x нет: J идёт 0.5, 1, 2, 3", () => {
+    expect(nextShuttleLevel(-0.5, -1)).toBe(-1);
+    expect([...SHUTTLE_LADDER_REVERSE]).not.toContain(0.8);
+  });
+
+  it("бейдж честно показывает 0.8x вперёд", () => {
+    expect(getShuttleDisplay(0.8, true)).toEqual({ label: "Shuttle 0.8x", moving: true, badge: "▶ 0.8x" });
   });
 
   it("повторные J поднимают ступень назад: -0.5, -1, -2, -3 и упираются в -3", () => {
@@ -246,6 +264,8 @@ describe("лесенка шаттла J/L: 0.5, 1, 2, 3", () => {
   });
 
   it("нештатный уровень берёт ближайшую ступень выше, не падает", () => {
+    expect(nextShuttleLevel(0.6, 1)).toBe(0.8);
+    expect(nextShuttleLevel(0.9, 1)).toBe(1);
     expect(nextShuttleLevel(1.5, 1)).toBe(2);
     expect(nextShuttleLevel(-1.5, -1)).toBe(-2);
     expect(nextShuttleLevel(Number.NaN, 1)).toBe(0.5);

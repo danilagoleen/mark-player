@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+// Без node: импортов (@types/node в проекте нет): исходник App.tsx берём через ?raw, как appVersion.test.ts.
+import appSrc from "../App.tsx?raw";
 import { buildCutPlayerMenuSpec, isNleOnlyAccelerator } from "./cutPlayerMenu";
 import type { CutPlayerMenuItemSpec } from "./cutPlayerMenu";
 
@@ -230,6 +232,47 @@ describe("cutPlayerMenu", () => {
         }
       }
     }
+  });
+
+  // tb_1795486513_27036_1: слово оператора 24.11, один пресет 0.8x вместо тонкого регулятора
+  // (на ночь ставит передачи на 0.70-0.85, для склеек хватает). Лесенка пунктов: 0.5, 0.8, 1, 1.5, 2.
+  it("Playback → Speed has a 0.8x preset between 0.5x and 1x", () => {
+    const playback = buildCutPlayerMenuSpec().find((s) => s.id === "playback")!;
+    const speed = flattenItems([playback]).find((i) => i.id === "pb_speed")!;
+    expect(speed.kind).toBe("submenu");
+    expect((speed.items ?? []).map((i) => i.label)).toEqual(["0.5x", "0.8x", "1x", "1.5x", "2x"]);
+    expect((speed.items ?? []).map((i) => i.action)).toEqual([
+      "speed_0_5",
+      "speed_0_8",
+      "speed_1",
+      "speed_1_5",
+      "speed_2",
+    ]);
+    const preset = (speed.items ?? []).find((i) => i.id === "pb_speed_08")!;
+    expect(preset.action).toBe("speed_0_8");
+    expect(preset.accelerator).toBeUndefined();
+  });
+
+  it("App maps the speed_0_8 action to setMenuSpeed(0.8) like the other presets", () => {
+    // .test() + toBe: при падении vitest не печатает весь App.tsx (toMatch выводил исходник целиком).
+    expect(/case "speed_0_8":\s*setMenuSpeed\(0\.8\);\s*break;/.test(appSrc)).toBe(true);
+  });
+
+  // tb_1795503453_72599_2: проверка 0.26.21 вживую: выбор скорости в меню во время воспроизведения
+  // ставил видео на паузу (setMenuSpeed звал stopShuttle, а тот делает pause) и скорость нигде не
+  // показывалась. Теперь меню идёт тем же шаттлом, что ступень на L: играет вперёд, бейдж ▶ Nx.
+  it("setMenuSpeed goes through the shuttle (no pause, badge), not stopShuttle + playbackRate", () => {
+    const start = appSrc.indexOf("function setMenuSpeed(");
+    expect(start, "setMenuSpeed not found").toBeGreaterThan(-1);
+    const end = appSrc.indexOf("\n  }\n", start);
+    // Строчные комментарии отрезаем: смотрим код, а не пояснение «раньше было так».
+    const body = appSrc.slice(start, end).replace(/\/\/.*$/gm, "");
+    expect(body.includes("setShuttleRef.current(rate)")).toBe(true);
+    expect(body.includes("stopShuttleRef")).toBe(false);
+    expect(body.includes("playbackRate")).toBe(false);
+    expect(body.includes("`Speed: ${rate}x`")).toBe(true);
+    // ref привязан к реальному setShuttle в эффекте клавиш (там живёт локальный уровень)
+    expect(appSrc.includes("setShuttleRef.current = setShuttle;")).toBe(true);
   });
 
   it("isNleOnlyAccelerator detects reserved keys", () => {

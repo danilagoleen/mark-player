@@ -28,8 +28,6 @@ describe("buildUIManifest", () => {
       "transport-progress",
       "transport-mute",
       "transport-volume",
-      "seek-backward",
-      "seek-forward",
       "viewer-open",
       "marker-favorite",
       "marker-negative",
